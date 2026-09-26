@@ -1,0 +1,110 @@
+name: Installers
+
+# Unsigned alpha installers for macOS (universal) and Windows (x64).
+# Runs by hand, on version tags, and on pull requests that touch the
+# packaging, so a broken bundle shows up before anyone needs a build.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-helper-sidecar.sh
+      - app/src-tauri/tauri.conf.json
+      - app/src-tauri/tauri.release.conf.json
+      - app/src-tauri/src/elevate.rs
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bundle:
+    name: Installer (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            files: |
+              target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            files: |
+              target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+              target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: installer-${{ matrix.target }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Privileged helper sidecar
+        shell: bash
+        run: scripts/build-helper-sidecar.sh ${{ matrix.target }}
+      - name: Build installer
+        working-directory: app
+        run: |
+          npm ci
+          npx tauri build --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+      - name: Check the helper shipped next to the app (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=$(ls -d target/${{ matrix.target }}/release/bundle/macos/*.app)
+          test -x "$app/Contents/MacOS/boothready-helper"
+          lipo -archs "$app/Contents/MacOS/boothready-helper"
+      - name: Check the helper shipped next to the app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem target/${{ matrix.target }}/release/bundle/msi/*.msi | Select-Object -First 1
+          $out = Join-Path $env:RUNNER_TEMP msi
+          Start-Process msiexec -Wait -ArgumentList "/a `"$($msi.FullName)`" /qn TARGETDIR=`"$out`""
+          $helper = Get-ChildItem -Recurse $out -Filter boothready-helper.exe | Select-Object -First 1
+          if (-not $helper) { throw "boothready-helper.exe is missing from the MSI" }
+          $apps = Get-ChildItem $helper.DirectoryName -Filter *.exe | Where-Object Name -ne boothready-helper.exe
+          $helper.FullName; $apps | ForEach-Object { $_.FullName }
+          if (-not $apps) { throw "boothready-helper.exe is not installed next to the app" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BoothReady-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  publish:
+    name: Draft pre-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create a draft pre-release with the installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" --draft --prerelease \
+            --title "BoothReady ${GITHUB_REF_NAME} (alpha)" \
+            --notes "Unsigned alpha build. See the README for how to open it on macOS and Windows."

@@ -203,5 +203,9 @@ mod tests {
         assert!(sys.size_bytes > 0, "{sys:#?}");
         assert!(sys.partition_scheme.is_some(), "{sys:#?}");
         assert!(sys.volumes.iter().any(|v| v.filesystem.is_some()), "{sys:#?}");
+        // A Mac's startup disk holds APFS containers, whose volume names and
+        // mount points come from the synthesized disks diskutil reports.
+        #[cfg(target_os = "macos")]
+        assert!(sys.volumes.iter().any(|v| v.label.is_some() && v.mount_point.is_some()), "{sys:#?}");
     }
 }

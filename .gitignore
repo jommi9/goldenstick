@@ -6,3 +6,4 @@ app/src-tauri/gen/schemas
 .DS_Store
 app/screenshots
 app/test-results
+app/src-tauri/binaries

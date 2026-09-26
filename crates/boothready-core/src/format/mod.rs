@@ -1,14 +1,15 @@
 //! Building MBR + FAT32 media in pure Rust.
 //!
 //! Windows' own formatter refuses FAT32 above 32 GB, so BoothReady carries
-//! its own path: a fixed MBR layout written here plus the `fatfs` crate's
-//! formatter. Every image this module produces is checked in tests with
-//! `fsck.fat`, `sfdisk` and mtools, and re-inspected with our own parser.
+//! its own: a fixed MBR layout and a FAT32 volume with the same geometry
+//! mkfs.fat produces. Every image this module produces is checked in tests
+//! with `fsck.fat`, `sfdisk` and mtools, compared with mkfs.fat's output,
+//! and re-inspected with our own parser.
 //!
 //! This module only ever writes to the handle it is given. Choosing and
 //! opening the right device is the privileged helper's job.
 
-use crate::io::{Slice, MAX_SECTOR};
+use crate::io::MAX_SECTOR;
 use boothready_model::{FilesystemKind, PartitionScheme};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -149,69 +150,170 @@ pub fn write_mbr<D: Read + Write + Seek>(
     dev.flush()
 }
 
-/// Format the partition described by `layout` as FAT32.
+/// Sectors reserved in front of the first FAT, as Windows and mkfs.fat do.
+const FAT32_MIN_RESERVED: u32 = 32;
+/// Sector of the backup boot sector; the backup FSInfo follows it.
+const FAT32_BACKUP_BOOT: u32 = 6;
+/// FAT entries at or above this mark bad or end-of-chain clusters.
+const FAT32_MAX_CLUSTERS: u64 = 0x0FFF_FFF5;
+
+/// Where everything goes in a FAT32 volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fat32Geometry {
+    pub sectors_per_cluster: u32,
+    pub reserved_sectors: u32,
+    pub fat_sectors: u32,
+    pub clusters: u32,
+}
+
+impl Fat32Geometry {
+    /// First sector of the data region, relative to the partition.
+    pub fn data_start(&self) -> u32 {
+        self.reserved_sectors + 2 * self.fat_sectors
+    }
+}
+
+/// Lay out a FAT32 volume the way mkfs.fat does: 32 reserved sectors, or
+/// one cluster's worth when clusters are bigger, and FATs rounded up to
+/// whole clusters, so both FATs and the data region start on cluster
+/// boundaries. With the partition at 1 MiB, clusters then line up with the
+/// flash pages underneath.
+pub fn fat32_geometry(total_sectors: u32, sector_size: u32, cluster_size: u32) -> Result<Fat32Geometry, FormatError> {
+    let spc = cluster_size / sector_size;
+    if spc == 0 || !spc.is_power_of_two() || spc > 128 {
+        return Err(FormatError::Unsupported(format!("FAT32 with {cluster_size}-byte clusters")));
+    }
+    let (total, spc64) = (total_sectors as u64, spc as u64);
+    let entries_per_sector = sector_size as u64 / 4;
+    let reserved = (FAT32_MIN_RESERVED as u64).max(spc64);
+    // The smallest FAT that covers every cluster left after the reserved
+    // area and both FATs, plus the two reserved FAT entries. Rounding it up
+    // only leaves fewer clusters, so it stays big enough.
+    let avail = total.saturating_sub(reserved);
+    let fat = (avail + 2 * spc64).div_ceil(entries_per_sector * spc64 + 2).next_multiple_of(spc64);
+    let data = reserved + 2 * fat;
+    let clusters = total.saturating_sub(data) / spc64;
+    if clusters < 65_525 {
+        return Err(FormatError::TooSmall(total * sector_size as u64));
+    }
+    if clusters > FAT32_MAX_CLUSTERS || fat > u32::MAX as u64 {
+        return Err(FormatError::Unsupported(format!("FAT32 with {clusters} clusters")));
+    }
+    debug_assert!(fat * entries_per_sector >= clusters + 2);
+    Ok(Fat32Geometry {
+        sectors_per_cluster: spc,
+        reserved_sectors: reserved as u32,
+        fat_sectors: fat as u32,
+        clusters: clusters as u32,
+    })
+}
+
+/// FAT's packed date and time. FAT stores local time; the formatter writes
+/// UTC because the only timestamp it sets is the volume label's.
+fn dos_date_time(unix: u64) -> (u16, u16) {
+    let (days, secs) = ((unix / 86_400) as i64, unix % 86_400);
+    // Howard Hinnant's days-to-civil conversion.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let date = ((year - 1980).clamp(0, 127) as u16) << 9 | (month as u16) << 5 | day as u16;
+    let time = ((secs / 3600) as u16) << 11 | (((secs % 3600) / 60) as u16) << 5 | ((secs % 60) / 2) as u16;
+    (date, time)
+}
+
+fn write_sector<D: Write + Seek>(dev: &mut D, at: u64, bytes: &[u8]) -> io::Result<()> {
+    dev.seek(SeekFrom::Start(at))?;
+    dev.write_all(bytes)
+}
+
+/// Format the partition described by `layout` as FAT32, following
+/// Microsoft's FAT specification with the choices Windows and mkfs.fat make
+/// where it leaves room: two FATs, the root directory in cluster 2, FSInfo
+/// in sector 1, backups in sectors 6 and 7, and the label in both the boot
+/// sector and the root directory. Every write covers whole sectors.
 pub fn format_fat32<D: Read + Write + Seek>(
     dev: &mut D,
     layout: &Layout,
     label: &str,
     volume_id: u32,
+    created_unix: u64,
 ) -> Result<(), FormatError> {
     let label = normalize_label(label)?;
     let mut label_bytes = [b' '; 11];
     label_bytes[..label.len()].copy_from_slice(label.as_bytes());
-    let ss = layout.sector_size as u64;
-    {
-        let part = Slice::new(&mut *dev, layout.partition_start, layout.partition_len);
-        let opts = fatfs::FormatVolumeOptions::new()
-            .fat_type(fatfs::FatType::Fat32)
-            .bytes_per_sector(layout.sector_size as u16)
-            .bytes_per_cluster(layout.cluster_size)
-            .total_sectors((layout.partition_len / ss) as u32)
-            .volume_id(volume_id)
-            .volume_label(label_bytes);
-        fatfs::format_volume(part, opts)?;
+    let ss = layout.sector_size;
+    let ssz = ss as usize;
+    let total = u32::try_from(layout.partition_len / ss as u64).map_err(|_| FormatError::TooLargeForMbr(ss))?;
+    let g = fat32_geometry(total, ss, layout.cluster_size)?;
+    let base = layout.partition_start;
+    let at = |sector: u32| base + sector as u64 * ss as u64;
+
+    // Everything up to the end of the root directory's cluster starts out
+    // zeroed, which also clears any old boot sector or FAT.
+    zero_range(dev, base, (g.data_start() + g.sectors_per_cluster) as u64 * ss as u64)?;
+
+    let mut boot = vec![0u8; ssz];
+    boot[0..3].copy_from_slice(&[0xEB, 0x58, 0x90]);
+    boot[3..11].copy_from_slice(b"MSWIN4.1");
+    boot[11..13].copy_from_slice(&(ss as u16).to_le_bytes());
+    boot[13] = g.sectors_per_cluster as u8;
+    boot[14..16].copy_from_slice(&(g.reserved_sectors as u16).to_le_bytes());
+    boot[16] = 2; // FATs
+    boot[21] = 0xF8; // fixed media
+    boot[24..26].copy_from_slice(&63u16.to_le_bytes()); // sectors per track
+    boot[26..28].copy_from_slice(&255u16.to_le_bytes()); // heads
+    boot[28..32].copy_from_slice(&((base / ss as u64) as u32).to_le_bytes()); // hidden sectors
+    boot[32..36].copy_from_slice(&total.to_le_bytes());
+    boot[36..40].copy_from_slice(&g.fat_sectors.to_le_bytes());
+    boot[44..48].copy_from_slice(&2u32.to_le_bytes()); // root directory cluster
+    boot[48..50].copy_from_slice(&1u16.to_le_bytes()); // FSInfo sector
+    boot[50..52].copy_from_slice(&(FAT32_BACKUP_BOOT as u16).to_le_bytes());
+    boot[64] = 0x80; // drive number
+    boot[66] = 0x29; // extended boot signature
+    boot[67..71].copy_from_slice(&volume_id.to_le_bytes());
+    boot[71..82].copy_from_slice(&label_bytes);
+    boot[82..90].copy_from_slice(b"FAT32   ");
+    // Not bootable: hand control back to the BIOS if anyone tries.
+    boot[90..94].copy_from_slice(&[0xCD, 0x18, 0xEB, 0xFE]);
+    boot[510] = 0x55;
+    boot[511] = 0xAA;
+
+    let mut info = vec![0u8; ssz];
+    info[0..4].copy_from_slice(b"RRaA");
+    info[484..488].copy_from_slice(b"rrAa");
+    // The root directory already uses cluster 2.
+    info[488..492].copy_from_slice(&(g.clusters - 1).to_le_bytes());
+    info[492..496].copy_from_slice(&3u32.to_le_bytes());
+    info[508..512].copy_from_slice(&[0x00, 0x00, 0x55, 0xAA]);
+
+    for first in [0, FAT32_BACKUP_BOOT] {
+        write_sector(dev, at(first), &boot)?;
+        write_sector(dev, at(first + 1), &info)?;
     }
-    // fatfs leaves "hidden sectors" at 0 and the FSInfo free-cluster count
-    // unset. Fill both in the way Windows and macOS do, in the primary
-    // structures and their backups.
-    let hidden = ((layout.partition_start / ss) as u32).to_le_bytes();
-    let mut boot = vec![0u8; ss as usize];
-    dev.seek(SeekFrom::Start(layout.partition_start))?;
-    dev.read_exact(&mut boot)?;
-    // Refuse to call it FAT32 unless it is: FAT16 layouts keep a 16-bit FAT
-    // size and a fixed root directory.
-    if u16::from_le_bytes([boot[22], boot[23]]) != 0 || u16::from_le_bytes([boot[17], boot[18]]) != 0 {
-        return Err(FormatError::Io(io::Error::other("formatter produced FAT16 instead of FAT32")));
+
+    // FAT entries 0 and 1 hold the media byte and the clean-shutdown bits;
+    // entry 2 ends the root directory's one-cluster chain.
+    let mut fat = vec![0u8; ssz];
+    fat[0..4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes());
+    fat[4..8].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+    fat[8..12].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+    for copy in 0..2 {
+        write_sector(dev, at(g.reserved_sectors + copy * g.fat_sectors), &fat)?;
     }
-    let reserved = u16::from_le_bytes([boot[14], boot[15]]) as u64;
-    let fats = boot[16] as u64;
-    let fat_size = u32::from_le_bytes(boot[36..40].try_into().unwrap()) as u64;
-    let spc = boot[13] as u64;
-    let total = u32::from_le_bytes(boot[32..36].try_into().unwrap()) as u64;
-    let clusters = (total - reserved - fats * fat_size) / spc;
-    let fs_info = u16::from_le_bytes([boot[48], boot[49]]) as u64;
-    let backup = u16::from_le_bytes([boot[50], boot[51]]) as u64;
-    for sector in [0u64, backup] {
-        let at = layout.partition_start + sector * ss;
-        dev.seek(SeekFrom::Start(at))?;
-        dev.read_exact(&mut boot)?;
-        boot[28..32].copy_from_slice(&hidden);
-        dev.seek(SeekFrom::Start(at))?;
-        dev.write_all(&boot)?;
-    }
-    for sector in [fs_info, backup + fs_info] {
-        let at = layout.partition_start + sector * ss;
-        let mut info = vec![0u8; ss as usize];
-        dev.seek(SeekFrom::Start(at))?;
-        dev.read_exact(&mut info)?;
-        if &info[0..4] == b"RRaA" && &info[484..488] == b"rrAa" {
-            // The root directory occupies one cluster.
-            info[488..492].copy_from_slice(&((clusters - 1) as u32).to_le_bytes());
-            info[492..496].copy_from_slice(&3u32.to_le_bytes());
-            dev.seek(SeekFrom::Start(at))?;
-            dev.write_all(&info)?;
-        }
-    }
+
+    let (date, time) = dos_date_time(created_unix);
+    let mut root = vec![0u8; ssz];
+    root[0..11].copy_from_slice(&label_bytes);
+    root[11] = 0x08; // volume label
+    root[22..24].copy_from_slice(&time.to_le_bytes());
+    root[24..26].copy_from_slice(&date.to_le_bytes());
+    write_sector(dev, at(g.data_start()), &root)?;
     dev.flush()?;
     Ok(())
 }
@@ -225,8 +327,9 @@ pub fn build_fat32<D: Read + Write + Seek>(
     seed: u64,
 ) -> Result<Layout, FormatError> {
     let layout = plan_layout(disk_bytes, sector_size, FilesystemKind::Fat32)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     write_mbr(dev, disk_bytes, &layout, (seed >> 32) as u32 ^ seed as u32)?;
-    format_fat32(dev, &layout, label, (seed as u32).rotate_left(13))?;
+    format_fat32(dev, &layout, label, (seed as u32).rotate_left(13), now)?;
     Ok(layout)
 }
 

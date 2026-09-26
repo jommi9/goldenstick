@@ -12,7 +12,7 @@
  │ library    rekordbox PDB reader, OneLibrary, Engine, Serato  │
  │ rules      device profiles, evidence, assessment, "why"      │
  │ planner    Main / Legacy Rescue / Backup, capacity fitting   │
- │ format     MBR + FAT32 builder (fatfs)                       │
+ │ format     MBR + FAT32 builder (mkfs.fat geometry)           │
  │ verify     quick/full read-back, manifest, fingerprints      │
  │ identify   USB catalog matching with confidence              │
  │ state      PRD §64 state machine                             │
@@ -67,11 +67,11 @@ This follows PRD §25.
 
 The helper is built without SQLite and without the demo platform. Demo and test builds run the same request handler in-process against disk images, so the erase path that ships is the one the tests exercise.
 
-Elevation is per operation for now: `pkexec` on Linux, `osascript ... with administrator privileges` on macOS and `ShellExecuteEx` with `runas` on Windows. A release should install the helper as a privileged service (SMAppService on macOS, a Windows service) and keep the same request protocol.
+Elevation is per operation for now: `pkexec` on Linux, `osascript ... with administrator privileges` on macOS and `ShellExecuteEx` with `runas` on Windows. The installers ship the helper next to the app's executable, which is where the app looks for it, and the Windows installer installs per machine so the helper sits in a folder only administrators can change. A release should install the helper as a privileged service (SMAppService on macOS, a Windows service) and keep the same request protocol.
 
 ## Formatting
 
-FAT32 is built in pure Rust so that Windows' 32 GB FAT32 limit doesn't apply. The MBR layout starts at 1 MiB, the first and last MiB are zeroed so no GPT header survives, and cluster sizes follow Microsoft's defaults but shrink on small volumes so they stay FAT32. `fatfs` writes the filesystem, and BoothReady fills in the hidden-sectors field and the FSInfo free count the way Windows does. Tests check the output with `fsck.fat`, `sfdisk`, `sgdisk` and mtools, including a 64 GB volume, and through an alignment-checking device.
+FAT32 is built in pure Rust so that Windows' 32 GB FAT32 limit doesn't apply. The MBR layout starts at 1 MiB, the first and last MiB are zeroed so no GPT header survives, and cluster sizes follow Microsoft's defaults but shrink on small volumes so they stay FAT32. `format::format_fat32` writes the volume itself from Microsoft's FAT specification, with the geometry mkfs.fat uses: 32 reserved sectors, or one cluster when clusters are bigger, and FATs rounded up to whole clusters, so the FATs and the data region all start on cluster boundaries. The boot sector carries the hidden-sector count and has its backup in sector 6, FSInfo holds a correct free count, and the label is in both the boot sector and the root directory. Tests compare the geometry with mkfs.fat's for volumes from 100 MB to 256 GB and check the output with `fsck.fat`, `sfdisk`, `sgdisk` and mtools, including a 64 GB volume, and through an alignment-checking device.
 
 exFAT has no mature pure-Rust formatter, so it uses `diskutil eraseDisk` on macOS, a generated `diskpart` script on Windows and `mkfs.exfat` on Linux.
 
@@ -87,8 +87,8 @@ The Tauri commands in `app/src-tauri/src/lib.rs` are thin wrappers that run engi
 
 - **Rules.** `ruleset.json` is seed data. Every `vendor` claim needs checking against current manuals and firmware notes, and the OneLibrary file name (`PIONEER/rekordbox/exportLibrary.db`) needs confirming against a rekordbox 7.2.x export. No claim is lab verified.
 - **Hardware.** The macOS and Windows backends parse sample `diskutil`, `ioreg` and IOCTL output in tests, and CI runs them against each runner's own disks, but they haven't enumerated, erased or ejected a real USB stick. That needs doing with a set of sticks before any public build.
-- **APFS sticks on macOS.** An APFS partition is recognised from its partition type, but its volumes live on a synthesized container disk that the backend doesn't read yet, so the app can't show an APFS stick's volume name or files on the erase confirmation.
-- **FAT32 output on players.** `fatfs` uses 8 reserved sectors and doesn't align the data region to clusters the way Windows does. The result is valid and fsck-clean, but it has to be tried on CDJs from each generation.
+- **APFS sticks on macOS.** The volumes of an APFS partition live on a synthesized container disk, which the backend maps back to the partition from `diskutil list -plist virtual`. That's tested against sample output and against the CI runner's startup disk, but not yet against an APFS-formatted USB stick.
+- **FAT32 output on players.** The layout matches mkfs.fat's and passes `fsck.fat`, but it has to be tried on CDJs from each generation.
 - **Engine DJ paths.** Track paths in `m.db` are resolved against the database folder, the `Engine Library` folder and the volume root, because the exact base isn't documented. It should be checked against a real Engine DJ 4.x export.
 - **Product images.** The app draws illustrations. Licensed photography (PRD §96) is still open.
 - **Legal review** of reading vendor database formats and of the dependency licences (PRD §95). The helper and the CLI link only permissively licensed crates (MIT, Apache-2.0, BSD, ISC, Zlib, CC0), plus SQLite, which is public domain. Through Tauri the desktop app also links `cssparser`, `selectors`, `dtoa-short` and `option-ext`, which are MPL-2.0. That licence is file-level copyleft, so it allows a proprietary app but obliges publishing any changes to those files, and it belongs in the review. rekordcrate (MPL-2.0) is only a dev-dependency, used to cross-check the PDB reader.
