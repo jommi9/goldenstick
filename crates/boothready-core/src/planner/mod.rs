@@ -285,7 +285,7 @@ pub fn plan_kit(req: &KitRequest, rules: &Ruleset) -> KitPlan {
     // A device is only "not covered" if no role serves it.
     not_covered.retain(|id| !roles.iter().any(|r| r.targets.contains(id) && !r.format.not_covered.contains(id)));
 
-    assign_drives(&mut roles, &req.drives);
+    assign_drives(&mut roles, &req.drives, legacy_min);
     if targets
         .iter()
         .any(|d| d.library_formats.values().any(|c| c.support == Support::Supported && c.evidence < Evidence::Vendor))
@@ -295,7 +295,7 @@ pub fn plan_kit(req: &KitRequest, rules: &Ruleset) -> KitPlan {
     KitPlan { roles, not_covered, notes }
 }
 
-fn assign_drives(roles: &mut [RolePlan], drives: &[DriveCandidate]) {
+fn assign_drives(roles: &mut [RolePlan], drives: &[DriveCandidate], essential_min: u64) {
     let mut free: Vec<&DriveCandidate> = drives.iter().collect();
     free.sort_by(|a, b| b.capacity_bytes.cmp(&a.capacity_bytes));
     let fits = |d: &DriveCandidate, min: u64| d.capacity_bytes * 93 / 100 >= min;
@@ -311,16 +311,32 @@ fn assign_drives(roles: &mut [RolePlan], drives: &[DriveCandidate]) {
                 idx.first().copied()
             }
             Role::Backup => {
-                let candidates: Vec<usize> =
-                    (0..free.len()).filter(|&i| fits(free[i], plan.min_capacity_bytes)).collect();
-                candidates
-                    .iter()
-                    .copied()
-                    .find(|&i| {
-                        free[i].vendor.as_deref().map(str::to_lowercase)
-                            != main_vendor.as_deref().map(str::to_lowercase)
-                    })
-                    .or_else(|| candidates.first().copied())
+                let pick_for = |min: u64| {
+                    let candidates: Vec<usize> = (0..free.len()).filter(|&i| fits(free[i], min)).collect();
+                    candidates
+                        .iter()
+                        .copied()
+                        .find(|&i| {
+                            free[i].vendor.as_deref().map(str::to_lowercase)
+                                != main_vendor.as_deref().map(str::to_lowercase)
+                        })
+                        .or_else(|| candidates.first().copied())
+                };
+                match pick_for(plan.min_capacity_bytes) {
+                    Some(i) => Some(i),
+                    None => {
+                        // Too small for everything: back up the essentials instead.
+                        let i = pick_for(essential_min);
+                        if i.is_some() {
+                            plan.content = ContentPolicy::EssentialPlaylists;
+                            plan.min_capacity_bytes = essential_min;
+                            plan.purpose[0] = "A copy of your essential playlists".into();
+                            plan.drive_notes
+                                .push("Too small for your whole library, so it holds your essential playlists.".into());
+                        }
+                        i
+                    }
+                }
             }
         };
         match pick {
@@ -485,6 +501,22 @@ mod tests {
         let backup = &plan.roles[2];
         assert_eq!(backup.assigned_drive.as_deref(), Some("d"));
         assert!(plan.not_covered.is_empty(), "{:?}", plan.not_covered);
+    }
+
+    #[test]
+    fn small_backup_holds_the_essentials() {
+        let r = Ruleset::builtin();
+        let req = KitRequest {
+            targets: vec!["cdj-3000".into()],
+            redundancy: true,
+            library_bytes: 94 * GB,
+            essential_bytes: Some(20 * GB),
+            drives: vec![drive("a", "SanDisk", 128), drive("b", "Samsung", 64)],
+        };
+        let plan = plan_kit(&req, &r);
+        let backup = plan.roles.iter().find(|p| p.role == Role::Backup).unwrap();
+        assert_eq!(backup.assigned_drive.as_deref(), Some("b"));
+        assert_eq!(backup.content, ContentPolicy::EssentialPlaylists);
     }
 
     #[test]

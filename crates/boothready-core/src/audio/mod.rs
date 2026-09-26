@@ -245,7 +245,7 @@ pub(crate) fn le64(b: &[u8], o: usize) -> u64 {
     u64::from_le_bytes(b[o..o + 8].try_into().unwrap())
 }
 
-#[cfg(test)]
-pub(crate) mod fixtures;
+#[cfg(any(test, feature = "fixtures"))]
+pub mod fixtures;
 #[cfg(test)]
 mod tests;

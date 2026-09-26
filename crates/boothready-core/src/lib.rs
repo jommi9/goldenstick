@@ -6,6 +6,9 @@
 //! are executed by `boothready-helper`.
 
 pub mod audio;
+#[cfg(feature = "fixtures")]
+pub mod demo;
+pub mod drive;
 pub mod format;
 pub mod identify;
 pub mod io;
@@ -17,6 +20,7 @@ pub mod privileged;
 pub mod rules;
 pub mod scan;
 pub mod state;
+#[cfg(feature = "sqlite")]
 pub mod store;
 pub mod verify;
 

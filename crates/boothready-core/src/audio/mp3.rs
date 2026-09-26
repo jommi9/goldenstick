@@ -189,7 +189,7 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, Pr
 }
 
 /// Build a valid MPEG-1 Layer III frame header, for fixtures.
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 pub(crate) fn test_header(bitrate_idx: u32, sr_idx: u32, mono: bool) -> u32 {
     0xFFFB_0000 | (bitrate_idx << 12) | (sr_idx << 10) | if mono { 3 << 6 } else { 0 }
 }

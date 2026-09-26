@@ -4,8 +4,10 @@
 //! SQLite never creates `-wal`/`-shm` files on the user's drive.
 
 use super::{PathResolver, PlaylistSummary, ENGINE_DB_FILE, ENGINE_LEGACY_DB_FILE};
+#[cfg(feature = "sqlite")]
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "sqlite")]
 use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,12 +44,19 @@ pub(super) fn scan(resolver: &mut PathResolver) -> Option<EngineReport> {
         outside_drive: 0,
         error: None,
     };
+    #[cfg(feature = "sqlite")]
     if let Err(e) = read(&path, rel, resolver, &mut report) {
         report.error = Some(e.to_string());
+    }
+    #[cfg(not(feature = "sqlite"))]
+    {
+        let _ = path;
+        report.error = Some("Engine DJ support is not included in this build".into());
     }
     Some(report)
 }
 
+#[cfg(feature = "sqlite")]
 fn open_readonly(path: &Path) -> rusqlite::Result<Connection> {
     let uri = format!("file:{}?mode=ro&immutable=1", uri_escape(&path.to_string_lossy()));
     Connection::open_with_flags(
@@ -58,6 +67,7 @@ fn open_readonly(path: &Path) -> rusqlite::Result<Connection> {
 
 /// SQLite URI for a local file. Only `%`, `?` and `#` need escaping; Windows
 /// paths become `file:///C:/...`.
+#[cfg(feature = "sqlite")]
 fn uri_escape(s: &str) -> String {
     let s = s.replace('\\', "/").replace('%', "%25").replace('?', "%3F").replace('#', "%23");
     let b = s.as_bytes();
@@ -68,15 +78,18 @@ fn uri_escape(s: &str) -> String {
     }
 }
 
+#[cfg(feature = "sqlite")]
 fn has_table(conn: &Connection, name: &str) -> bool {
     conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(())).is_ok()
 }
 
+#[cfg(feature = "sqlite")]
 fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
     let sql = format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1");
     conn.query_row(&sql, [column], |_| Ok(())).is_ok()
 }
 
+#[cfg(feature = "sqlite")]
 fn read(path: &Path, rel: &str, resolver: &mut PathResolver, report: &mut EngineReport) -> rusqlite::Result<()> {
     let conn = open_readonly(path)?;
     if has_table(&conn, "Information") && has_column(&conn, "Information", "schemaVersionMajor") {
@@ -144,6 +157,7 @@ fn read(path: &Path, rel: &str, resolver: &mut PathResolver, report: &mut Engine
     Ok(())
 }
 
+#[cfg(feature = "sqlite")]
 fn is_absolute_elsewhere(p: &str) -> bool {
     p.starts_with("/Users/")
         || p.starts_with("/Volumes/")
@@ -153,6 +167,7 @@ fn is_absolute_elsewhere(p: &str) -> bool {
 
 /// Join `path` onto the volume-relative directory `base`, resolving `..`.
 /// Returns `None` if the result would escape the volume.
+#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
 pub(crate) fn normalize(base: &str, path: &str) -> Option<String> {
     let mut parts: Vec<&str> =
         if path.starts_with('/') { vec![] } else { base.split('/').filter(|s| !s.is_empty()).collect() };

@@ -86,7 +86,7 @@ pub(crate) fn extended_to_f64(b: &[u8]) -> f64 {
 }
 
 /// Inverse of [`extended_to_f64`] for positive integers; used by fixtures.
-#[cfg(test)]
+#[cfg(any(test, feature = "fixtures"))]
 pub(crate) fn f64_to_extended(v: u32) -> [u8; 10] {
     let mut out = [0u8; 10];
     if v == 0 {

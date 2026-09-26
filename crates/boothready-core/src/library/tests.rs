@@ -261,6 +261,7 @@ fn damaged_pdb_is_reported_not_panicked() {
     }
 }
 
+#[cfg(feature = "sqlite")]
 #[test]
 fn engine_database_validation() {
     let vol = tempfile::tempdir().unwrap();

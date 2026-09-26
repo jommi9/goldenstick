@@ -244,6 +244,14 @@ pub struct DriveAssessment {
 
 const MAX_ISSUES: usize = 200;
 
+fn tracks(n: u32) -> String {
+    if n == 1 {
+        "1 track".into()
+    } else {
+        format!("{n} tracks")
+    }
+}
+
 fn pass_impact(ev: Evidence) -> Verdict {
     if ev.is_strong() {
         Verdict::Ready
@@ -635,13 +643,17 @@ fn audio_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, AudioTall
     } else if t.unsupported + t.unreadable > 0 {
         let mut parts = Vec::new();
         if t.unsupported > 0 {
-            parts.push(format!("{} won't play on the {}", t.unsupported, d.model));
+            parts.push(format!("{} won't play on the {}", tracks(t.unsupported), d.model));
         }
         if t.unreadable > 0 {
-            parts.push(format!("{} are damaged or unreadable", t.unreadable));
+            parts.push(format!(
+                "{} {} damaged or unreadable",
+                tracks(t.unreadable),
+                if t.unreadable == 1 { "is" } else { "are" }
+            ));
         }
         if t.unknown > 0 {
-            parts.push(format!("{} couldn't be checked", t.unknown));
+            parts.push(format!("{} couldn't be checked", tracks(t.unknown)));
         }
         layer(
             Layer::Audio,
@@ -658,7 +670,7 @@ fn audio_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, AudioTall
             LayerStatus::Unknown,
             Evidence::Unknown,
             Verdict::Partial,
-            format!("{} tracks couldn't be checked", t.unknown),
+            format!("{} couldn't be checked", tracks(t.unknown)),
             format!("BoothReady has no compatibility data for {} of the tracks on the {}.", t.unknown, d.model),
             src,
         )

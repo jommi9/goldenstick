@@ -14,7 +14,7 @@ thiserror.workspace = true
 blake3.workspace = true
 walkdir.workspace = true
 fatfs.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, optional = true }
 ed25519-dalek.workspace = true
 base64.workspace = true
 hex.workspace = true
@@ -28,5 +28,9 @@ rekordcrate = { version = "=0.3.0", default-features = false }
 binrw = "0.14"
 
 [features]
+default = ["sqlite"]
+# Engine DJ database validation and the local store. Off in the privileged
+# helper, which has no business opening databases.
+sqlite = ["dep:rusqlite"]
 # Exposes builders for synthetic rekordbox exports (tests, demo images).
 fixtures = []
