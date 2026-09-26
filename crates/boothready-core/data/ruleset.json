@@ -1,0 +1,583 @@
+{
+  "schema": 1,
+  "version": 1,
+  "published": "2026-09-26",
+  "review_status": "seed",
+  "review_note": "Seed data compiled for the prototype. Claims marked 'vendor' reflect published manufacturer specifications as understood at compile time and must be re-checked against current manuals and firmware release notes before a public release. Nothing here is lab verified yet.",
+  "claim_syntax": "Each claim is '<support>/<evidence>'. support: supported | unsupported | unreliable | unknown. evidence: vendor | lab | community | inferred | unknown.",
+  "devices": [
+    {
+      "id": "cdj-900",
+      "manufacturer": "Pioneer DJ",
+      "model": "CDJ-900",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2009,
+      "legacy": true,
+      "aliases": ["cdj 900", "900"],
+      "search_terms": ["old pioneer", "black cdj", "small cdj"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unsupported/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unsupported/vendor", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "vendor",
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [
+        { "id": "legacy-large-library", "severity": "info", "evidence": "inferred", "text": "Large libraries browse and load slowly on this generation. A smaller USB with essential playlists is more dependable." }
+      ],
+      "sources": {
+        "filesystems": "Pioneer DJ CDJ-900 operating instructions, 'Playable media'",
+        "audio": "Pioneer DJ CDJ-900 operating instructions, 'Playable file formats'",
+        "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "cdj-2000",
+      "manufacturer": "Pioneer DJ",
+      "model": "CDJ-2000",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2009,
+      "legacy": true,
+      "aliases": ["cdj 2000", "2000", "original 2000", "cdj2000"],
+      "search_terms": ["old pioneer", "first 2000", "pre nexus"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unsupported/vendor" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unsupported/vendor", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "vendor",
+      "usb_power_ma": { "value": 500, "evidence": "vendor" },
+      "quirks": [
+        { "id": "legacy-large-library", "severity": "info", "evidence": "inferred", "text": "Large libraries browse and load slowly on this generation. A smaller USB with essential playlists is more dependable." }
+      ],
+      "sources": {
+        "partition_tables": "AlphaTheta CDJ-2000 FAQ: GUID partition map (macOS default) not supported",
+        "filesystems": "Pioneer DJ CDJ-2000 operating instructions, 'Supported media': FAT, FAT32, HFS+",
+        "usb_power_ma": "Pioneer DJ CDJ-2000 operating instructions: USB bus power up to 500 mA",
+        "audio": "Pioneer DJ CDJ-2000 operating instructions, 'Playable file formats'",
+        "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "cdj-900nxs",
+      "manufacturer": "Pioneer DJ",
+      "model": "CDJ-900NXS",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2013,
+      "legacy": true,
+      "aliases": ["900 nexus", "900nxs", "cdj 900 nexus"],
+      "search_terms": ["old nexus", "nexus 900"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unsupported/inferred", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "inferred",
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [],
+      "sources": {
+        "filesystems": "Pioneer DJ CDJ-900NXS operating instructions, 'Playable media'",
+        "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "cdj-2000nxs",
+      "manufacturer": "Pioneer DJ",
+      "model": "CDJ-2000NXS",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2012,
+      "legacy": true,
+      "aliases": ["2000 nexus", "nexus 1", "2000nxs", "cdj 2000 nexus"],
+      "search_terms": ["old nexus", "nexus", "nxs1"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unsupported/inferred", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "vendor",
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [
+        { "id": "legacy-large-library", "severity": "info", "evidence": "inferred", "text": "Large libraries browse and load slowly on this generation. A smaller USB with essential playlists is more dependable." }
+      ],
+      "sources": {
+        "filesystems": "Pioneer DJ CDJ-2000NXS operating instructions, 'Supported media'",
+        "audio": "Pioneer DJ CDJ-2000NXS operating instructions, 'Playable file formats'",
+        "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "cdj-2000nxs2",
+      "manufacturer": "Pioneer DJ",
+      "model": "CDJ-2000NXS2",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2016,
+      "legacy": false,
+      "aliases": ["nexus 2", "nxs2", "2000nxs2", "cdj 2000 nexus 2"],
+      "search_terms": ["nexus", "club standard"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unknown/unknown", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "vendor",
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [],
+      "sources": {
+        "filesystems": "Pioneer DJ CDJ-2000NXS2 operating instructions, 'Supported media'",
+        "audio": "Pioneer DJ CDJ-2000NXS2 specifications: MP3, AAC, WAV, AIFF, FLAC, ALAC up to 96 kHz/24-bit",
+        "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "xdj-700",
+      "manufacturer": "Pioneer DJ",
+      "model": "XDJ-700",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2015,
+      "legacy": true,
+      "aliases": ["xdj700"],
+      "search_terms": ["touch screen small", "compact player"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unsupported/inferred", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "inferred",
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [],
+      "sources": { "filesystems": "Pioneer DJ XDJ-700 operating instructions, 'Supported media'" },
+      "last_reviewed": null
+    },
+    {
+      "id": "xdj-1000mk2",
+      "manufacturer": "Pioneer DJ",
+      "model": "XDJ-1000MK2",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2017,
+      "legacy": false,
+      "aliases": ["xdj 1000 mk2", "xdj1000mk2"],
+      "search_terms": ["touch screen player"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unknown/unknown", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [],
+      "sources": { "audio": "Pioneer DJ XDJ-1000MK2 specifications" },
+      "last_reviewed": null
+    },
+    {
+      "id": "xdj-xz",
+      "manufacturer": "Pioneer DJ",
+      "model": "XDJ-XZ",
+      "family": "alphatheta",
+      "kind": "standalone",
+      "released": 2019,
+      "legacy": false,
+      "aliases": ["xdjxz", "xz"],
+      "search_terms": ["all in one", "big controller"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "hfs_plus": "supported/vendor", "exfat": "unknown/unknown", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [],
+      "sources": { "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)" },
+      "last_reviewed": null
+    },
+    {
+      "id": "cdj-3000",
+      "manufacturer": "Pioneer DJ",
+      "model": "CDJ-3000",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2020,
+      "legacy": false,
+      "aliases": ["3000", "cdj3000", "cdj 3000"],
+      "search_terms": ["big touch screen", "club standard", "newest"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/vendor" },
+      "filesystems": { "fat16": "supported/vendor", "fat32": "supported/vendor", "exfat": "supported/vendor", "hfs_plus": "supported/vendor", "ntfs": "unsupported/vendor" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unsupported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": "vendor",
+      "usb_power_ma": { "value": 500, "evidence": "inferred" },
+      "quirks": [],
+      "sources": {
+        "partition_tables": "AlphaTheta CDJ-3000 FAQ: devices formatted with GUID partition map may not be recognized",
+        "filesystems": "AlphaTheta CDJ-3000 operating instructions: FAT, FAT32, exFAT, HFS+",
+        "audio": "AlphaTheta CDJ-3000 specifications",
+        "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11)"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "cdj-3000x",
+      "manufacturer": "AlphaTheta",
+      "model": "CDJ-3000X",
+      "family": "alphatheta",
+      "kind": "player",
+      "released": 2025,
+      "legacy": false,
+      "aliases": ["3000x", "cdj3000x", "cdj 3000 x"],
+      "search_terms": ["newest", "wifi cdj"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/inferred", "fat32": "supported/inferred", "exfat": "supported/inferred", "hfs_plus": "supported/inferred", "ntfs": "unsupported/inferred" },
+      "library_formats": { "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "supported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "inferred" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "inferred" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11): uses OneLibrary" },
+      "last_reviewed": null
+    },
+    {
+      "id": "xdj-az",
+      "manufacturer": "AlphaTheta",
+      "model": "XDJ-AZ",
+      "family": "alphatheta",
+      "kind": "standalone",
+      "released": 2024,
+      "legacy": false,
+      "aliases": ["xdjaz", "az"],
+      "search_terms": ["all in one", "four channel standalone"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat16": "supported/inferred", "fat32": "supported/inferred", "exfat": "supported/inferred", "hfs_plus": "unknown/unknown", "ntfs": "unsupported/inferred" },
+      "library_formats": { "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "supported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [16000, 22050, 24000, 32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "inferred" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "inferred" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11): uses OneLibrary" },
+      "last_reviewed": null
+    },
+    {
+      "id": "opus-quad",
+      "manufacturer": "AlphaTheta",
+      "model": "OPUS-QUAD",
+      "family": "alphatheta",
+      "kind": "standalone",
+      "released": 2023,
+      "legacy": false,
+      "aliases": ["opus quad", "opus"],
+      "search_terms": ["all in one", "white standalone"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat32": "supported/inferred", "exfat": "supported/inferred", "hfs_plus": "unknown/unknown", "ntfs": "unsupported/inferred" },
+      "library_formats": { "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "supported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "unknown/unknown",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [44100, 48000], "evidence": "inferred" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "inferred" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000, 88200, 96000], "bit_depths": [16, 24], "evidence": "inferred" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11): uses OneLibrary" },
+      "last_reviewed": null
+    },
+    {
+      "id": "omnis-duo",
+      "manufacturer": "AlphaTheta",
+      "model": "OMNIS-DUO",
+      "family": "alphatheta",
+      "kind": "standalone",
+      "released": 2024,
+      "legacy": false,
+      "aliases": ["omnis duo", "omnis"],
+      "search_terms": ["portable standalone"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat32": "supported/inferred", "exfat": "supported/inferred", "hfs_plus": "unknown/unknown", "ntfs": "unsupported/inferred" },
+      "library_formats": { "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "supported/vendor", "engine_database": "unsupported/vendor" },
+      "folder_browsing": "unknown/unknown",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "sample_rates": [44100, 48000], "evidence": "inferred" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "inferred" },
+        { "codecs": ["flac", "alac"], "sample_rates": [44100, 48000], "bit_depths": [16, 24], "evidence": "inferred" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "library_formats": "AlphaTheta: Device Library vs OneLibrary product support list (rekordbox 7.2.11): uses OneLibrary" },
+      "last_reviewed": null
+    },
+    {
+      "id": "denon-sc5000",
+      "manufacturer": "Denon DJ",
+      "model": "SC5000 Prime",
+      "family": "engine",
+      "kind": "player",
+      "released": 2017,
+      "legacy": false,
+      "aliases": ["sc5000", "sc 5000", "prime sc5000"],
+      "search_terms": ["denon", "engine", "dual layer"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unknown/unknown" },
+      "filesystems": { "fat32": "supported/vendor", "exfat": "supported/vendor", "hfs_plus": "unknown/unknown", "ntfs": "unknown/unknown" },
+      "library_formats": { "engine_database": "supported/vendor", "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "unknown/unknown" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "evidence": "vendor" },
+        { "codecs": ["alac", "flac"], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["vorbis"], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "filesystems": "Engine DJ documentation: exFAT recommended, FAT32 supported" },
+      "last_reviewed": null
+    },
+    {
+      "id": "denon-sc6000",
+      "manufacturer": "Denon DJ",
+      "model": "SC6000 Prime",
+      "family": "engine",
+      "kind": "player",
+      "released": 2020,
+      "legacy": false,
+      "aliases": ["sc6000", "sc 6000", "sc6000m"],
+      "search_terms": ["denon", "engine", "big screen denon"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unknown/unknown" },
+      "filesystems": { "fat32": "supported/vendor", "exfat": "supported/vendor", "hfs_plus": "unknown/unknown", "ntfs": "unknown/unknown" },
+      "library_formats": { "engine_database": "supported/vendor", "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "unknown/unknown" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "evidence": "vendor" },
+        { "codecs": ["alac", "flac"], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["vorbis"], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "filesystems": "Engine DJ documentation: exFAT recommended, FAT32 supported" },
+      "last_reviewed": null
+    },
+    {
+      "id": "denon-prime-4",
+      "manufacturer": "Denon DJ",
+      "model": "PRIME 4",
+      "family": "engine",
+      "kind": "standalone",
+      "released": 2018,
+      "legacy": false,
+      "aliases": ["prime4", "prime 4"],
+      "search_terms": ["denon", "engine", "all in one"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unknown/unknown" },
+      "filesystems": { "fat32": "supported/vendor", "exfat": "supported/vendor", "hfs_plus": "unknown/unknown", "ntfs": "unknown/unknown" },
+      "library_formats": { "engine_database": "supported/vendor", "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "unknown/unknown" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "evidence": "vendor" },
+        { "codecs": ["alac", "flac"], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["vorbis"], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": { "filesystems": "Engine DJ documentation: exFAT recommended, FAT32 supported" },
+      "last_reviewed": null
+    },
+    {
+      "id": "denon-prime-4-plus",
+      "manufacturer": "Denon DJ",
+      "model": "PRIME 4+",
+      "family": "engine",
+      "kind": "standalone",
+      "released": 2022,
+      "legacy": false,
+      "aliases": ["prime4+", "prime 4 plus", "prime4plus"],
+      "search_terms": ["denon", "engine", "all in one"],
+      "partition_tables": { "mbr": "supported/vendor", "gpt": "unreliable/vendor" },
+      "filesystems": { "fat32": "supported/vendor", "exfat": "supported/vendor", "hfs_plus": "unknown/unknown", "ntfs": "unknown/unknown" },
+      "library_formats": { "engine_database": "supported/vendor", "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "unknown/unknown" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "vendor" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "evidence": "vendor" },
+        { "codecs": ["alac", "flac"], "evidence": "vendor" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "bit_depths": [16, 24], "evidence": "vendor" },
+        { "codecs": ["vorbis"], "evidence": "vendor" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": {
+        "partition_tables": "Denon DJ PRIME 4+ user guide: drives must be FAT32 or exFAT with an MBR partition structure",
+        "filesystems": "Denon DJ PRIME 4+ user guide: FAT32 or exFAT"
+      },
+      "last_reviewed": null
+    },
+    {
+      "id": "denon-sc-live-4",
+      "manufacturer": "Denon DJ",
+      "model": "SC LIVE 4",
+      "family": "engine",
+      "kind": "standalone",
+      "released": 2022,
+      "legacy": false,
+      "aliases": ["sc live 4", "sclive4"],
+      "search_terms": ["denon", "engine", "all in one", "streaming"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "unreliable/inferred" },
+      "filesystems": { "fat32": "supported/inferred", "exfat": "supported/inferred", "hfs_plus": "unknown/unknown", "ntfs": "unknown/unknown" },
+      "library_formats": { "engine_database": "supported/vendor", "rekordbox_device_library": "unknown/unknown", "rekordbox_one_library": "unknown/unknown" },
+      "folder_browsing": "supported/inferred",
+      "audio": [
+        { "codecs": ["mp3"], "sample_rates": [32000, 44100, 48000], "evidence": "inferred" },
+        { "codecs": ["aac_lc"], "containers": ["mp4"], "evidence": "inferred" },
+        { "codecs": ["alac", "flac"], "evidence": "inferred" },
+        { "codecs": ["pcm"], "containers": ["wav", "aiff"], "bit_depths": [16, 24], "evidence": "inferred" },
+        { "codecs": ["vorbis"], "evidence": "inferred" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [],
+      "sources": {},
+      "last_reviewed": null
+    },
+    {
+      "id": "mixxx",
+      "manufacturer": "Mixxx",
+      "model": "Mixxx (laptop)",
+      "family": "mixxx",
+      "kind": "software",
+      "released": 2024,
+      "legacy": false,
+      "aliases": ["mixxx", "laptop"],
+      "search_terms": ["open source", "computer", "software"],
+      "partition_tables": { "mbr": "supported/inferred", "gpt": "supported/inferred" },
+      "filesystems": { "fat16": "supported/inferred", "fat32": "supported/inferred", "exfat": "supported/inferred", "hfs_plus": "unreliable/inferred", "apfs": "unreliable/inferred", "ntfs": "unreliable/inferred" },
+      "library_formats": { "rekordbox_device_library": "supported/vendor", "rekordbox_one_library": "unknown/unknown", "engine_database": "unsupported/inferred" },
+      "folder_browsing": "supported/vendor",
+      "audio": [
+        { "codecs": ["mp3", "aac_lc", "aac_he", "flac", "pcm", "pcm_float", "vorbis", "opus"], "evidence": "vendor" },
+        { "codecs": ["alac"], "evidence": "inferred" }
+      ],
+      "audio_list_exhaustive": null,
+      "usb_power_ma": null,
+      "quirks": [
+        { "id": "host-filesystems", "severity": "info", "evidence": "inferred", "text": "Mixxx reads whatever the laptop can mount. HFS+ and APFS need a Mac; NTFS is read-only on a Mac." }
+      ],
+      "sources": { "library_formats": "Mixxx manual: 'Rekordbox' library feature reads exported USB devices (playlists, beatgrids, hot cues, memory cues, loops)" },
+      "last_reviewed": null
+    }
+  ],
+  "presets": [
+    {
+      "id": "unknown_club",
+      "title": "Unknown club or festival equipment",
+      "subtitle": "Recommended when you don't know what's in the booth",
+      "devices": ["cdj-2000", "cdj-2000nxs", "cdj-2000nxs2", "cdj-3000", "cdj-3000x", "xdj-xz", "xdj-az"],
+      "redundancy": true
+    },
+    {
+      "id": "pioneer_only",
+      "title": "Pioneer / AlphaTheta only",
+      "subtitle": "Every CDJ and XDJ generation we know about",
+      "devices": ["cdj-900", "cdj-2000", "cdj-900nxs", "cdj-2000nxs", "cdj-2000nxs2", "xdj-700", "xdj-1000mk2", "xdj-xz", "cdj-3000", "cdj-3000x", "xdj-az", "opus-quad", "omnis-duo"],
+      "redundancy": true
+    },
+    {
+      "id": "denon_engine",
+      "title": "Denon DJ / Engine DJ",
+      "subtitle": "SC5000, SC6000, PRIME 4 and friends",
+      "devices": ["denon-sc5000", "denon-sc6000", "denon-prime-4", "denon-prime-4-plus", "denon-sc-live-4"],
+      "redundancy": false
+    },
+    {
+      "id": "laptop_mixxx",
+      "title": "Laptop with Mixxx",
+      "subtitle": "Plays straight from a rekordbox-prepared USB",
+      "devices": ["mixxx"],
+      "redundancy": false
+    },
+    {
+      "id": "mixed",
+      "title": "Mixed systems",
+      "subtitle": "Current Pioneer and Denon gear",
+      "devices": ["cdj-2000nxs2", "cdj-3000", "cdj-3000x", "xdj-az", "denon-sc6000", "denon-prime-4-plus"],
+      "redundancy": true
+    },
+    {
+      "id": "max_compat",
+      "title": "As compatible as possible",
+      "subtitle": "Everything BoothReady knows about",
+      "devices": ["cdj-900", "cdj-2000", "cdj-900nxs", "cdj-2000nxs", "cdj-2000nxs2", "xdj-700", "xdj-1000mk2", "xdj-xz", "cdj-3000", "cdj-3000x", "xdj-az", "opus-quad", "omnis-duo", "denon-sc5000", "denon-sc6000", "denon-prime-4", "denon-prime-4-plus", "denon-sc-live-4", "mixxx"],
+      "redundancy": true
+    }
+  ]
+}

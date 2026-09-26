@@ -39,7 +39,11 @@ impl FilesystemInfo {
 
 /// Detect the filesystem of the volume starting at `offset` and spanning
 /// `len` bytes.
-pub fn detect_filesystem<R: Read + Seek>(disk: &mut Disk<R>, offset: u64, len: u64) -> io::Result<Option<FilesystemInfo>> {
+pub fn detect_filesystem<R: Read + Seek>(
+    disk: &mut Disk<R>,
+    offset: u64,
+    len: u64,
+) -> io::Result<Option<FilesystemInfo>> {
     if len < 2048 || offset.checked_add(2048).is_none_or(|end| end > disk.size()) {
         return Ok(None);
     }
@@ -152,10 +156,7 @@ fn read_fat<R: Read + Seek>(disk: &mut Disk<R>, offset: u64, len: u64, b: &[u8])
     if total * bps > len {
         fs.warnings.push("Filesystem claims to be larger than its partition".into());
     } else if len - total * bps > 16 * 1024 * 1024 {
-        fs.warnings.push(format!(
-            "Filesystem uses {} MB less than its partition",
-            (len - total * bps) / (1024 * 1024)
-        ));
+        fs.warnings.push(format!("Filesystem uses {} MB less than its partition", (len - total * bps) / (1024 * 1024)));
     }
     if bps != 512 {
         fs.warnings.push(format!("Uses {bps}-byte sectors; older players expect 512"));

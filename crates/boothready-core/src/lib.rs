@@ -5,10 +5,20 @@
 //! device discovery lives in `boothready-platform`; privileged disk writes
 //! are executed by `boothready-helper`.
 
-pub mod io;
 pub mod audio;
+pub mod format;
+pub mod identify;
+pub mod io;
 pub mod library;
+pub mod manifest;
 pub mod media;
+pub mod planner;
+pub mod privileged;
+pub mod rules;
+pub mod scan;
+pub mod state;
+pub mod store;
+pub mod verify;
 
 #[cfg(test)]
 pub(crate) mod testutil;

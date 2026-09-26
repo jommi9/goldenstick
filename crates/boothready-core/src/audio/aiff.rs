@@ -30,7 +30,7 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, Pr
                 frames = Some(be32(&c, 2));
                 info.bit_depth = Some(be16(&c, 6));
                 let rate = extended_to_f64(&c[8..18]);
-                if !(rate.is_finite() && rate >= 1.0 && rate <= 1_000_000.0) {
+                if !(rate.is_finite() && (1.0..=1_000_000.0).contains(&rate)) {
                     return Err(ProbeError::Corrupt("AIFF sample rate is invalid".into()));
                 }
                 info.sample_rate = Some(rate.round() as u32);

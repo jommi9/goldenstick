@@ -323,7 +323,13 @@ fn read_device_library(path: &Path, resolver: &mut PathResolver) -> DeviceLibrar
     report.playlists = pdb
         .playlists
         .into_iter()
-        .map(|p| PlaylistSummary { id: p.id, parent_id: p.parent_id, name: p.name, is_folder: p.is_folder, track_ids: p.track_ids })
+        .map(|p| PlaylistSummary {
+            id: p.id,
+            parent_id: p.parent_id,
+            name: p.name,
+            is_folder: p.is_folder,
+            track_ids: p.track_ids,
+        })
         .collect();
     report
 }
@@ -351,7 +357,13 @@ pub(crate) fn is_ignored_dir(e: &walkdir::DirEntry) -> bool {
     let name = e.file_name().to_string_lossy();
     matches!(
         name.as_ref(),
-        ".Spotlight-V100" | ".Trashes" | ".fseventsd" | ".TemporaryItems" | "System Volume Information" | "$RECYCLE.BIN" | ".boothready"
+        ".Spotlight-V100"
+            | ".Trashes"
+            | ".fseventsd"
+            | ".TemporaryItems"
+            | "System Volume Information"
+            | "$RECYCLE.BIN"
+            | ".boothready"
     ) || (e.depth() == 2 && name.eq_ignore_ascii_case("USBANLZ"))
 }
 
@@ -362,7 +374,9 @@ pub fn count_apple_double(root: &Path) -> u32 {
         .into_iter()
         .filter_entry(|e| !is_ignored_dir(e))
         .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && e.file_name().to_string_lossy().starts_with("._") && is_audio_path(e.path()))
+        .filter(|e| {
+            e.file_type().is_file() && e.file_name().to_string_lossy().starts_with("._") && is_audio_path(e.path())
+        })
         .count() as u32
 }
 

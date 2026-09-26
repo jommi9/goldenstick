@@ -66,10 +66,7 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, Pr
                 let declared = if rf64 && size == 0xFFFF_FFFF { ds64_data_len.unwrap_or(0) } else { size };
                 let available = src.len.saturating_sub(body);
                 if declared > available {
-                    info.issues.push(format!(
-                        "audio data is cut short ({} of {} bytes present)",
-                        available, declared
-                    ));
+                    info.issues.push(format!("audio data is cut short ({} of {} bytes present)", available, declared));
                 }
                 data_len = Some(declared.min(available));
                 if have_fmt {

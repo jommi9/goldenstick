@@ -166,14 +166,9 @@ impl PhysicalDevice {
     /// Best human-readable name the OS gave us, before catalog matching.
     pub fn raw_display_name(&self) -> String {
         let usb = self.usb.as_ref();
-        let vendor = usb
-            .and_then(|u| u.manufacturer.clone())
-            .or_else(|| self.storage_vendor.clone())
-            .unwrap_or_default();
-        let product = usb
-            .and_then(|u| u.product.clone())
-            .or_else(|| self.storage_model.clone())
-            .unwrap_or_default();
+        let vendor =
+            usb.and_then(|u| u.manufacturer.clone()).or_else(|| self.storage_vendor.clone()).unwrap_or_default();
+        let product = usb.and_then(|u| u.product.clone()).or_else(|| self.storage_model.clone()).unwrap_or_default();
         let name = format!("{} {}", vendor.trim(), product.trim());
         let name = name.trim();
         if name.is_empty() {

@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "note": "Seed catalog. VID/PID pairs are shared across many retail products and hardware revisions; a match identifies a product family, not the flash or controller inside. Images are BoothReady illustrations, not product photographs.",
+  "vendors": {
+    "0781": "SanDisk",
+    "0951": "Kingston",
+    "13fe": "Phison (Kingston, Patriot, others)",
+    "090c": "Silicon Motion (Samsung, others)",
+    "04e8": "Samsung",
+    "8564": "Transcend",
+    "154b": "PNY",
+    "18a5": "Verbatim",
+    "05dc": "Lexar",
+    "0930": "Kioxia / Toshiba",
+    "058f": "Alcor Micro (generic)",
+    "1f75": "Innostor (generic)",
+    "0bc2": "Seagate",
+    "1058": "Western Digital",
+    "152d": "JMicron (drive enclosure)",
+    "174c": "ASMedia (drive enclosure)"
+  },
+  "products": [
+    { "id": "sandisk-cruzer-blade", "manufacturer": "SanDisk", "name": "Cruzer Blade", "vendor_id": "0781", "product_ids": ["5567"], "descriptor_patterns": ["cruzer blade"], "capacities_gb": [4, 8, 16, 32, 64, 128, 256], "connector": "usb-a", "usb": "2.0", "image": "stick-blade", "color": "#d6262f", "revisions": [] },
+    { "id": "sandisk-ultra-usb3", "manufacturer": "SanDisk", "name": "Ultra USB 3.0", "vendor_id": "0781", "product_ids": ["5581"], "descriptor_patterns": ["ultra"], "capacities_gb": [16, 32, 64, 128, 256, 512], "connector": "usb-a", "usb": "3.0", "image": "stick-slider", "color": "#d6262f", "revisions": [] },
+    { "id": "sandisk-ultra-fit", "manufacturer": "SanDisk", "name": "Ultra Fit", "vendor_id": "0781", "product_ids": ["5583"], "descriptor_patterns": ["ultra fit"], "capacities_gb": [16, 32, 64, 128, 256, 512], "connector": "usb-a", "usb": "3.1", "image": "stick-nano", "color": "#2a2a2a", "revisions": [] },
+    { "id": "sandisk-ultra-flair", "manufacturer": "SanDisk", "name": "Ultra Flair", "vendor_id": "0781", "product_ids": ["5591"], "descriptor_patterns": ["ultra usb 3.0", "flair"], "capacities_gb": [16, 32, 64, 128, 256, 512], "connector": "usb-a", "usb": "3.0", "image": "stick-metal", "color": "#1d1d1f", "revisions": [] },
+    { "id": "sandisk-extreme", "manufacturer": "SanDisk", "name": "Extreme", "vendor_id": "0781", "product_ids": ["5580"], "descriptor_patterns": ["extreme"], "capacities_gb": [32, 64, 128, 256], "connector": "usb-a", "usb": "3.0", "image": "stick-slider", "color": "#b3101b", "revisions": [] },
+    { "id": "sandisk-extreme-pro", "manufacturer": "SanDisk", "name": "Extreme PRO", "vendor_id": "0781", "product_ids": ["5588"], "descriptor_patterns": ["extreme pro"], "capacities_gb": [128, 256, 512, 1024], "connector": "usb-a", "usb": "3.1", "image": "stick-metal", "color": "#3a3a3c", "revisions": [] },
+    { "id": "kingston-datatraveler", "manufacturer": "Kingston", "name": "DataTraveler", "vendor_id": "0951", "product_ids": ["1666", "1665", "1642"], "descriptor_patterns": ["datatraveler", "dt"], "capacities_gb": [8, 16, 32, 64, 128, 256], "connector": "usb-a", "usb": "3.2", "image": "stick-cap", "color": "#1b1b1b", "revisions": [] },
+    { "id": "samsung-bar-plus", "manufacturer": "Samsung", "name": "BAR Plus", "vendor_id": "090c", "product_ids": ["1000"], "descriptor_patterns": ["bar plus", "bar"], "capacities_gb": [32, 64, 128, 256], "connector": "usb-a", "usb": "3.1", "image": "stick-metal", "color": "#9a9ca1", "revisions": [] },
+    { "id": "samsung-fit-plus", "manufacturer": "Samsung", "name": "FIT Plus", "vendor_id": "090c", "product_ids": ["1000"], "descriptor_patterns": ["fit plus", "flash drive fit", "fit"], "capacities_gb": [32, 64, 128, 256], "connector": "usb-a", "usb": "3.1", "image": "stick-nano", "color": "#2a2a2a", "revisions": [] },
+    { "id": "transcend-jetflash", "manufacturer": "Transcend", "name": "JetFlash", "vendor_id": "8564", "product_ids": ["1000"], "descriptor_patterns": ["jetflash"], "capacities_gb": [8, 16, 32, 64, 128, 256], "connector": "usb-a", "usb": "3.1", "image": "stick-cap", "color": "#c8102e", "revisions": [] },
+    { "id": "samsung-t7", "manufacturer": "Samsung", "name": "Portable SSD T7", "vendor_id": "04e8", "product_ids": ["4001"], "descriptor_patterns": ["portable ssd t7", "t7"], "capacities_gb": [500, 1000, 2000], "connector": "usb-c", "usb": "3.2", "image": "ssd-portable", "color": "#5b6770", "revisions": [] }
+  ]
+}

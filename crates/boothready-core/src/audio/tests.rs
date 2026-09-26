@@ -144,7 +144,8 @@ fn ffmpeg_generated_files() {
     }
     let dir = tempfile::tempdir().unwrap();
     // (file name, ffmpeg args, codec, rate, bit depth)
-    let cases: &[(&str, &[&str], Codec, u32, Option<u16>)] = &[
+    type Case<'a> = (&'a str, &'a [&'a str], Codec, u32, Option<u16>);
+    let cases: &[Case] = &[
         ("a.wav", &["-c:a", "pcm_s16le", "-ar", "44100"], Codec::Pcm, 44_100, Some(16)),
         ("b.wav", &["-c:a", "pcm_s24le", "-ar", "96000"], Codec::Pcm, 96_000, Some(24)),
         ("c.wav", &["-c:a", "pcm_f32le", "-ar", "48000"], Codec::PcmFloat, 48_000, Some(32)),

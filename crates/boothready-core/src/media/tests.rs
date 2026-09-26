@@ -3,7 +3,7 @@
 //! independent implementations. Tests skip when a tool is missing.
 
 use super::*;
-use crate::testutil::{have_tool, run_tool, splice_partition, sparse_file};
+use crate::testutil::{have_tool, run_tool, sparse_file, splice_partition};
 use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom, Write};
 
@@ -52,7 +52,21 @@ fn gpt_macos_style_layout_with_exfat() {
     // macOS Disk Utility layout: 200 MB EFI system partition, then data.
     run_tool(
         "sgdisk",
-        &["-a", "8", "-n", "1:40:409639", "-t", "1:EF00", "-n", "2:411648:0", "-t", "2:0700", "-c", "2:Untitled", img.to_str().unwrap()],
+        &[
+            "-a",
+            "8",
+            "-n",
+            "1:40:409639",
+            "-t",
+            "1:EF00",
+            "-n",
+            "2:411648:0",
+            "-t",
+            "2:0700",
+            "-c",
+            "2:Untitled",
+            img.to_str().unwrap(),
+        ],
         None,
     );
     let efi = dir.path().join("efi.img");

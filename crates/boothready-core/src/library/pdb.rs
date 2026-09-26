@@ -182,7 +182,9 @@ pub fn parse_pdb(data: &[u8]) -> Result<Pdb, PdbError> {
             }
             TABLE_PLAYLIST_ENTRIES => {
                 for r in rows {
-                    if let (Some(idx), Some(track), Some(pl)) = (u32_at(data, r), u32_at(data, r + 4), u32_at(data, r + 8)) {
+                    if let (Some(idx), Some(track), Some(pl)) =
+                        (u32_at(data, r), u32_at(data, r + 4), u32_at(data, r + 8))
+                    {
                         entries.push((pl, idx, track));
                     }
                 }

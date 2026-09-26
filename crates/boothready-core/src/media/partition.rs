@@ -223,10 +223,7 @@ fn read_mbr<R: Read + Seek>(disk: &mut Disk<R>, s0: &[u8]) -> io::Result<Option<
         warnings.push("Protective MBR found but the GPT header is missing or damaged".into());
     }
     if partitions.len() > 1 {
-        warnings.push(format!(
-            "{} partitions found. DJ players generally read only the first one",
-            partitions.len()
-        ));
+        warnings.push(format!("{} partitions found. DJ players generally read only the first one", partitions.len()));
     }
     let sig = le_u32(s0, 440);
     Ok(Some(PartitionMap {
@@ -298,12 +295,7 @@ pub fn guid_to_string(b: &[u8]) -> String {
     )
 }
 
-fn read_gpt<R: Read + Seek>(
-    disk: &mut Disk<R>,
-    ss: u64,
-    s0: &[u8],
-    hdr: &[u8],
-) -> io::Result<PartitionMap> {
+fn read_gpt<R: Read + Seek>(disk: &mut Disk<R>, ss: u64, s0: &[u8], hdr: &[u8]) -> io::Result<PartitionMap> {
     let mut warnings = Vec::new();
     let header_size = le_u32(hdr, 12) as usize;
     if (92..=512).contains(&header_size) {
@@ -382,7 +374,10 @@ fn read_gpt<R: Read + Seek>(
     }
     let last_lba = disk.size() / ss - 1;
     if backup_lba != last_lba {
-        warnings.push("GPT backup header is not at the end of the device (image may have been copied to a different-size drive)".into());
+        warnings.push(
+            "GPT backup header is not at the end of the device (image may have been copied to a different-size drive)"
+                .into(),
+        );
     } else if let Ok(b) = disk.read_at(backup_lba * ss, 8) {
         if &b[..] != b"EFI PART" {
             warnings.push("GPT backup header is missing".into());

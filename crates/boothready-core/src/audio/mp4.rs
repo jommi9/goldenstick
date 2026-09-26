@@ -81,7 +81,13 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, Pr
     Ok(info)
 }
 
-fn walk<R: Read + Seek>(src: &mut Source<R>, start: u64, end: u64, depth: u32, f: &mut Found) -> Result<(), ProbeError> {
+fn walk<R: Read + Seek>(
+    src: &mut Source<R>,
+    start: u64,
+    end: u64,
+    depth: u32,
+    f: &mut Found,
+) -> Result<(), ProbeError> {
     if depth > MAX_DEPTH {
         return Ok(());
     }

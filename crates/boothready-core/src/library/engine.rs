@@ -69,8 +69,7 @@ fn uri_escape(s: &str) -> String {
 }
 
 fn has_table(conn: &Connection, name: &str) -> bool {
-    conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(()))
-        .is_ok()
+    conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [name], |_| Ok(())).is_ok()
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
@@ -107,10 +106,7 @@ fn read(path: &Path, rel: &str, resolver: &mut PathResolver, report: &mut Engine
             report.outside_drive += 1;
             continue;
         }
-        let found = bases
-            .iter()
-            .filter_map(|b| normalize(b, &p))
-            .find(|cand| resolver.resolve(cand).is_some());
+        let found = bases.iter().filter_map(|b| normalize(b, &p)).find(|cand| resolver.resolve(cand).is_some());
         match found {
             Some(c) => report.track_paths.push(c),
             None => report.missing.push(normalize(db_dir, &p).unwrap_or(p)),
@@ -158,11 +154,8 @@ fn is_absolute_elsewhere(p: &str) -> bool {
 /// Join `path` onto the volume-relative directory `base`, resolving `..`.
 /// Returns `None` if the result would escape the volume.
 pub(crate) fn normalize(base: &str, path: &str) -> Option<String> {
-    let mut parts: Vec<&str> = if path.starts_with('/') {
-        vec![]
-    } else {
-        base.split('/').filter(|s| !s.is_empty()).collect()
-    };
+    let mut parts: Vec<&str> =
+        if path.starts_with('/') { vec![] } else { base.split('/').filter(|s| !s.is_empty()).collect() };
     for seg in path.split(['/', '\\']) {
         match seg {
             "" | "." => {}
@@ -181,7 +174,10 @@ mod tests {
 
     #[test]
     fn normalize_paths() {
-        assert_eq!(normalize("Engine Library/Database2", "../Music/a.mp3").as_deref(), Some("Engine Library/Music/a.mp3"));
+        assert_eq!(
+            normalize("Engine Library/Database2", "../Music/a.mp3").as_deref(),
+            Some("Engine Library/Music/a.mp3")
+        );
         assert_eq!(normalize("Engine Library/Database2", "../../Music/a.mp3").as_deref(), Some("Music/a.mp3"));
         assert_eq!(normalize("Engine Library", "../../../etc/passwd"), None);
         assert_eq!(normalize("x", "/Contents/b.mp3").as_deref(), Some("Contents/b.mp3"));

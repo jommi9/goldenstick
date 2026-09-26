@@ -117,8 +117,22 @@ pub(crate) fn build_rekordbox_volume(root: &Path) -> Vec<FixtureTrack> {
     }
     let playlists = vec![
         FixturePlaylist { id: 1, parent_id: 0, name: "Gigs".into(), is_folder: true, sort_order: 0, track_ids: vec![] },
-        FixturePlaylist { id: 2, parent_id: 1, name: "Berghain".into(), is_folder: false, sort_order: 0, track_ids: vec![3, 1, 2] },
-        FixturePlaylist { id: 3, parent_id: 0, name: "Warm-up ☀".into(), is_folder: false, sort_order: 1, track_ids: vec![1, 5] },
+        FixturePlaylist {
+            id: 2,
+            parent_id: 1,
+            name: "Berghain".into(),
+            is_folder: false,
+            sort_order: 0,
+            track_ids: vec![3, 1, 2],
+        },
+        FixturePlaylist {
+            id: 3,
+            parent_id: 0,
+            name: "Warm-up ☀".into(),
+            is_folder: false,
+            sort_order: 1,
+            track_ids: vec![1, 5],
+        },
     ];
     let pdb = build_pdb(&tracks, &[(1, "Artist A".into()), (2, "Artist B".into())], &playlists);
     fs::create_dir_all(root.join("PIONEER/rekordbox")).unwrap();
@@ -128,8 +142,9 @@ pub(crate) fn build_rekordbox_volume(root: &Path) -> Vec<FixtureTrack> {
 
 #[test]
 fn fixture_roundtrip_and_rekordcrate_agrees() {
-    let tracks: Vec<FixtureTrack> =
-        (1..=400).map(|i| track(i, &format!("/Contents/Long Folder Name {i}/Some Track Title {i}.mp3"), i * 1000, 44_100, 16)).collect();
+    let tracks: Vec<FixtureTrack> = (1..=400)
+        .map(|i| track(i, &format!("/Contents/Long Folder Name {i}/Some Track Title {i}.mp3"), i * 1000, 44_100, 16))
+        .collect();
     let playlists = vec![FixturePlaylist {
         id: 9,
         parent_id: 0,
@@ -194,7 +209,8 @@ fn missing_changed_and_case_mismatched_files() {
     edited.extend_from_slice(&[0u8; 333]);
     fs::write(vol.path().join("Contents/Artist B/Closing.flac"), edited).unwrap();
     // Players on FAT/exFAT resolve paths case-insensitively; so do we.
-    fs::rename(vol.path().join("Contents/Artist B/Hi-Res.aiff"), vol.path().join("Contents/Artist B/HI-RES.AIFF")).unwrap();
+    fs::rename(vol.path().join("Contents/Artist B/Hi-Res.aiff"), vol.path().join("Contents/Artist B/HI-RES.AIFF"))
+        .unwrap();
     let report = scan_libraries(vol.path());
     let dl = report.rekordbox.as_ref().unwrap().device_library.as_ref().unwrap();
     assert_eq!(dl.missing, vec!["Contents/Artist A/Peak.wav".to_string()]);
@@ -268,7 +284,8 @@ fn engine_database_validation() {
     )
     .unwrap();
     drop(conn);
-    let before: Vec<_> = fs::read_dir(root.join("Engine Library/Database2")).unwrap().flatten().map(|e| e.file_name()).collect();
+    let before: Vec<_> =
+        fs::read_dir(root.join("Engine Library/Database2")).unwrap().flatten().map(|e| e.file_name()).collect();
     let report = scan_libraries(root);
     assert!(report.has(LibraryFormat::EngineDatabase));
     let e = report.engine.as_ref().unwrap();
@@ -280,7 +297,8 @@ fn engine_database_validation() {
     assert_eq!(e.outside_drive, 1);
     assert_eq!(e.playlists[0].track_ids, vec![2, 1]);
     // Read-only inspection must not leave journal files on the drive.
-    let after: Vec<_> = fs::read_dir(root.join("Engine Library/Database2")).unwrap().flatten().map(|e| e.file_name()).collect();
+    let after: Vec<_> =
+        fs::read_dir(root.join("Engine Library/Database2")).unwrap().flatten().map(|e| e.file_name()).collect();
     assert_eq!(before, after);
 }
 

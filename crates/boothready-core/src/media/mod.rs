@@ -127,13 +127,7 @@ fn type_mismatch(entry: &PartitionEntry, fs: FilesystemKind) -> Option<String> {
         FilesystemKind::HfsPlus => t == 0xAF,
         _ => true,
     };
-    (!ok).then(|| {
-        format!(
-            "Partition {} is marked as type 0x{t:02X} but contains {}",
-            entry.index,
-            fs.label()
-        )
-    })
+    (!ok).then(|| format!("Partition {} is marked as type 0x{t:02X} but contains {}", entry.index, fs.label()))
 }
 
 #[cfg(test)]
