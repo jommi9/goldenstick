@@ -1,0 +1,10 @@
+[package]
+name = "boothready-model"
+description = "Shared data types for BoothReady: physical devices, volumes, filesystems."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true

@@ -1,0 +1,32 @@
+[package]
+name = "boothready-core"
+description = "BoothReady engine: media inspection, DJ library detection, compatibility rules, kit planning, verification."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+boothready-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+blake3.workspace = true
+walkdir.workspace = true
+fatfs.workspace = true
+rusqlite.workspace = true
+ed25519-dalek.workspace = true
+base64.workspace = true
+hex.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Independent PDB parser used only to cross-check our reader and fixtures.
+# Its crate also ships real rekordbox exports that the tests read.
+rekordcrate = { version = "=0.3.0", default-features = false }
+binrw = "0.14"
+
+[features]
+# Exposes builders for synthetic rekordbox exports (tests, demo images).
+fixtures = []
