@@ -13,6 +13,7 @@ import type {
   HardwareCard,
   KitPlan,
   Preset,
+  Role,
   VerifyProgress,
   VerifyReport,
 } from "./types";
@@ -46,6 +47,8 @@ export async function createMockApi(): Promise<Api> {
   const stage = new Map<string, Stage>();
   const verified = new Set<string>();
   const labels = new Map<string, string>();
+  const roles = new Map<string, Role | null>();
+  let copyCancelled = false;
   const listeners: Record<string, ((p: any) => void)[]> = {};
   const emit = (name: string, payload: unknown) => (listeners[name] ?? []).forEach((cb) => cb(payload));
   const on = (name: string) => (cb: (p: any) => void) => {
@@ -125,6 +128,7 @@ export async function createMockApi(): Promise<Api> {
     confirmation: async (id) => state(id).confirmation,
     prepare: async (id, _token, _fs, role) => {
       labels.set(id, role === "legacy_rescue" ? "BR_LEGACY" : role === "backup" ? "BR_BACKUP" : "BR_MAIN");
+      roles.set(id, role);
       for (const [step, detail] of [
         ["checking", "Confirming this is the drive you selected"],
         ["unmounting", "Unmounting the drive"],
@@ -187,6 +191,40 @@ export async function createMockApi(): Promise<Api> {
       return report;
     },
     cancelVerify: async () => {},
+    copySources: async (id) =>
+      [...verified]
+        .filter((src) => src !== id && inserted.has(src))
+        .map((src) => {
+          const s = state(src).summary;
+          const other = (stage.get(id) ?? "initial") !== "prepared" ? state(id).summary.content.files : 0;
+          const problems = other ? [`The destination already holds ${other} other files. Prepare it first so two libraries don't get mixed`] : [];
+          return { device_id: src, display_name: s.identification.display_name, role: roles.get(src) ?? null, files: s.tracks_scanned + 12, bytes: s.content.used_bytes, problems, needs_erase: other > 0 };
+        }),
+    copyDrive: async (from, to) => {
+      copyCancelled = false;
+      const s = state(from).summary;
+      const files = s.tracks_scanned + 12;
+      for (let i = 1; i <= 20; i++) {
+        if (copyCancelled) return { files_copied: Math.round((files * i) / 20), bytes_copied: 0, files_skipped: 0, files_removed: 0, cancelled: true };
+        await sleep(120);
+        const p: VerifyProgress = {
+          bytes_done: Math.round((s.content.used_bytes * i) / 20),
+          bytes_total: s.content.used_bytes,
+          files_done: Math.round((files * i) / 20),
+          files_total: files,
+          current: "",
+          eta_secs: i > 5 ? Math.round((20 - i) * 0.12) : null,
+        };
+        emit("copy-progress", { device_id: to, progress: p });
+      }
+      stage.set(to, "exported");
+      verified.delete(to);
+      deviceEvent({ kind: "changed", device: state(to).card.device });
+      return { files_copied: files, bytes_copied: s.content.used_bytes, files_skipped: 0, files_removed: 0, cancelled: false };
+    },
+    cancelCopy: async () => {
+      copyCancelled = true;
+    },
     eject: async (id) => {
       inserted.delete(id);
       setTimeout(() => deviceEvent({ kind: "disappeared", id }), 300);
@@ -211,6 +249,7 @@ export async function createMockApi(): Promise<Api> {
       stage.clear();
       verified.clear();
       labels.clear();
+      roles.clear();
     },
     demoSimulateExport: async (id) => {
       stage.set(id, "exported");
@@ -222,5 +261,6 @@ export async function createMockApi(): Promise<Api> {
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),
     onVerifyProgress: on("verify-progress"),
+    onCopyProgress: on("copy-progress"),
   };
 }

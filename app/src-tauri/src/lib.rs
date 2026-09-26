@@ -7,6 +7,7 @@
 mod dto;
 mod elevate;
 
+use boothready_core::copy::{plan_copy, run_copy, CopyPlan, CopyProblem, CopyReport, CopyTarget};
 use boothready_core::demo::DemoContent;
 use boothready_core::drive::{analyze_drive, DriveReport};
 use boothready_core::identify::{apply_user_choice, Candidate, Identification, UsbCatalog};
@@ -49,6 +50,7 @@ pub struct AppState {
     rules: Ruleset,
     catalog: UsbCatalog,
     cancel_verify: Arc<AtomicBool>,
+    cancel_copy: Arc<AtomicBool>,
 }
 
 type Res<T> = Result<T, String>;
@@ -83,6 +85,13 @@ impl AppState {
             .into_iter()
             .find(|d| d.id == id)
             .ok_or_else(|| "That USB drive is no longer connected.".to_string())
+    }
+
+    /// The name a drive is shown with: the user's confirmed identity, or
+    /// the best catalog match.
+    fn display_name(&self, dev: &PhysicalDevice) -> String {
+        let confirmed = self.inner.lock().unwrap().identities.get(&media_key(dev)).cloned();
+        confirmed.unwrap_or_else(|| boothready_core::identify::identify(dev, &self.catalog)).display_name
     }
 
     fn report(&self, id: &str) -> Res<DriveReport> {
@@ -496,6 +505,93 @@ fn cancel_verify(state: State<'_, AppState>) {
     state.cancel_verify.store(true, Ordering::Relaxed);
 }
 
+// ---------------------------------------------------------------- copy
+
+fn mounted_root(dev: &PhysicalDevice) -> Res<(PathBuf, Option<FilesystemKind>)> {
+    let vol = dev.primary_mount().ok_or("The drive isn't mounted.")?;
+    Ok((vol.mount_point.clone().ok_or("The drive isn't mounted.")?, vol.filesystem))
+}
+
+fn copy_plan(src: &Path, dst: &Path, filesystem: Option<FilesystemKind>) -> Res<CopyPlan> {
+    let space = boothready_platform::space(dst).map_err(|e| format!("Couldn't read the free space: {e}"))?;
+    let target = CopyTarget { filesystem, free_bytes: space.free_bytes, cluster_bytes: space.cluster_bytes };
+    plan_copy(src, dst, &target).map_err(e2s)
+}
+
+/// A dry run of copying `dev` onto `dst_root`, if `dev` is worth copying
+/// from: it holds a DJ library and a passing verification that still
+/// matches what's on it.
+fn copy_source(
+    dev: &PhysicalDevice,
+    display_name: String,
+    dst_root: &Path,
+    filesystem: Option<FilesystemKind>,
+) -> Option<Res<CopySource>> {
+    let (root, _) = mounted_root(dev).ok()?;
+    let m = read_manifest(&root)?;
+    let verified = m
+        .verification
+        .as_ref()
+        .is_some_and(|v| v.passed && v.content_fingerprint == boothready_core::manifest::content_fingerprint(&root));
+    if !verified || scan_libraries(&root).formats.is_empty() {
+        return None;
+    }
+    Some(copy_plan(&root, dst_root, filesystem).map(|plan| CopySource {
+        device_id: dev.id.clone(),
+        display_name,
+        role: m.role,
+        files: plan.files.len() as u32,
+        bytes: plan.files.iter().map(|f| f.size).sum(),
+        problems: plan.problems.iter().map(|p| p.describe()).collect(),
+        needs_erase: plan.problems.iter().any(|p| matches!(p, CopyProblem::DestinationNotEmpty { .. })),
+    }))
+}
+
+/// Connected drives whose contents could be copied onto `device_id`, each
+/// with a dry run of the copy.
+#[tauri::command]
+async fn copy_sources(state: State<'_, AppState>, device_id: String) -> Res<Vec<CopySource>> {
+    let devices = state.platform().list_devices().map_err(e2s)?;
+    let dst = devices.iter().find(|d| d.id == device_id).ok_or("That USB drive is no longer connected.")?;
+    let (dst_root, filesystem) = mounted_root(dst)?;
+    let candidates: Vec<(PhysicalDevice, String)> = devices
+        .iter()
+        .filter(|d| d.id != device_id && d.primary_mount().is_some())
+        .map(|d| (d.clone(), state.display_name(d)))
+        .collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        candidates.into_iter().filter_map(|(dev, name)| copy_source(&dev, name, &dst_root, filesystem)).collect()
+    })
+    .await
+    .map_err(e2s)?
+}
+
+/// Copy one drive's contents onto another, streaming `copy-progress`.
+#[tauri::command]
+async fn copy_drive(app: AppHandle, state: State<'_, AppState>, from_id: String, to_id: String) -> Res<CopyReport> {
+    let (src, _) = mounted_root(&state.device(&from_id)?)?;
+    let (dst, filesystem) = mounted_root(&state.device(&to_id)?)?;
+    let cancel = state.cancel_copy.clone();
+    cancel.store(false, Ordering::Relaxed);
+    let id2 = to_id.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let plan = copy_plan(&src, &dst, filesystem)?;
+        run_copy(&plan, &src, &dst, &cancel, |p| {
+            let _ = app.emit("copy-progress", VerifyProgressEvent { device_id: id2.clone(), progress: p.clone() });
+        })
+        .map_err(e2s)
+    })
+    .await
+    .map_err(e2s)??;
+    state.inner.lock().unwrap().reports.remove(&to_id);
+    Ok(report)
+}
+
+#[tauri::command]
+fn cancel_copy(state: State<'_, AppState>) {
+    state.cancel_copy.store(true, Ordering::Relaxed);
+}
+
 #[tauri::command]
 async fn eject(state: State<'_, AppState>, device_id: String) -> Res<EjectResult> {
     let platform = state.platform();
@@ -635,6 +731,7 @@ pub fn run() {
                 rules: Ruleset::builtin(),
                 catalog: UsbCatalog::builtin(),
                 cancel_verify: Arc::new(AtomicBool::new(false)),
+                cancel_copy: Arc::new(AtomicBool::new(false)),
             };
             app.manage(state);
             let handle = app.handle().clone();
@@ -660,6 +757,9 @@ pub fn run() {
             open_rekordbox,
             verify,
             cancel_verify,
+            copy_sources,
+            copy_drive,
+            cancel_copy,
             eject,
             known_media,
             profiles,
@@ -771,4 +871,69 @@ pub fn mock_snapshot(root: &Path) -> serde_json::Value {
         "drives": drives,
         "plan_unknown_club": plan,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boothready_core::demo::{create_stick, STICKS};
+    use boothready_platform::demo::DemoPlatform;
+
+    fn demo_devices(root: &Path) -> Vec<PhysicalDevice> {
+        DemoPlatform::new(root.to_path_buf()).list_devices().unwrap()
+    }
+
+    fn verify_and_record(root: &Path) {
+        let libs = scan_libraries(root);
+        let exp = Expectations { scheme: None, filesystem: None };
+        let req =
+            VerifyRequest { root, layout: None, expect: exp, libs: &libs, manifest: None, mode: VerifyMode::Full };
+        let report = verify_volume(&req, &AtomicBool::new(false), |_| {});
+        assert!(report.passed, "{:?}", report.failures);
+        let mut m = Manifest::new(Some(Role::Main), vec![]);
+        m.verification = Some(report.record());
+        write_manifest(root, &m).unwrap();
+    }
+
+    /// Only a drive with a DJ library and a passing verification that still
+    /// matches its contents is offered as something to copy from.
+    #[test]
+    fn copy_sources_are_verified_and_unchanged() {
+        let usb = tempfile::tempdir().unwrap();
+        let stick = |name: &str| STICKS.iter().find(|s| s.name == name).unwrap();
+        create_stick(usb.path(), stick("samsung-64")).unwrap();
+        create_stick(usb.path(), stick("kingston-32")).unwrap();
+        let devices = demo_devices(usb.path());
+        let find = |name: &str| devices.iter().find(|d| d.id == format!("demo:{name}")).unwrap();
+        let (src, dst) = (find("samsung-64"), find("kingston-32"));
+        let (src_root, _) = mounted_root(src).unwrap();
+        let (dst_root, fs) = mounted_root(dst).unwrap();
+
+        assert!(copy_source(src, "Samsung".into(), &dst_root, fs).is_none(), "unverified");
+        assert!(copy_source(dst, "Kingston".into(), &src_root, None).is_none(), "no library");
+
+        verify_and_record(&src_root);
+        let offer = copy_source(src, "Samsung".into(), &dst_root, fs).unwrap().unwrap();
+        assert!(offer.problems.is_empty() && !offer.needs_erase, "{:?}", offer.problems);
+        assert_eq!(offer.role, Some(Role::Main));
+        assert!(offer.files > 0 && offer.bytes > 0);
+
+        std::fs::write(src_root.join("Contents/new.mp3"), b"added after verification").unwrap();
+        assert!(copy_source(src, "Samsung".into(), &dst_root, fs).is_none(), "changed since verification");
+    }
+
+    #[test]
+    fn a_destination_with_other_files_needs_an_erase() {
+        let usb = tempfile::tempdir().unwrap();
+        let stick = |name: &str| STICKS.iter().find(|s| s.name == name).unwrap();
+        create_stick(usb.path(), stick("samsung-64")).unwrap();
+        create_stick(usb.path(), stick("sandisk-128")).unwrap();
+        let devices = demo_devices(usb.path());
+        let find = |name: &str| devices.iter().find(|d| d.id == format!("demo:{name}")).unwrap();
+        let (src_root, _) = mounted_root(find("samsung-64")).unwrap();
+        let (dst_root, fs) = mounted_root(find("sandisk-128")).unwrap();
+        verify_and_record(&src_root);
+        let offer = copy_source(find("samsung-64"), "Samsung".into(), &dst_root, fs).unwrap().unwrap();
+        assert!(offer.needs_erase, "{:?}", offer.problems);
+    }
 }

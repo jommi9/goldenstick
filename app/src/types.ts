@@ -300,3 +300,24 @@ export interface ExportStatus {
   one_library: number | null;
   engine: number | null;
 }
+
+/** A verified drive the app can copy onto the one being prepared. */
+export interface CopySource {
+  device_id: string;
+  display_name: string;
+  role: Role | null;
+  files: number;
+  bytes: number;
+  /** Why the copy can't start, in plain words. Empty when it can. */
+  problems: string[];
+  /** The destination holds other files, so erasing it first clears the way. */
+  needs_erase: boolean;
+}
+
+export interface CopyReport {
+  files_copied: number;
+  bytes_copied: number;
+  files_skipped: number;
+  files_removed: number;
+  cancelled: boolean;
+}

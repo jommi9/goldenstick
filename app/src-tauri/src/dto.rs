@@ -4,6 +4,7 @@
 use boothready_core::drive::{ContentStats, DriveReport, LayoutSource};
 use boothready_core::identify::{Candidate, CatalogProduct, Identification};
 use boothready_core::library::LibraryFormat;
+use boothready_core::planner::Role;
 use boothready_core::privileged::{eligibility, DeviceFingerprint, Eligibility};
 use boothready_core::rules::DeviceProfile;
 use boothready_core::scan::TrackProbe;
@@ -238,6 +239,21 @@ pub struct PrepareProgress {
     pub detail: String,
 }
 
+/// A verified drive the app offers to copy from.
+#[derive(Serialize)]
+pub struct CopySource {
+    pub device_id: String,
+    pub display_name: String,
+    pub role: Option<Role>,
+    pub files: u32,
+    pub bytes: u64,
+    /// Why the copy can't start, in plain words. Empty when it can.
+    pub problems: Vec<String>,
+    /// The destination holds other files, so erasing it first clears the way.
+    pub needs_erase: bool,
+}
+
+/// Progress of a verification or a copy, for the drive it concerns.
 #[derive(Serialize, Clone)]
 pub struct VerifyProgressEvent {
     pub device_id: String,

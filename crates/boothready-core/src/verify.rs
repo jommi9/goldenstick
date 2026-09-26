@@ -73,7 +73,7 @@ pub struct Expectations {
     pub filesystem: Option<FilesystemKind>,
 }
 
-fn human_bytes(b: u64) -> String {
+pub fn human_bytes(b: u64) -> String {
     match b {
         b if b >= 1_000_000_000 => format!("{:.1} GB", b as f64 / 1e9),
         b if b >= 1_000_000 => format!("{:.1} MB", b as f64 / 1e6),
@@ -252,10 +252,11 @@ pub fn verify_volume(
         } else if failures.is_empty() {
             format!("{} files, {}", p.files_done, human_bytes(p.bytes_done))
         } else {
+            let count = |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
             format!(
-                "{} problems{}",
-                failures.len(),
-                if missing > 0 { format!(", {missing} files missing") } else { String::new() }
+                "{}{}",
+                count(failures.len(), "problem", "problems"),
+                if missing > 0 { format!(", {} missing", count(missing, "file", "files")) } else { String::new() }
             )
         },
     });

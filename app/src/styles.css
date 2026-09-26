@@ -750,3 +750,14 @@ p {
     font-size: 13px;
   }
 }
+
+.copy-offer {
+  margin: 16px 0 20px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-3);
+}
+.copy-offer h2 {
+  margin-top: 0;
+}

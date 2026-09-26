@@ -265,6 +265,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
  "uuid",
  "windows 0.62.2",
 ]
