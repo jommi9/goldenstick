@@ -13,12 +13,14 @@ out=app/src-tauri/binaries
 mkdir -p "$out"
 
 if [ "$target" = universal-apple-darwin ]; then
+  # Tauri compiles each architecture on its own and looks for that
+  # architecture's sidecar each time, then bundles the universal one.
   for t in aarch64-apple-darwin x86_64-apple-darwin; do
     cargo build --release --locked -p boothready-helper --target "$t"
+    cp "target/$t/release/boothready-helper" "$out/boothready-helper-$t"
   done
   lipo -create -output "$out/boothready-helper-$target" \
-    target/aarch64-apple-darwin/release/boothready-helper \
-    target/x86_64-apple-darwin/release/boothready-helper
+    "$out/boothready-helper-aarch64-apple-darwin" "$out/boothready-helper-x86_64-apple-darwin"
 else
   ext=""
   case "$target" in *windows*) ext=".exe" ;; esac
