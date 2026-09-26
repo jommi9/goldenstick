@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/boothready-model",
+    "crates/boothready-core",
+    "crates/boothready-platform",
+    "crates/boothready-helper",
+    "crates/boothready-cli",
+    "app/src-tauri",
+]
+default-members = [
+    "crates/boothready-model",
+    "crates/boothready-core",
+    "crates/boothready-platform",
+    "crates/boothready-helper",
+    "crates/boothready-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+repository = "https://github.com/jommi9/goldenstick"
+rust-version = "1.85"
+
+[workspace.dependencies]
+boothready-model = { path = "crates/boothready-model" }
+boothready-core = { path = "crates/boothready-core", default-features = false }
+boothready-platform = { path = "crates/boothready-platform" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+blake3 = { version = "1.8", features = ["pure"] }
+walkdir = "2.5"
+fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+ed25519-dalek = "2.2"
+base64 = "0.22"
+hex = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

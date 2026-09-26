@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: Engine, helper and CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Disk and audio tools used by the image tests
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y dosfstools exfatprogs fdisk gdisk mtools ffmpeg
+      - name: Format
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test
+      - name: Helper builds without SQLite
+        run: cargo build -p boothready-helper
+      - name: Real device enumeration smoke test
+        run: cargo run -q -p boothready-cli -- devices
+
+  app:
+    name: Desktop app (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Tauri system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev
+      - name: Frontend
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
+      - name: Clippy (Tauri shell)
+        run: cargo clippy -p boothready-app --all-targets -- -D warnings
+      - name: UI walkthrough screenshots
+        if: runner.os == 'Linux'
+        working-directory: app
+        run: |
+          npx playwright install --with-deps chromium
+          SHOTS_DIR=screenshots npm run screenshots
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: ui-screenshots
+          path: app/screenshots
