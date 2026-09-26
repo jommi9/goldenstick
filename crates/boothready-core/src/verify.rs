@@ -73,6 +73,14 @@ pub struct Expectations {
     pub filesystem: Option<FilesystemKind>,
 }
 
+fn human_bytes(b: u64) -> String {
+    match b {
+        b if b >= 1_000_000_000 => format!("{:.1} GB", b as f64 / 1e9),
+        b if b >= 1_000_000 => format!("{:.1} MB", b as f64 / 1e6),
+        b => format!("{} KB", b.div_ceil(1000)),
+    }
+}
+
 /// Throughput-based ETA that stays silent until it has at least 5 seconds
 /// and 5 % of the work behind it.
 pub fn eta(elapsed_secs: f64, done: u64, total: u64) -> Option<u64> {
@@ -242,7 +250,7 @@ pub fn verify_volume(
         detail: if cancelled {
             "Verification was cancelled".into()
         } else if failures.is_empty() {
-            format!("{} files, {} MB", p.files_done, p.bytes_done / 1_000_000)
+            format!("{} files, {}", p.files_done, human_bytes(p.bytes_done))
         } else {
             format!(
                 "{} problems{}",

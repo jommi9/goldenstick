@@ -6,6 +6,14 @@ members = [
     "crates/boothready-platform",
     "crates/boothready-helper",
     "crates/boothready-cli",
+    "app/src-tauri",
+]
+default-members = [
+    "crates/boothready-model",
+    "crates/boothready-core",
+    "crates/boothready-platform",
+    "crates/boothready-helper",
+    "crates/boothready-cli",
 ]
 
 [workspace.package]

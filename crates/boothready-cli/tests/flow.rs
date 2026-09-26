@@ -9,6 +9,7 @@ fn br(demo: &std::path::Path, args: &[&str]) -> (bool, String) {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "formats a 31 GB image, which isn't sparse on NTFS")]
 fn acceptance_scenario() {
     let d = tempfile::tempdir().unwrap();
     let demo = d.path();
@@ -57,6 +58,7 @@ fn acceptance_scenario() {
 }
 
 #[test]
+#[cfg(unix)]
 fn make_image_refuses_devices() {
     let (ok, out) = br(std::path::Path::new("/nonexistent"), &["make-image", "/dev/null", "--size-gb", "1"]);
     assert!(!ok);

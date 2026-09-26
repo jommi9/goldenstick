@@ -120,7 +120,7 @@ fn smallest_standard_size(bytes: u64) -> u64 {
 
 fn fmt_gb(bytes: u64) -> String {
     let gb = bytes as f64 / GB as f64;
-    if gb >= 10.0 {
+    if gb >= 10.0 || gb.fract() == 0.0 {
         format!("{gb:.0} GB")
     } else {
         format!("{gb:.1} GB")

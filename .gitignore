@@ -4,3 +4,5 @@ app/dist
 app/src-tauri/gen/schemas
 *.img
 .DS_Store
+app/screenshots
+app/test-results

@@ -97,6 +97,7 @@ fn builds_valid_fat32_on_small_drive() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "NTFS files aren't sparse by default; a 64 GB image would really use 64 GB")]
 fn builds_large_fat32_beyond_windows_limit() {
     // 64 GB: bigger than Windows' built-in FAT32 formatter allows.
     let dir = tempfile::tempdir().unwrap();
