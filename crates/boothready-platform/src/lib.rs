@@ -167,11 +167,23 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
         let w = Watcher::spawn(p, Duration::from_millis(100), move |e| sink.lock().unwrap().push(e));
+        // Wait for each event with a generous timeout rather than a fixed
+        // sleep, so slow CI runners don't turn this into a flake.
+        let wait_for = |pred: &dyn Fn(&DeviceEvent) -> bool| {
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(10) {
+                if events.lock().unwrap().iter().any(pred) {
+                    return true;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            false
+        };
         demo::DemoPlatform::create_stick(dir.path(), "stick1", "SanDisk", "Ultra", 0x0781, 0x5581, 32_000_000_000)
             .unwrap();
-        thread::sleep(Duration::from_millis(400));
+        assert!(wait_for(&|e| matches!(e, DeviceEvent::Appeared { .. })), "no Appeared event");
         std::fs::remove_dir_all(dir.path().join("stick1")).unwrap();
-        thread::sleep(Duration::from_millis(400));
+        assert!(wait_for(&|e| matches!(e, DeviceEvent::Disappeared { .. })), "no Disappeared event");
         w.stop();
         let ev = events.lock().unwrap();
         assert!(matches!(ev.first(), Some(DeviceEvent::Appeared { .. })), "{ev:?}");

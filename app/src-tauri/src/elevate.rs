@@ -76,8 +76,10 @@ trait Waitable {
     fn try_wait(&mut self) -> io::Result<Option<()>>;
 }
 
+#[cfg(not(windows))]
 struct Proc(std::process::Child);
 
+#[cfg(not(windows))]
 impl Waitable for Proc {
     fn try_wait(&mut self) -> io::Result<Option<()>> {
         Ok(self.0.try_wait()?.map(|_| ()))

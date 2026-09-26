@@ -297,7 +297,7 @@ pub fn plan_kit(req: &KitRequest, rules: &Ruleset) -> KitPlan {
 
 fn assign_drives(roles: &mut [RolePlan], drives: &[DriveCandidate], essential_min: u64) {
     let mut free: Vec<&DriveCandidate> = drives.iter().collect();
-    free.sort_by(|a, b| b.capacity_bytes.cmp(&a.capacity_bytes));
+    free.sort_by_key(|d| std::cmp::Reverse(d.capacity_bytes));
     let fits = |d: &DriveCandidate, min: u64| d.capacity_bytes * 93 / 100 >= min;
     let mut main_vendor: Option<String> = None;
     for role in [Role::Main, Role::LegacyRescue, Role::Backup] {
