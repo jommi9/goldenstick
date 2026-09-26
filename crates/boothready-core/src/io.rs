@@ -141,9 +141,9 @@ impl<T> Seek for Slice<T> {
     }
 }
 
-/// Makes an unaligned `Read + Write + Seek` consumer (such as the `fatfs`
-/// formatter) safe to run against a raw device that only accepts whole
-/// sectors. Unaligned writes become read-modify-write of the covering sectors.
+/// Makes an unaligned `Read + Write + Seek` consumer safe to run against a
+/// raw device that only accepts whole sectors. Unaligned writes become
+/// read-modify-write of the covering sectors.
 pub struct AlignedIo<T> {
     inner: T,
     sector: u64,

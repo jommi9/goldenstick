@@ -29,6 +29,21 @@ cd app && npm run dev
 
 The simulated 128 GB SanDisk is the PRD's acceptance scenario: GPT and exFAT from a Mac, with only a rekordbox Device Library. BoothReady fails it for the original CDJ-2000, flags OneLibrary as missing for the CDJ-3000X and XDJ-AZ, recommends MBR and FAT32, and plans a separate Legacy Rescue drive.
 
+## Alpha builds
+
+The Installers workflow builds an unsigned macOS app (universal, as a `.dmg`) and Windows installers (`.msi` and `.exe`). Run it from the Actions tab to get them as artifacts, or push a `v*` tag to also get a draft pre-release with the files attached.
+
+The builds aren't signed yet, so both systems warn before the first launch. On macOS, open the app with right-click and Open, or run `xattr -dr com.apple.quarantine /Applications/BoothReady.app`. On Windows, choose More info and then Run anyway.
+
+To build an installer yourself on the machine it's for:
+
+```sh
+scripts/build-helper-sidecar.sh            # or: scripts/build-helper-sidecar.sh universal-apple-darwin
+cd app && npm ci && npx tauri build --config src-tauri/tauri.release.conf.json
+```
+
+The release config ships `boothready-helper` next to the app's executable. A development build looks in the same place, which is `target/debug` once you've run `cargo build -p boothready-helper`, and `BOOTHREADY_HELPER` can point it somewhere else.
+
 ## What's here
 
 | Path | What it does |

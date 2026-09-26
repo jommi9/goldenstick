@@ -3,10 +3,14 @@ use crate::io::AlignedIo;
 use crate::media::inspect_path;
 use crate::testutil::{have_tool, run_tool, sparse_file};
 use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
 const GIB: u64 = 1024 * MIB;
+
+trait ReadWriteSeek: Read + Write + Seek {}
+impl<T: Read + Write + Seek> ReadWriteSeek for T {}
 
 fn open_rw(p: &Path) -> File {
     OpenOptions::new().read(true).write(true).open(p).unwrap()
@@ -143,9 +147,14 @@ fn aligned_io_produces_identical_bytes() {
     let size = 256 * MIB;
     sparse_file(&a, size);
     sparse_file(&b, size);
-    build_fat32(&mut open_rw(&a), size, 512, "SAME", 99).unwrap();
+    let layout = plan_layout(size, 512, FilesystemKind::Fat32).unwrap();
+    let build = |mut dev: &mut dyn ReadWriteSeek| {
+        write_mbr(&mut dev, size, &layout, 99).unwrap();
+        format_fat32(&mut dev, &layout, "SAME", 99, 1_790_000_000).unwrap();
+    };
+    build(&mut open_rw(&a));
     let mut aligned = AlignedIo::new(open_rw(&b), 4096, size);
-    build_fat32(&mut aligned, size, 512, "SAME", 99).unwrap();
+    build(&mut aligned);
     aligned.into_inner().unwrap();
     let (x, y) = (std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
     assert!(x == y, "raw and aligned formatting differ");
@@ -167,4 +176,84 @@ fn rejects_bad_input() {
     assert_eq!(normalize_label(" br_main ").unwrap(), "BR_MAIN");
     let exfat = plan_layout(64 * GIB, 512, FilesystemKind::Exfat).unwrap();
     assert_eq!(exfat.mbr_type, MBR_TYPE_EXFAT);
+}
+
+fn le16(b: &[u8], at: usize) -> u32 {
+    u16::from_le_bytes([b[at], b[at + 1]]) as u32
+}
+
+fn le32(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+/// mkfs.fat is the reference: for every size we format, our geometry must
+/// match what it picks for the same sector count and cluster size.
+#[test]
+#[cfg_attr(windows, ignore = "NTFS files aren't sparse by default")]
+fn geometry_matches_mkfs_fat() {
+    if !have_tool("mkfs.fat") {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for gib in [0.1f64, 0.25, 2.0, 16.0, 31.9, 64.0, 256.0] {
+        let size = (gib * GIB as f64) as u64 / MIB * MIB;
+        let layout = plan_layout(size, 512, FilesystemKind::Fat32).unwrap();
+        let spc = layout.cluster_size / 512;
+        let part = dir.path().join("mkfs.img");
+        let _ = std::fs::remove_file(&part);
+        sparse_file(&part, layout.partition_len);
+        run_tool(
+            "mkfs.fat",
+            &["-F", "32", "-S", "512", "-s", &spc.to_string(), "-h", "2048", part.to_str().unwrap()],
+            None,
+        );
+        let mut boot = [0u8; 512];
+        File::open(&part).unwrap().read_exact(&mut boot).unwrap();
+        let g = fat32_geometry(le32(&boot, 32), 512, layout.cluster_size).unwrap();
+        assert_eq!(
+            (g.sectors_per_cluster, g.reserved_sectors, g.fat_sectors),
+            (boot[13] as u32, le16(&boot, 14), le32(&boot, 36)),
+            "{gib} GiB"
+        );
+        assert_eq!(g.data_start() % g.sectors_per_cluster, 0, "{gib} GiB");
+    }
+}
+
+#[test]
+fn fat32_structures_are_complete() {
+    let dir = tempfile::tempdir().unwrap();
+    let img = dir.path().join("usb.img");
+    let size = GIB;
+    sparse_file(&img, size);
+    let layout = build_fat32(&mut open_rw(&img), size, 512, "BR_MAIN", 5).unwrap();
+    let bytes = std::fs::read(&img).unwrap();
+    let part = &bytes[layout.partition_start as usize..];
+    let sector = |n: usize| &part[n * 512..(n + 1) * 512];
+    let boot = sector(0);
+    assert_eq!(&boot[0..3], &[0xEB, 0x58, 0x90]);
+    assert_eq!(&boot[82..90], b"FAT32   ");
+    assert_eq!(&boot[71..82], b"BR_MAIN    ");
+    assert_eq!(&boot[510..512], &[0x55, 0xAA]);
+    let g = fat32_geometry(le32(boot, 32), 512, layout.cluster_size).unwrap();
+    assert_eq!((le16(boot, 14), le32(boot, 36)), (g.reserved_sectors, g.fat_sectors));
+    assert!(g.reserved_sectors >= 32 && g.data_start() % g.sectors_per_cluster == 0);
+    // Backups of the boot sector and FSInfo sit in sectors 6 and 7.
+    assert_eq!(sector(6), boot);
+    assert_eq!(sector(7), sector(1));
+    let info = sector(1);
+    assert_eq!((&info[0..4], &info[484..488]), (&b"RRaA"[..], &b"rrAa"[..]));
+    assert_eq!((le32(info, 488), le32(info, 492)), (g.clusters - 1, 3));
+    // Both FATs mark the root directory's cluster as the end of its chain.
+    for copy in 0..2 {
+        let fat = sector((g.reserved_sectors + copy * g.fat_sectors) as usize);
+        assert_eq!((le32(fat, 0), le32(fat, 4), le32(fat, 8)), (0x0FFF_FFF8, 0x0FFF_FFFF, 0x0FFF_FFFF));
+    }
+    let root = sector(g.data_start() as usize);
+    assert_eq!((&root[0..11], root[11]), (&b"BR_MAIN    "[..], 0x08));
+}
+
+#[test]
+fn fat_timestamps() {
+    assert_eq!(dos_date_time(946_684_800), (10273, 0)); // 2000-01-01 00:00:00
+    assert_eq!(dos_date_time(1_790_000_000), (23861, 29098)); // 2026-09-21 14:13:20
 }

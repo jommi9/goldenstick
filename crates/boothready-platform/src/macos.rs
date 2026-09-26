@@ -77,6 +77,51 @@ pub fn parse_disk_list(bytes: &[u8]) -> Result<Vec<DiskListEntry>, plist::Error>
     Ok(out)
 }
 
+/// A volume inside an APFS container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApfsVolume {
+    pub id: String,
+    pub name: Option<String>,
+    pub mount_point: Option<String>,
+    pub uuid: Option<String>,
+}
+
+/// Parse `diskutil list -plist virtual` into the volumes of each APFS
+/// container, keyed by the physical partition that stores it ("disk4s2").
+/// APFS volumes live on a synthesized disk, so this is the only place their
+/// names and mount points show up.
+pub fn parse_apfs_containers(bytes: &[u8]) -> Result<HashMap<String, Vec<ApfsVolume>>, plist::Error> {
+    let root: Value = plist::from_bytes(bytes)?;
+    let mut out: HashMap<String, Vec<ApfsVolume>> = HashMap::new();
+    let Some(all) = root.as_dictionary().and_then(|d| d.get("AllDisksAndPartitions")).and_then(Value::as_array) else {
+        return Ok(out);
+    };
+    for disk in all.iter().filter_map(Value::as_dictionary) {
+        let volumes: Vec<ApfsVolume> = disk
+            .get("APFSVolumes")
+            .and_then(Value::as_array)
+            .map(|vols| {
+                vols.iter()
+                    .filter_map(Value::as_dictionary)
+                    .filter_map(|v| {
+                        Some(ApfsVolume {
+                            id: s(v, "DeviceIdentifier")?,
+                            name: s(v, "VolumeName"),
+                            mount_point: s(v, "MountPoint"),
+                            uuid: s(v, "VolumeUUID"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let stores = disk.get("APFSPhysicalStores").and_then(Value::as_array).into_iter().flatten();
+        for store in stores.filter_map(Value::as_dictionary).filter_map(|d| s(d, "DeviceIdentifier")) {
+            out.entry(store).or_default().extend(volumes.iter().cloned());
+        }
+    }
+    Ok(out)
+}
+
 /// The subset of `diskutil info -plist <disk>` we use.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiskInfo {
@@ -214,6 +259,7 @@ pub fn build_device(
     whole: &DiskInfo,
     parts: &[DiskInfo],
     usb: Option<&UsbDescriptor>,
+    apfs: &HashMap<String, Vec<ApfsVolume>>,
 ) -> PhysicalDevice {
     let bus = match whole.bus_protocol.as_deref() {
         Some("USB") => BusType::Usb,
@@ -231,28 +277,42 @@ pub fn build_device(
         .zip(parts.iter().map(Some).chain(std::iter::repeat(None)))
         .map(|(p, info)| {
             let content = info.and_then(|i| i.content.as_deref()).or(p.content.as_deref());
+            // An APFS partition shows the name and mount point of the
+            // container volume a user would see: the first mounted one.
+            let inner = apfs.get(&p.id).and_then(|vols| vols.iter().find(|v| v.mount_point.is_some()).or(vols.first()));
             Volume {
                 os_path: format!("/dev/{}", p.id),
                 mount_point: info
                     .and_then(|i| i.mount_point.clone())
                     .or_else(|| p.mount_point.clone())
+                    .or_else(|| inner.and_then(|v| v.mount_point.clone()))
                     .map(PathBuf::from),
-                label: info.and_then(|i| i.volume_name.clone()).or_else(|| p.volume_name.clone()),
+                label: info
+                    .and_then(|i| i.volume_name.clone())
+                    .or_else(|| p.volume_name.clone())
+                    .or_else(|| inner.and_then(|v| v.name.clone())),
                 filesystem: info
                     .and_then(|i| fs_kind(i.filesystem_type.as_deref(), i.filesystem_name.as_deref()))
                     .or_else(|| fs_from_content(content)),
                 size_bytes: p.size,
                 offset_bytes: info.and_then(|i| i.partition_offset),
-                uuid: info.and_then(|i| i.volume_uuid.clone()).or_else(|| p.volume_uuid.clone()),
+                uuid: info
+                    .and_then(|i| i.volume_uuid.clone())
+                    .or_else(|| p.volume_uuid.clone())
+                    .or_else(|| inner.and_then(|v| v.uuid.clone())),
                 efi_system: content == Some("EFI"),
             }
         })
         .collect();
+    let system_mount = |m: &str| m == "/" || m.starts_with("/System");
+    // A macOS startup disk mounts "/" from an APFS volume that isn't the one
+    // shown for its partition, so every container volume counts here.
+    let mut container_mounts =
+        entry.partitions.iter().filter_map(|p| apfs.get(&p.id)).flatten().filter_map(|v| v.mount_point.as_deref());
     let is_system = whole.internal == Some(true)
         || whole.system_image == Some(true)
-        || volumes.iter().any(|v| {
-            v.mount_point.as_deref().is_some_and(|m| m == std::path::Path::new("/") || m.starts_with("/System"))
-        });
+        || volumes.iter().filter_map(|v| v.mount_point.as_deref()).any(|m| m.to_str().is_some_and(system_mount))
+        || container_mounts.any(system_mount);
     PhysicalDevice {
         id: entry.id.clone(),
         os_path: format!("/dev/r{}", entry.id),
@@ -281,7 +341,8 @@ mod imp {
 
     pub struct MacPlatform;
 
-    static CACHE: Mutex<Option<(Vec<DiskListEntry>, Vec<PhysicalDevice>)>> = Mutex::new(None);
+    type Listing = (Vec<DiskListEntry>, HashMap<String, Vec<ApfsVolume>>);
+    static CACHE: Mutex<Option<(Listing, Vec<PhysicalDevice>)>> = Mutex::new(None);
 
     fn info(id: &str) -> Result<DiskInfo, PlatformError> {
         let out = std::process::Command::new("/usr/sbin/diskutil").args(["info", "-plist", id]).output()?;
@@ -292,24 +353,30 @@ mod imp {
         fn list_devices(&self) -> Result<Vec<PhysicalDevice>, PlatformError> {
             let out = std::process::Command::new("/usr/sbin/diskutil").args(["list", "-plist", "physical"]).output()?;
             let list = parse_disk_list(&out.stdout).map_err(|e| PlatformError::Failed(e.to_string()))?;
-            // diskutil info is slow; only re-query when the listing changed.
+            // APFS volumes mount on a synthesized disk, so their mount points
+            // only change in the virtual listing.
+            let virt = std::process::Command::new("/usr/sbin/diskutil").args(["list", "-plist", "virtual"]).output()?;
+            let apfs = parse_apfs_containers(&virt.stdout).unwrap_or_default();
+            let listing = (list, apfs);
+            // diskutil info is slow; only re-query when a listing changed.
             let mut cache = CACHE.lock().unwrap();
             if let Some((prev, devs)) = cache.as_ref() {
-                if *prev == list {
+                if *prev == listing {
                     return Ok(devs.clone());
                 }
             }
+            let (list, apfs) = &listing;
             let ioreg = std::process::Command::new("/usr/sbin/ioreg")
                 .args(["-r", "-c", "IOUSBHostDevice", "-l", "-a"])
                 .output()?;
             let usb = parse_ioreg_usb(&ioreg.stdout).unwrap_or_default();
             let mut devs = Vec::new();
-            for entry in &list {
+            for entry in list {
                 let whole = info(&entry.id)?;
                 let parts: Vec<DiskInfo> = entry.partitions.iter().map(|p| info(&p.id).unwrap_or_default()).collect();
-                devs.push(build_device(entry, &whole, &parts, usb.get(&entry.id)));
+                devs.push(build_device(entry, &whole, &parts, usb.get(&entry.id), apfs));
             }
-            *cache = Some((list, devs.clone()));
+            *cache = Some((listing, devs.clone()));
             Ok(devs)
         }
 
@@ -436,7 +503,7 @@ mod tests {
         assert_eq!(usb.len(), 1);
         let whole = parse_disk_info(INFO_DISK4.as_bytes()).unwrap();
         let part = parse_disk_info(INFO_DISK4S1.as_bytes()).unwrap();
-        let dev = build_device(&list[1], &whole, &[part], usb.get("disk4"));
+        let dev = build_device(&list[1], &whole, &[part], usb.get("disk4"), &HashMap::new());
         assert_eq!(dev.id, "disk4");
         assert_eq!(dev.os_path, "/dev/rdisk4");
         assert_eq!(dev.bus, BusType::Usb);
@@ -457,7 +524,7 @@ mod tests {
     fn internal_disk_is_system() {
         let list = parse_disk_list(LIST.as_bytes()).unwrap();
         let whole = DiskInfo { internal: Some(true), bus_protocol: Some("Apple Fabric".into()), ..Default::default() };
-        let dev = build_device(&list[0], &whole, &[], None);
+        let dev = build_device(&list[0], &whole, &[], None, &HashMap::new());
         assert!(dev.is_system);
         assert_eq!(dev.partition_scheme, Some(PartitionScheme::Gpt));
         // diskutil gives an APFS partition no FilesystemType; its GPT type
@@ -467,10 +534,72 @@ mod tests {
         assert_eq!(dev.volumes[1].filesystem, Some(FilesystemKind::Apfs));
     }
 
+    const APFS_STICK_LIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>AllDisksAndPartitions</key><array>
+ <dict>
+  <key>Content</key><string>GUID_partition_scheme</string>
+  <key>DeviceIdentifier</key><string>disk4</string>
+  <key>Partitions</key><array>
+   <dict><key>Content</key><string>EFI</string><key>DeviceIdentifier</key><string>disk4s1</string><key>Size</key><integer>209715200</integer><key>VolumeName</key><string>EFI</string></dict>
+   <dict><key>Content</key><string>Apple_APFS</string><key>DeviceIdentifier</key><string>disk4s2</string><key>Size</key><integer>63812476928</integer></dict>
+  </array>
+  <key>Size</key><integer>64023257088</integer>
+ </dict>
+</array></dict></plist>"#;
+
+    const APFS_VIRTUAL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>AllDisksAndPartitions</key><array>
+ <dict>
+  <key>APFSPhysicalStores</key><array><dict><key>DeviceIdentifier</key><string>disk4s2</string></dict></array>
+  <key>APFSVolumes</key><array>
+   <dict><key>DeviceIdentifier</key><string>disk5s1</string><key>MountPoint</key><string>/Volumes/DJ STICK</string><key>VolumeName</key><string>DJ STICK</string><key>VolumeUUID</key><string>5D2C9E7A-0B61-4F0E-9C3B-7A1E2D4F6A80</string></dict>
+  </array>
+  <key>Content</key><string>EF57347C-0000-11AA-AA11-00306543ECAC</string>
+  <key>DeviceIdentifier</key><string>disk5</string>
+ </dict>
+ <dict>
+  <key>APFSPhysicalStores</key><array><dict><key>DeviceIdentifier</key><string>disk0s2</string></dict></array>
+  <key>APFSVolumes</key><array>
+   <dict><key>DeviceIdentifier</key><string>disk3s1</string><key>VolumeName</key><string>Macintosh HD</string></dict>
+   <dict><key>DeviceIdentifier</key><string>disk3s5</string><key>MountPoint</key><string>/System/Volumes/Data</string><key>VolumeName</key><string>Data</string></dict>
+  </array>
+  <key>DeviceIdentifier</key><string>disk3</string>
+ </dict>
+ <dict><key>Content</key><string>GUID_partition_scheme</string><key>DeviceIdentifier</key><string>disk6</string></dict>
+</array></dict></plist>"#;
+
+    #[test]
+    fn apfs_stick_shows_its_container_volume() {
+        let list = parse_disk_list(APFS_STICK_LIST.as_bytes()).unwrap();
+        let apfs = parse_apfs_containers(APFS_VIRTUAL.as_bytes()).unwrap();
+        assert_eq!(apfs.len(), 2);
+        let whole = DiskInfo { bus_protocol: Some("USB".into()), removable: Some(true), ..Default::default() };
+        let dev = build_device(&list[0], &whole, &[], None, &apfs);
+        assert!(!dev.is_system);
+        let v = dev.primary_volume().unwrap();
+        assert_eq!(v.os_path, "/dev/disk4s2");
+        assert_eq!(v.label.as_deref(), Some("DJ STICK"));
+        assert_eq!(v.mount_point.as_deref(), Some(std::path::Path::new("/Volumes/DJ STICK")));
+        assert_eq!(v.filesystem, Some(FilesystemKind::Apfs));
+        assert!(dev.volumes[0].efi_system);
+    }
+
+    #[test]
+    fn startup_disk_is_system_through_its_apfs_container() {
+        let list = parse_disk_list(LIST.as_bytes()).unwrap();
+        let apfs = parse_apfs_containers(APFS_VIRTUAL.as_bytes()).unwrap();
+        // Even without the Internal flag, a container mounted under /System
+        // marks the disk as the running system.
+        let whole = DiskInfo { bus_protocol: Some("USB".into()), ..Default::default() };
+        let dev = build_device(&list[0], &whole, &[], None, &apfs);
+        assert!(dev.is_system);
+        assert_eq!(dev.volumes[1].label.as_deref(), Some("Data"));
+    }
+
     #[test]
     fn mbr_type_byte_alone_does_not_name_the_filesystem() {
         let list = parse_disk_list(LIST.as_bytes()).unwrap();
-        let dev = build_device(&list[1], &DiskInfo::default(), &[], None);
+        let dev = build_device(&list[1], &DiskInfo::default(), &[], None, &HashMap::new());
         assert_eq!(dev.volumes[0].filesystem, None);
         assert!(!dev.volumes[0].efi_system);
     }
@@ -478,6 +607,7 @@ mod tests {
     #[test]
     fn garbage_is_an_error_not_a_panic() {
         assert!(parse_disk_list(b"not a plist").is_err());
+        assert!(parse_apfs_containers(b"not a plist").is_err());
         let _ = parse_ioreg_usb(b"<plist><array><dict><key>x</key></dict></array></plist>");
     }
 }
