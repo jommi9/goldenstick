@@ -42,9 +42,9 @@ pub fn devices(devs: &[PhysicalDevice], catalog: &UsbCatalog) {
     for d in devs {
         let id = identify(d, catalog);
         let e = eligibility(d);
-        let vol = d.volumes.first();
+        let vol = d.primary_volume();
         println!(
-            "{:<16} {:<34} {:>9}  {:<5} {:<6} {}",
+            "{:<16} {:<34} {:>9}  {:<5} {:<8} {}",
             d.id,
             id.display_name,
             gb(d.size_bytes),

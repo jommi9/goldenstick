@@ -131,6 +131,7 @@ impl LinuxPlatform {
                 size_bytes: size,
                 offset_bytes: offset,
                 uuid: props.get("ID_FS_UUID").cloned(),
+                efi_system: props.get("ID_PART_ENTRY_TYPE").is_some_and(|t| is_efi_part_type(t)),
             }
         };
         for (pname, pdir) in &parts {
@@ -160,6 +161,11 @@ impl LinuxPlatform {
             volumes,
         })
     }
+}
+
+/// udev reports the GPT type GUID, or the MBR type byte as "0xef".
+fn is_efi_part_type(t: &str) -> bool {
+    t.eq_ignore_ascii_case("c12a7328-f81f-11d2-ba4b-00a0c93ec93b") || t.eq_ignore_ascii_case("0xef")
 }
 
 fn read_trim(p: &Path) -> Option<String> {
@@ -344,6 +350,10 @@ mod tests {
         write(&vda.join("vda1/start"), "2048\n");
         write(&vda.join("vda1/size"), "209713152\n");
         write(&vda.join("vda1/dev"), "252:1\n");
+        write(&vda.join("vda15/partition"), "15\n");
+        write(&vda.join("vda15/start"), "10240\n");
+        write(&vda.join("vda15/size"), "217088\n");
+        write(&vda.join("vda15/dev"), "252:15\n");
         fs::create_dir_all(sys.join("block/loop0")).unwrap();
 
         write(
@@ -354,7 +364,11 @@ mod tests {
         write(&root.join("udev/b8:16"), "E:ID_PART_TABLE_TYPE=dos\n");
         write(
             &root.join("udev/b8:17"),
-            "E:ID_FS_TYPE=vfat\nE:ID_FS_VERSION=FAT32\nE:ID_FS_LABEL=JOMMI_DJ\nE:ID_FS_UUID=1234-ABCD\n",
+            "E:ID_FS_TYPE=vfat\nE:ID_FS_VERSION=FAT32\nE:ID_FS_LABEL=JOMMI_DJ\nE:ID_FS_UUID=1234-ABCD\nE:ID_PART_ENTRY_TYPE=0xc\n",
+        );
+        write(
+            &root.join("udev/b252:15"),
+            "E:ID_FS_TYPE=vfat\nE:ID_FS_VERSION=FAT32\nE:ID_PART_ENTRY_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b\n",
         );
         LinuxPlatform::with_roots(sys, root.join("mountinfo"), root.join("udev"), "/dev")
     }
@@ -382,10 +396,13 @@ mod tests {
         assert_eq!(v.filesystem, Some(FilesystemKind::Fat32));
         assert_eq!(v.label.as_deref(), Some("JOMMI_DJ"));
         assert_eq!(v.offset_bytes, Some(1 << 20));
+        assert!(!v.efi_system);
 
         let vda = &devs[1];
         assert!(vda.is_system);
         assert_eq!(vda.bus, BusType::Virtual);
+        let efi: Vec<bool> = vda.volumes.iter().map(|v| v.efi_system).collect();
+        assert_eq!(efi, vec![false, true]);
     }
 
     #[test]

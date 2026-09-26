@@ -373,7 +373,7 @@ fn prepare(cli: &Cli, device: &str, fs: &str, label: &str, yes: bool) -> Result<
     eprintln!("You are about to erase:\n");
     eprintln!("  {}", id.display_name);
     eprintln!("  {:.1} GB", dev.size_bytes as f64 / 1e9);
-    if let Some(l) = dev.volumes.first().and_then(|v| v.label.as_ref()) {
+    if let Some(l) = dev.primary_volume().and_then(|v| v.label.as_ref()) {
         eprintln!("  Volume: {l}");
     }
     if let Some(tail) = fp.serial_tail() {

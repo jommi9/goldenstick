@@ -12,6 +12,7 @@ pub mod macos;
 pub mod raw;
 #[cfg(windows)]
 pub mod windows;
+mod windows_layout;
 
 use boothready_model::{DeviceEvent, PhysicalDevice};
 use std::collections::HashMap;
@@ -188,5 +189,19 @@ mod tests {
         let ev = events.lock().unwrap();
         assert!(matches!(ev.first(), Some(DeviceEvent::Appeared { .. })), "{ev:?}");
         assert!(matches!(ev.last(), Some(DeviceEvent::Disappeared { .. })), "{ev:?}");
+    }
+
+    /// Runs the real backend against the machine's own disks. Every Windows
+    /// and macOS machine has a system disk, so this catches what the parser
+    /// tests can't, like an IOCTL that needs more access than enumeration
+    /// asks for, or a filesystem diskutil doesn't name.
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn native_backend_describes_the_system_disk() {
+        let devices = native().list_devices().unwrap();
+        let sys = devices.iter().find(|d| d.is_system).unwrap_or_else(|| panic!("no system disk in {devices:#?}"));
+        assert!(sys.size_bytes > 0, "{sys:#?}");
+        assert!(sys.partition_scheme.is_some(), "{sys:#?}");
+        assert!(sys.volumes.iter().any(|v| v.filesystem.is_some()), "{sys:#?}");
     }
 }

@@ -323,15 +323,27 @@ impl Backend for DemoBackend {
         }
         fs::create_dir_all(&vol).map_err(|e| e.to_string())?;
         let mut updated = dev.clone();
-        let fs_info = layout.primary().and_then(|p| p.filesystem.clone());
+        let primary = layout.primary();
+        let fs_info = primary.and_then(|p| p.filesystem.clone());
         updated.partition_scheme = Some(layout.scheme);
-        if let Some(v) = updated.volumes.first_mut() {
-            v.filesystem = fs_info.as_ref().map(|f| f.kind);
-            v.label = fs_info.as_ref().and_then(|f| f.label.clone());
-            v.uuid = fs_info.as_ref().and_then(|f| f.serial.clone());
-            v.mount_point = None;
-        }
-        updated.volumes.truncate(1);
+        // The new layout has one data partition and no EFI system partition.
+        updated.volumes = updated
+            .primary_volume()
+            .cloned()
+            .map(|mut v| {
+                v.filesystem = fs_info.as_ref().map(|f| f.kind);
+                v.label = fs_info.as_ref().and_then(|f| f.label.clone());
+                v.uuid = fs_info.as_ref().and_then(|f| f.serial.clone());
+                v.mount_point = None;
+                v.efi_system = false;
+                if let Some(p) = primary {
+                    v.offset_bytes = Some(p.entry.start_bytes);
+                    v.size_bytes = p.entry.size_bytes;
+                }
+                v
+            })
+            .into_iter()
+            .collect();
         fs::write(dir.join("device.json"), serde_json::to_vec_pretty(&updated).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         let _ = fs::remove_file(dir.join(".unmounted"));

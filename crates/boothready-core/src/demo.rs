@@ -298,7 +298,7 @@ pub fn create_stick(root: &Path, s: &DemoStick) -> io::Result<PathBuf> {
     let dir = root.join(s.name);
     fs::create_dir_all(dir.join("volume"))?;
     let h = fnv(s.name);
-    let dev = PhysicalDevice {
+    let mut dev = PhysicalDevice {
         id: format!("demo:{}", s.name),
         os_path: dir.join("disk.img").to_string_lossy().into_owned(),
         bus: BusType::Usb,
@@ -321,17 +321,34 @@ pub fn create_stick(root: &Path, s: &DemoStick) -> io::Result<PathBuf> {
             max_power_ma: Some(224),
         }),
         partition_scheme: Some(s.scheme),
-        volumes: vec![Volume {
+        volumes: Vec::new(),
+    };
+    // A GPT drive formatted on a Mac has a 200 MB EFI system partition in
+    // front of the data partition, and the OS lists it as a FAT32 volume.
+    let gpt = s.scheme == PartitionScheme::Gpt;
+    if gpt {
+        dev.volumes.push(Volume {
             os_path: format!("demo:{}:1", s.name),
             mount_point: None,
-            label: Some(s.label.into()),
-            filesystem: Some(s.fs),
-            size_bytes: s.size.saturating_sub(1 << 20),
-            // macOS-style GPT puts a 200 MB EFI partition first.
-            offset_bytes: Some(if s.scheme == PartitionScheme::Gpt { 209_735_680 } else { 1 << 20 }),
-            uuid: Some(format!("{:04X}-{:04X}", h >> 16, h & 0xFFFF)),
-        }],
-    };
+            label: Some("EFI".into()),
+            filesystem: Some(FilesystemKind::Fat32),
+            size_bytes: 209_715_200,
+            offset_bytes: Some(20_480),
+            uuid: None,
+            efi_system: true,
+        });
+    }
+    let offset: u64 = if gpt { 209_735_680 } else { 1 << 20 };
+    dev.volumes.push(Volume {
+        os_path: format!("demo:{}:{}", s.name, dev.volumes.len() + 1),
+        mount_point: None,
+        label: Some(s.label.into()),
+        filesystem: Some(s.fs),
+        size_bytes: s.size.saturating_sub(offset),
+        offset_bytes: Some(offset),
+        uuid: Some(format!("{:04X}-{:04X}", h >> 16, h & 0xFFFF)),
+        efi_system: false,
+    });
     fs::write(dir.join("device.json"), serde_json::to_vec_pretty(&dev).map_err(io::Error::other)?)?;
     populate(&dir.join("volume"), s.content)?;
     Ok(dir)
@@ -363,5 +380,21 @@ mod tests {
         let libs = scan_libraries(e.path());
         assert!(libs.has(LibraryFormat::RekordboxOneLibrary) && libs.has(LibraryFormat::RekordboxDeviceLibrary));
         assert!(libs.problems().is_empty(), "{:?}", libs.problems());
+    }
+
+    /// Without a raw read, the layout comes from the volumes the OS lists,
+    /// and on a Mac GPT drive the first of those is the FAT32 EFI partition.
+    /// Taking it as the data partition would judge an exFAT stick as FAT32.
+    #[test]
+    fn os_layout_skips_the_efi_partition() {
+        let d = tempfile::tempdir().unwrap();
+        let s = STICKS.iter().find(|s| s.scheme == PartitionScheme::Gpt).unwrap();
+        let dir = create_stick(d.path(), s).unwrap();
+        let dev: PhysicalDevice = serde_json::from_slice(&fs::read(dir.join("device.json")).unwrap()).unwrap();
+        assert_eq!(dev.volumes[0].filesystem, Some(FilesystemKind::Fat32));
+        let layout = crate::drive::layout_from_os(&dev);
+        assert_eq!(layout.primary_filesystem(), Some(s.fs));
+        assert!(!layout.primary_is_first());
+        assert_eq!(dev.primary_volume().and_then(|v| v.label.as_deref()), Some(s.label));
     }
 }

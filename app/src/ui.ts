@@ -1,5 +1,7 @@
 // Tiny rendering helpers: escaped templates and formatting.
 
+import type { PhysicalDevice, Volume } from "./types";
+
 export class Raw {
   constructor(public readonly s: string) {}
   toString() {
@@ -60,6 +62,11 @@ export function when(unix: number | null | undefined): string {
 
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${num(n)} ${n === 1 ? one : many}`;
+}
+
+/** The volume a DJ player would mount, skipping the EFI partition macOS puts first on GPT drives. */
+export function primaryVolume(d: PhysicalDevice): Volume | undefined {
+  return d.volumes.find((v) => !v.efi_system) ?? d.volumes[0];
 }
 
 export const LIB_LABEL: Record<string, string> = {

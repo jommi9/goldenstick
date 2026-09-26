@@ -137,6 +137,11 @@ pub struct Volume {
     /// Byte offset of the volume on the physical device, if known.
     pub offset_bytes: Option<u64>,
     pub uuid: Option<String>,
+    /// The partition type says this is an EFI system partition. macOS puts
+    /// one in front of the data partition on every GPT drive it formats,
+    /// and it has to be skipped when deciding what a player will mount.
+    #[serde(default)]
+    pub efi_system: bool,
 }
 
 /// A whole physical storage device such as a USB stick.
@@ -182,10 +187,17 @@ impl PhysicalDevice {
         self.usb.as_ref().and_then(|u| u.serial.as_deref())
     }
 
-    /// First mounted volume, which is where DJ libraries live on single
-    /// partition USB sticks.
+    /// The volume a DJ player would mount: the first one that isn't an EFI
+    /// system partition.
+    pub fn primary_volume(&self) -> Option<&Volume> {
+        self.volumes.iter().find(|v| !v.efi_system).or_else(|| self.volumes.first())
+    }
+
+    /// First mounted data volume, which is where DJ libraries live. EFI
+    /// system partitions never hold them, so they're skipped even when an
+    /// OS happens to mount one.
     pub fn primary_mount(&self) -> Option<&Volume> {
-        self.volumes.iter().find(|v| v.mount_point.is_some())
+        self.volumes.iter().find(|v| !v.efi_system && v.mount_point.is_some())
     }
 }
 

@@ -130,7 +130,7 @@ impl DriveSummary {
             filesystem: primary_fs.map(|f| f.kind.label().to_string()),
             fs_label: primary_fs
                 .and_then(|f| f.label.clone())
-                .or_else(|| r.device.volumes.first().and_then(|v| v.label.clone())),
+                .or_else(|| r.device.primary_volume().and_then(|v| v.label.clone())),
             dirty: primary_fs.and_then(|f| f.dirty),
             layout_source: r.layout_source,
             layout_warnings: r.layout.warnings.clone(),
@@ -203,7 +203,7 @@ impl ConfirmationDetails {
             image: r.identification.image.clone(),
             color: r.identification.color.clone(),
             size_bytes: r.device.size_bytes,
-            volume_label: r.device.volumes.first().and_then(|v| v.label.clone()),
+            volume_label: r.device.primary_volume().and_then(|v| v.label.clone()),
             serial_tail: fp.serial_tail(),
             files: r.content.files,
             used_bytes: r.content.used_bytes,

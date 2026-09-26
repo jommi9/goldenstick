@@ -8,8 +8,9 @@
 //! on CI runners (enumeration only). Needs hardware testing with real USB
 //! drives before release.
 
+use crate::windows_layout::{self, DriveLayout};
 use crate::{Platform, PlatformError};
-use boothready_model::{BusType, FilesystemKind, PartitionScheme, PhysicalDevice, UsbDescriptor, Volume};
+use boothready_model::{BusType, FilesystemKind, PhysicalDevice, UsbDescriptor, Volume};
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::path::PathBuf;
@@ -20,17 +21,20 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, PNP_VETO_TYPE, SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W,
     SP_DEVINFO_DATA,
 };
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, GENERIC_READ, GENERIC_WRITE, HANDLE,
+};
 use windows::Win32::Storage::FileSystem::{
     BusTypeUsb, CreateFileW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetVolumeInformationW,
     GetVolumePathNamesForVolumeNameW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
     IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
 };
 use windows::Win32::System::Ioctl::{
-    PropertyStandardQuery, StorageDeviceProperty, DISK_GEOMETRY_EX, FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME,
-    GET_LENGTH_INFORMATION, GUID_DEVINTERFACE_DISK, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
-    IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY,
-    STORAGE_DEVICE_DESCRIPTOR, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY,
+    PropertyStandardQuery, StorageDeviceProperty, DISK_GEOMETRY, DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX,
+    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, GET_LENGTH_INFORMATION, GUID_DEVINTERFACE_DISK,
+    IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, IOCTL_DISK_GET_LENGTH_INFO,
+    IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY, PARTITION_INFORMATION_EX, STORAGE_DEVICE_DESCRIPTOR,
+    STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_QUERY,
 };
 use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 use windows::Win32::System::IO::DeviceIoControl;
@@ -99,7 +103,14 @@ fn ioctl(h: &Handle, code: u32, input: Option<&[u8]>, initial: usize) -> Option<
                 out.truncate(returned as usize);
                 return Some(out);
             }
-            Err(_) => size *= 4,
+            // Only a short buffer is worth another try. Anything else, such
+            // as access denied or a refused volume lock, fails again.
+            Err(e)
+                if e.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() || e.code() == ERROR_MORE_DATA.to_hresult() =>
+            {
+                size = (size * 4).max(256)
+            }
+            Err(_) => return None,
         }
     }
     None
@@ -352,14 +363,31 @@ pub fn parse_usb_instance_id(id: &str) -> Option<UsbDescriptor> {
     Some(UsbDescriptor { vendor_id: hex("VID_"), product_id: hex("PID_"), serial, ..Default::default() })
 }
 
-fn partition_style(h: &Handle) -> Option<PartitionScheme> {
-    let buf = ioctl(h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, None, 4096)?;
-    let style = u32::from_le_bytes(buf.get(0..4)?.try_into().ok()?);
-    Some(match style {
-        0 => PartitionScheme::Mbr,
-        1 => PartitionScheme::Gpt,
-        _ => PartitionScheme::Unknown,
-    })
+// The layout parser reads these structs as bytes; hold it to the real layout.
+const _: () = {
+    use crate::windows_layout::{ENTRY_SIZE, ENTRY_START, ENTRY_TYPE, LAYOUT_ENTRIES};
+    use std::mem::{offset_of, size_of};
+    assert!(offset_of!(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry) == LAYOUT_ENTRIES);
+    assert!(size_of::<PARTITION_INFORMATION_EX>() == ENTRY_SIZE);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, StartingOffset) == ENTRY_START);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, Anonymous) == ENTRY_TYPE);
+};
+
+/// Logical sector size and capacity. `DISK_GEOMETRY_EX` ends in a
+/// variable-length member, so a driver may return fewer bytes than the
+/// struct's size; the fixed fields are read by offset instead.
+fn geometry(h: &Handle) -> Option<(u32, u64)> {
+    const SECTOR: usize =
+        std::mem::offset_of!(DISK_GEOMETRY_EX, Geometry) + std::mem::offset_of!(DISK_GEOMETRY, BytesPerSector);
+    const SIZE: usize = std::mem::offset_of!(DISK_GEOMETRY_EX, DiskSize);
+    let b = ioctl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, None, 256)?;
+    let sector = u32::from_le_bytes(b.get(SECTOR..SECTOR + 4)?.try_into().ok()?);
+    let size = i64::from_le_bytes(b.get(SIZE..SIZE + 8)?.try_into().ok()?);
+    Some((sector, size.max(0) as u64))
+}
+
+fn drive_layout(h: &Handle) -> Option<DriveLayout> {
+    windows_layout::parse(&ioctl(h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, None, 4096)?)
 }
 
 impl WindowsPlatform {
@@ -372,14 +400,21 @@ impl WindowsPlatform {
             let path = format!("\\\\.\\PhysicalDrive{n}");
             let Some(h) = open(&path, 0) else { continue };
             let Some(d) = descriptor(&h) else { continue };
-            let size = ioctl(&h, IOCTL_DISK_GET_LENGTH_INFO, None, 64)
-                .and_then(|b| read_struct::<GET_LENGTH_INFORMATION>(&b))
-                .map(|l| l.Length as u64)
+            let geo = geometry(&h);
+            let sector = geo.map(|g| g.0).filter(|&s| s > 0).unwrap_or(512);
+            // The handle is opened without read access so listing drives
+            // doesn't need admin. The geometry IOCTL works on such a handle;
+            // IOCTL_DISK_GET_LENGTH_INFO needs read access.
+            let size = geo
+                .map(|g| g.1)
+                .filter(|&s| s > 0)
+                .or_else(|| {
+                    ioctl(&h, IOCTL_DISK_GET_LENGTH_INFO, None, 64)
+                        .and_then(|b| read_struct::<GET_LENGTH_INFORMATION>(&b))
+                        .map(|l| l.Length as u64)
+                })
                 .unwrap_or(0);
-            let sector = ioctl(&h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, None, 256)
-                .and_then(|b| read_struct::<DISK_GEOMETRY_EX>(&b))
-                .map(|g| g.Geometry.BytesPerSector)
-                .unwrap_or(512);
+            let layout = drive_layout(&h);
             let volumes: Vec<Volume> = vols
                 .iter()
                 .filter(|v| v.disk == n)
@@ -393,6 +428,7 @@ impl WindowsPlatform {
                         size_bytes: v.length,
                         offset_bytes: Some(v.offset),
                         uuid: det.serial.map(|s| format!("{:04X}-{:04X}", s >> 16, s & 0xFFFF)),
+                        efi_system: layout.as_ref().is_some_and(|l| l.efi_starts.contains(&v.offset)),
                     }
                 })
                 .collect();
@@ -417,7 +453,7 @@ impl WindowsPlatform {
                 storage_model: d.product,
                 storage_revision: d.revision,
                 usb: usb_desc,
-                partition_scheme: partition_style(&h),
+                partition_scheme: layout.as_ref().map(|l| l.scheme),
                 volumes,
             };
             out.push((dev, usb_id.map(|u| u.devinst)));

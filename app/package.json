@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "mock-data": "node scripts/gen-mock.mjs",
+    "mock-data": "cargo run -q -p boothready-app --example mock_snapshot",
     "screenshots": "node scripts/screenshots.mjs",
     "typecheck": "tsc --noEmit"
   },

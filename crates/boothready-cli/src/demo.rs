@@ -99,6 +99,7 @@ pub fn synthetic_device(dir: &Path, scheme: Option<&str>, fs: Option<&str>) -> R
             size_bytes: 0,
             offset_bytes: Some(1 << 20),
             uuid: None,
+            efi_system: false,
         }],
     })
 }

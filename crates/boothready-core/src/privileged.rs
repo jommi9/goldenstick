@@ -203,6 +203,7 @@ mod tests {
                 size_bytes: 63_000_000_000,
                 offset_bytes: Some(1 << 20),
                 uuid: Some("1234-ABCD".into()),
+                efi_system: false,
             }],
         }
     }

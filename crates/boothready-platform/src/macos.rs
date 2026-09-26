@@ -196,6 +196,18 @@ fn fs_kind(fs_type: Option<&str>, fs_name: Option<&str>) -> Option<FilesystemKin
     }
 }
 
+/// Apple's GPT partition types name the filesystem. That matters for APFS,
+/// whose partition carries no `FilesystemType` because its volumes live on a
+/// synthesized container disk. MBR types like `DOS_FAT_32` are only a type
+/// byte that can disagree with the partition's contents, so they're ignored.
+fn fs_from_content(content: Option<&str>) -> Option<FilesystemKind> {
+    match content? {
+        "Apple_APFS" | "Apple_APFS_ISC" | "Apple_APFS_Recovery" => Some(FilesystemKind::Apfs),
+        "Apple_HFS" | "Apple_HFSX" => Some(FilesystemKind::HfsPlus),
+        _ => None,
+    }
+}
+
 /// Assemble a `PhysicalDevice` from parsed diskutil/ioreg data.
 pub fn build_device(
     entry: &DiskListEntry,
@@ -217,14 +229,23 @@ pub fn build_device(
         .partitions
         .iter()
         .zip(parts.iter().map(Some).chain(std::iter::repeat(None)))
-        .map(|(p, info)| Volume {
-            os_path: format!("/dev/{}", p.id),
-            mount_point: info.and_then(|i| i.mount_point.clone()).or_else(|| p.mount_point.clone()).map(PathBuf::from),
-            label: info.and_then(|i| i.volume_name.clone()).or_else(|| p.volume_name.clone()),
-            filesystem: info.and_then(|i| fs_kind(i.filesystem_type.as_deref(), i.filesystem_name.as_deref())),
-            size_bytes: p.size,
-            offset_bytes: info.and_then(|i| i.partition_offset),
-            uuid: info.and_then(|i| i.volume_uuid.clone()).or_else(|| p.volume_uuid.clone()),
+        .map(|(p, info)| {
+            let content = info.and_then(|i| i.content.as_deref()).or(p.content.as_deref());
+            Volume {
+                os_path: format!("/dev/{}", p.id),
+                mount_point: info
+                    .and_then(|i| i.mount_point.clone())
+                    .or_else(|| p.mount_point.clone())
+                    .map(PathBuf::from),
+                label: info.and_then(|i| i.volume_name.clone()).or_else(|| p.volume_name.clone()),
+                filesystem: info
+                    .and_then(|i| fs_kind(i.filesystem_type.as_deref(), i.filesystem_name.as_deref()))
+                    .or_else(|| fs_from_content(content)),
+                size_bytes: p.size,
+                offset_bytes: info.and_then(|i| i.partition_offset),
+                uuid: info.and_then(|i| i.volume_uuid.clone()).or_else(|| p.volume_uuid.clone()),
+                efi_system: content == Some("EFI"),
+            }
         })
         .collect();
     let is_system = whole.internal == Some(true)
@@ -439,6 +460,19 @@ mod tests {
         let dev = build_device(&list[0], &whole, &[], None);
         assert!(dev.is_system);
         assert_eq!(dev.partition_scheme, Some(PartitionScheme::Gpt));
+        // diskutil gives an APFS partition no FilesystemType; its GPT type
+        // still says what it is.
+        assert!(dev.volumes[0].efi_system);
+        assert!(!dev.volumes[1].efi_system);
+        assert_eq!(dev.volumes[1].filesystem, Some(FilesystemKind::Apfs));
+    }
+
+    #[test]
+    fn mbr_type_byte_alone_does_not_name_the_filesystem() {
+        let list = parse_disk_list(LIST.as_bytes()).unwrap();
+        let dev = build_device(&list[1], &DiskInfo::default(), &[], None);
+        assert_eq!(dev.volumes[0].filesystem, None);
+        assert!(!dev.volumes[0].efi_system);
     }
 
     #[test]

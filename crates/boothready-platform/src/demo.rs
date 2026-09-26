@@ -77,6 +77,7 @@ impl DemoPlatform {
                 size_bytes: size.saturating_sub(1 << 20),
                 offset_bytes: Some(1 << 20),
                 uuid: Some(format!("{:04X}-{:04X}", fxhash(name) >> 16 & 0xFFFF, fxhash(name) & 0xFFFF)),
+                efi_system: false,
             }],
         };
         fs::write(dir.join("device.json"), serde_json::to_vec_pretty(&dev)?)?;
@@ -90,8 +91,9 @@ impl DemoPlatform {
         dev.id = format!("demo:{name}");
         dev.os_path = dir.join("disk.img").to_string_lossy().into_owned();
         let mounted = !dir.join(".unmounted").exists();
+        // Like macOS, leave the EFI system partition unmounted.
         for v in &mut dev.volumes {
-            v.mount_point = mounted.then(|| dir.join("volume"));
+            v.mount_point = (mounted && !v.efi_system).then(|| dir.join("volume"));
         }
         Some(dev)
     }

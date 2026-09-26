@@ -29,7 +29,7 @@ The core has no OS dependencies. Everything that touches a real device goes thro
 
 1. The platform layer reports physical devices with USB identity (VID, PID, serial, bMaxPower) and volumes, keyed by physical device rather than drive letter or mount point.
 2. `identify` maps descriptors to a catalog entry and reports Exact, Strong, Probable or Unknown. The picture shows a product family and is never used as proof of the controller inside.
-3. The partition layout comes from a raw read when the process may read the device. Otherwise it comes from what the OS reports, which lacks the dirty bit and the MBR type byte, and the UI says which source it used.
+3. The partition layout comes from a raw read when the process may read the device. Otherwise it comes from what the OS reports, which lacks the dirty bit and the MBR type byte, and the UI says which source it used. Every backend marks EFI system partitions from their partition type, because macOS puts a FAT32 one in front of the data partition on every GPT drive and a layout built from the OS's volume list would otherwise judge an exFAT stick as FAT32.
 4. `library::scan_libraries` finds rekordbox, Engine DJ and Serato data, resolving paths case-insensitively the way FAT and exFAT players do. It never writes to the drive, and Engine databases are opened with SQLite's `immutable=1`.
 5. `scan::scan_audio` probes every audio file and streams progress. The parsers bound every length against the real file size and are mutation-fuzzed.
 6. `rules::assess_drive` turns all of that into one result per device and layer.
@@ -86,7 +86,8 @@ The Tauri commands in `app/src-tauri/src/lib.rs` are thin wrappers that run engi
 ## What still needs verifying
 
 - **Rules.** `ruleset.json` is seed data. Every `vendor` claim needs checking against current manuals and firmware notes, and the OneLibrary file name (`PIONEER/rekordbox/exportLibrary.db`) needs confirming against a rekordbox 7.2.x export. No claim is lab verified.
-- **Hardware.** The macOS and Windows backends compile, pass clippy and parse sample `diskutil` and `ioreg` output in tests, but haven't enumerated, erased or ejected a real USB stick. That needs doing with a set of sticks before any public build.
+- **Hardware.** The macOS and Windows backends parse sample `diskutil`, `ioreg` and IOCTL output in tests, and CI runs them against each runner's own disks, but they haven't enumerated, erased or ejected a real USB stick. That needs doing with a set of sticks before any public build.
+- **APFS sticks on macOS.** An APFS partition is recognised from its partition type, but its volumes live on a synthesized container disk that the backend doesn't read yet, so the app can't show an APFS stick's volume name or files on the erase confirmation.
 - **FAT32 output on players.** `fatfs` uses 8 reserved sectors and doesn't align the data region to clusters the way Windows does. The result is valid and fsck-clean, but it has to be tried on CDJs from each generation.
 - **Engine DJ paths.** Track paths in `m.db` are resolved against the database folder, the `Engine Library` folder and the volume root, because the exact base isn't documented. It should be checked against a real Engine DJ 4.x export.
 - **Product images.** The app draws illustrations. Licensed photography (PRD §96) is still open.

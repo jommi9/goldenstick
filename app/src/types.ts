@@ -32,6 +32,7 @@ export interface Volume {
   size_bytes: number;
   offset_bytes: number | null;
   uuid: string | null;
+  efi_system: boolean;
 }
 
 export interface PhysicalDevice {

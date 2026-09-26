@@ -63,7 +63,7 @@ pub fn layout_from_os(dev: &PhysicalDevice) -> MediaLayout {
                 index: i as u32 + 1,
                 start_bytes: v.offset_bytes.unwrap_or(0),
                 size_bytes: v.size_bytes,
-                kind: PartitionKind::Other,
+                kind: if v.efi_system { PartitionKind::EfiSystem } else { PartitionKind::Other },
                 mbr_type: None,
                 gpt_type: None,
                 gpt_name: None,

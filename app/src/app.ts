@@ -27,7 +27,20 @@ import type {
   VerifyProgress,
   VerifyReport,
 } from "./types";
-import { EVIDENCE_LABEL, FS_LABEL, gb, html, LIB_LABEL, num, plural, raw, Raw, ROLE_LABEL, when } from "./ui";
+import {
+  EVIDENCE_LABEL,
+  FS_LABEL,
+  gb,
+  html,
+  LIB_LABEL,
+  num,
+  plural,
+  primaryVolume,
+  raw,
+  Raw,
+  ROLE_LABEL,
+  when,
+} from "./ui";
 
 type View =
   | { v: "home" }
@@ -607,7 +620,7 @@ function homeView(): Raw {
 }
 
 function deviceRow(d: DeviceCard): Raw {
-  const v = d.device.volumes[0];
+  const v = primaryVolume(d.device);
   return html`<button class="devrow" data-act="open-device" data-id="${d.device.id}">
     ${raw(usbArt(d.identification.image, d.identification.color, 48, d.identification.display_name))}
     <div class="grow"><b>${d.identification.display_name}</b><div class="small muted">${gb(d.device.size_bytes)}${v?.label ? ` · ${v.label}` : ""}${v?.filesystem ? ` · ${FS_LABEL[v.filesystem]}` : ""}</div></div>
@@ -649,7 +662,7 @@ function identifyView(id: string): Raw {
   const idn = s?.identification ?? c?.identification;
   const scanning = S.scanning.get(id);
   const err = S.scanErrors.get(id);
-  const vol = c?.device.volumes[0];
+  const vol = c ? primaryVolume(c.device) : undefined;
   const waiting = S.advanceWhenScanned.has(id);
   return html`<div class="grid-2">
     <section class="card">
