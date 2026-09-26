@@ -1,9 +1,8 @@
 //! Simulated USB drives for demos and UI work.
 
 use anyhow::{bail, Context, Result};
-use boothready_core::demo::{populate, DemoContent};
+use boothready_core::demo::{create_stick, STICKS};
 use boothready_model::{BusType, FilesystemKind, PartitionScheme, PhysicalDevice, Volume};
-use boothready_platform::demo::DemoPlatform;
 use clap::Subcommand;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,77 +19,6 @@ pub enum DemoCmd {
     List,
 }
 
-pub struct DemoStick {
-    pub name: &'static str,
-    pub maker: &'static str,
-    pub product: &'static str,
-    pub vid: u16,
-    pub pid: u16,
-    pub size: u64,
-    pub scheme: PartitionScheme,
-    pub fs: FilesystemKind,
-    pub label: &'static str,
-    pub content: DemoContent,
-}
-
-pub const STICKS: &[DemoStick] = &[
-    DemoStick {
-        name: "sandisk-128",
-        maker: "SanDisk",
-        product: "Ultra",
-        vid: 0x0781,
-        pid: 0x5581,
-        size: 123_060_000_000,
-        scheme: PartitionScheme::Gpt,
-        fs: FilesystemKind::Exfat,
-        label: "FESTIVAL26",
-        content: DemoContent::DeviceLibraryWithIssues,
-    },
-    DemoStick {
-        name: "kingston-32",
-        maker: "Kingston",
-        product: "DataTraveler 3.0",
-        vid: 0x0951,
-        pid: 0x1666,
-        size: 30_752_000_000,
-        scheme: PartitionScheme::Gpt,
-        fs: FilesystemKind::Exfat,
-        label: "UNTITLED",
-        content: DemoContent::Empty,
-    },
-    DemoStick {
-        name: "samsung-64",
-        maker: "Samsung",
-        product: "Flash Drive BAR Plus",
-        vid: 0x090c,
-        pid: 0x1000,
-        size: 64_023_000_000,
-        scheme: PartitionScheme::Mbr,
-        fs: FilesystemKind::Fat32,
-        label: "BR_BACKUP",
-        content: DemoContent::BothLibraries,
-    },
-];
-
-/// Create one simulated stick under `root`.
-pub fn create(root: &Path, s: &DemoStick) -> Result<PathBuf> {
-    let dir = DemoPlatform::create_stick(root, s.name, s.maker, s.product, s.vid, s.pid, s.size)?;
-    let path = dir.join("device.json");
-    let mut dev: PhysicalDevice = serde_json::from_str(&fs::read_to_string(&path)?)?;
-    dev.partition_scheme = Some(s.scheme);
-    if let Some(v) = dev.volumes.first_mut() {
-        v.filesystem = Some(s.fs);
-        v.label = Some(s.label.to_string());
-        if s.scheme == PartitionScheme::Gpt {
-            // macOS-style GPT: 200 MB EFI partition first.
-            v.offset_bytes = Some(209_735_680);
-        }
-    }
-    fs::write(&path, serde_json::to_vec_pretty(&dev)?)?;
-    populate(&dir.join("volume"), s.content)?;
-    Ok(dir)
-}
-
 pub fn run(cmd: &DemoCmd, demo: &Option<PathBuf>) -> Result<()> {
     let Some(root) = demo else { bail!("demo commands need --demo <DIR>") };
     let available = root.join("available");
@@ -101,7 +29,7 @@ pub fn run(cmd: &DemoCmd, demo: &Option<PathBuf>) -> Result<()> {
             fs::create_dir_all(&usb)?;
             for s in STICKS {
                 if !available.join(s.name).exists() && !usb.join(s.name).exists() {
-                    create(&available, s)?;
+                    create_stick(&available, s)?;
                 }
             }
             println!("Created simulated drives in {}:", available.display());

@@ -5,9 +5,10 @@
 use crate::audio::fixtures as audio;
 use crate::library::pdb_fixture::{build_pdb, FixturePlaylist, FixtureTrack};
 use crate::library::{DEVICE_LIBRARY_FILE, ONE_LIBRARY_FILE};
+use boothready_model::{BusType, FilesystemKind, PartitionScheme, PhysicalDevice, UsbDescriptor, Volume};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DemoContent {
@@ -16,6 +17,9 @@ pub enum DemoContent {
     DeviceLibraryWithIssues,
     /// Device Library and OneLibrary, all tracks legacy-safe.
     BothLibraries,
+    /// A clean, complete export from current rekordbox: both databases,
+    /// hi-res tracks included, no litter.
+    FullExport,
     Empty,
 }
 
@@ -143,8 +147,10 @@ pub fn populate(root: &Path, content: DemoContent) -> io::Result<()> {
     if content == DemoContent::Empty {
         return Ok(());
     }
-    let with_issues = content == DemoContent::DeviceLibraryWithIssues;
-    let list = tracks(with_issues);
+    let hires = matches!(content, DemoContent::DeviceLibraryWithIssues | DemoContent::FullExport);
+    let litter = content == DemoContent::DeviceLibraryWithIssues;
+    let one_library = matches!(content, DemoContent::BothLibraries | DemoContent::FullExport);
+    let list = tracks(hires);
     let mut fixture = Vec::new();
     for (i, t) in list.iter().enumerate() {
         write(root, t.path, &t.bytes)?;
@@ -189,7 +195,7 @@ pub fn populate(root: &Path, content: DemoContent) -> io::Result<()> {
             track_ids: vec![3, 4, 5, 7, 8],
         },
     ];
-    if with_issues {
+    if hires {
         playlists.push(FixturePlaylist {
             id: 5,
             parent_id: 0,
@@ -211,17 +217,124 @@ pub fn populate(root: &Path, content: DemoContent) -> io::Result<()> {
     for t in &fixture {
         write(root, &format!("PIONEER/USBANLZ/P000/{:08X}/ANLZ0000.DAT", t.id), b"PMAI")?;
     }
-    if with_issues {
+    if litter {
         // Damaged download and macOS metadata litter.
         write(root, "Contents/Downloads/Unknown Track (1).mp3", b"<html>Access denied</html>")?;
         write(root, "Contents/Kolsch/Speicher/._Grey.mp3", &[0u8; 4096])?;
         write(root, "Contents/Hi-Res/._Ambient Intro.flac", &[0u8; 4096])?;
-    } else {
+    }
+    if one_library {
         // OneLibrary databases are encrypted; random-looking bytes stand in.
         let bytes: Vec<u8> = (0..65_536u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
         write(root, ONE_LIBRARY_FILE, &bytes)?;
     }
     Ok(())
+}
+
+/// A simulated USB stick for demo mode.
+pub struct DemoStick {
+    pub name: &'static str,
+    pub maker: &'static str,
+    pub product: &'static str,
+    pub vid: u16,
+    pub pid: u16,
+    pub size: u64,
+    pub scheme: PartitionScheme,
+    pub fs: FilesystemKind,
+    pub label: &'static str,
+    pub content: DemoContent,
+    pub description: &'static str,
+}
+
+pub const STICKS: &[DemoStick] = &[
+    DemoStick {
+        name: "sandisk-128",
+        maker: "SanDisk",
+        product: "Ultra",
+        vid: 0x0781,
+        pid: 0x5581,
+        size: 123_060_000_000,
+        scheme: PartitionScheme::Gpt,
+        fs: FilesystemKind::Exfat,
+        label: "FESTIVAL26",
+        content: DemoContent::DeviceLibraryWithIssues,
+        description: "128 GB, formatted on a Mac (GPT + exFAT), rekordbox Device Library only",
+    },
+    DemoStick {
+        name: "kingston-32",
+        maker: "Kingston",
+        product: "DataTraveler 3.0",
+        vid: 0x0951,
+        pid: 0x1666,
+        size: 30_752_000_000,
+        scheme: PartitionScheme::Gpt,
+        fs: FilesystemKind::Exfat,
+        label: "UNTITLED",
+        content: DemoContent::Empty,
+        description: "32 GB, new and empty (GPT + exFAT)",
+    },
+    DemoStick {
+        name: "samsung-64",
+        maker: "Samsung",
+        product: "Flash Drive BAR Plus",
+        vid: 0x090c,
+        pid: 0x1000,
+        size: 64_023_000_000,
+        scheme: PartitionScheme::Mbr,
+        fs: FilesystemKind::Fat32,
+        label: "BR_BACKUP",
+        content: DemoContent::BothLibraries,
+        description: "64 GB, MBR + FAT32 with both rekordbox libraries",
+    },
+];
+
+fn fnv(s: &str) -> u32 {
+    s.bytes().fold(0x811C_9DC5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+}
+
+/// Create `<root>/<name>/{device.json, volume/}` in the demo platform's
+/// folder format.
+pub fn create_stick(root: &Path, s: &DemoStick) -> io::Result<PathBuf> {
+    let dir = root.join(s.name);
+    fs::create_dir_all(dir.join("volume"))?;
+    let h = fnv(s.name);
+    let dev = PhysicalDevice {
+        id: format!("demo:{}", s.name),
+        os_path: dir.join("disk.img").to_string_lossy().into_owned(),
+        bus: BusType::Usb,
+        removable: true,
+        is_system: false,
+        size_bytes: s.size,
+        logical_sector_size: 512,
+        storage_vendor: Some(s.maker.into()),
+        storage_model: Some(s.product.into()),
+        storage_revision: Some("1.00".into()),
+        usb: Some(UsbDescriptor {
+            vendor_id: Some(s.vid),
+            product_id: Some(s.pid),
+            manufacturer: Some(s.maker.into()),
+            product: Some(s.product.into()),
+            serial: Some(format!("DEMO{h:08X}")),
+            bcd_device: Some(0x0100),
+            usb_version: Some("3.20".into()),
+            speed_mbps: Some(5000),
+            max_power_ma: Some(224),
+        }),
+        partition_scheme: Some(s.scheme),
+        volumes: vec![Volume {
+            os_path: format!("demo:{}:1", s.name),
+            mount_point: None,
+            label: Some(s.label.into()),
+            filesystem: Some(s.fs),
+            size_bytes: s.size.saturating_sub(1 << 20),
+            // macOS-style GPT puts a 200 MB EFI partition first.
+            offset_bytes: Some(if s.scheme == PartitionScheme::Gpt { 209_735_680 } else { 1 << 20 }),
+            uuid: Some(format!("{:04X}-{:04X}", h >> 16, h & 0xFFFF)),
+        }],
+    };
+    fs::write(dir.join("device.json"), serde_json::to_vec_pretty(&dev).map_err(io::Error::other)?)?;
+    populate(&dir.join("volume"), s.content)?;
+    Ok(dir)
 }
 
 #[cfg(test)]

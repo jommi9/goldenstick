@@ -19,7 +19,7 @@ use std::process::Command;
 pub type Emit<'a> = &'a mut dyn FnMut(HelperEvent);
 
 /// OS-specific pieces of preparing a drive.
-pub trait Backend {
+pub trait Backend: Send + Sync {
     fn platform(&self) -> &dyn Platform;
     fn open_raw(&self, dev: &PhysicalDevice) -> Result<RawDisk, PlatformError>;
     /// Build an MBR + exFAT drive. There's no vetted pure-Rust exFAT

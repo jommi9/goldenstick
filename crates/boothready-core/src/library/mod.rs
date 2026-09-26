@@ -367,9 +367,9 @@ pub(crate) fn is_ignored_dir(e: &walkdir::DirEntry) -> bool {
     ) || (e.depth() == 2 && name.eq_ignore_ascii_case("USBANLZ"))
 }
 
-/// Count macOS AppleDouble (`._name`) files that sit next to audio files.
+/// macOS AppleDouble (`._name`) files that sit next to audio files.
 /// Players browsing folders show them as unplayable tracks.
-pub fn count_apple_double(root: &Path) -> u32 {
+pub fn apple_double_files(root: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(root)
         .into_iter()
         .filter_entry(|e| !is_ignored_dir(e))
@@ -377,7 +377,12 @@ pub fn count_apple_double(root: &Path) -> u32 {
         .filter(|e| {
             e.file_type().is_file() && e.file_name().to_string_lossy().starts_with("._") && is_audio_path(e.path())
         })
-        .count() as u32
+        .map(|e| e.into_path())
+        .collect()
+}
+
+pub fn count_apple_double(root: &Path) -> u32 {
+    apple_double_files(root).len() as u32
 }
 
 pub(crate) fn relative(root: &Path, p: &Path) -> String {
