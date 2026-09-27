@@ -137,6 +137,42 @@ impl Drop for Watcher {
     }
 }
 
+/// Free space and allocation unit of the filesystem holding a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Space {
+    /// Bytes the current user can still write.
+    pub free_bytes: u64,
+    /// Every file occupies a whole number of these (the cluster size on FAT
+    /// and exFAT).
+    pub cluster_bytes: u64,
+}
+
+/// How much room is left on the volume mounted at `path`.
+pub fn space(path: &std::path::Path) -> std::io::Result<Space> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+        // SAFETY: statvfs is plain data; zeroed is a valid initial value.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: `c` is a valid NUL-terminated path and `st` is writable.
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        #[allow(clippy::unnecessary_cast)] // the field widths differ by OS
+        Ok(Space { free_bytes: st.f_bavail as u64 * st.f_frsize as u64, cluster_bytes: st.f_frsize as u64 })
+    }
+    #[cfg(windows)]
+    {
+        windows::space(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "free space isn't available on this OS"))
+    }
+}
+
 /// Run a fixed program with fixed arguments. Never goes through a shell.
 #[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn run(program: &str, args: &[&str]) -> Result<String, PlatformError> {
@@ -189,6 +225,14 @@ mod tests {
         let ev = events.lock().unwrap();
         assert!(matches!(ev.first(), Some(DeviceEvent::Appeared { .. })), "{ev:?}");
         assert!(matches!(ev.last(), Some(DeviceEvent::Disappeared { .. })), "{ev:?}");
+    }
+
+    #[test]
+    fn space_reports_the_volume_under_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = space(dir.path()).unwrap();
+        assert!(s.free_bytes > 0 && s.cluster_bytes >= 512, "{s:?}");
+        assert!(space(&dir.path().join("missing")).is_err());
     }
 
     /// Runs the real backend against the machine's own disks. Every Windows

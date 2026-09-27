@@ -4,6 +4,7 @@ mod demo;
 mod render;
 
 use anyhow::{bail, Context, Result};
+use boothready_core::copy::{plan_copy, run_copy, CopyTarget};
 use boothready_core::drive::{analyze_drive, DriveReport};
 use boothready_core::identify::UsbCatalog;
 use boothready_core::library::scan_libraries;
@@ -12,7 +13,7 @@ use boothready_core::media::inspect_path;
 use boothready_core::planner::{plan_kit, DriveCandidate, KitRequest, GB};
 use boothready_core::privileged::{DeviceFingerprint, HelperEvent, HelperRequest};
 use boothready_core::rules::{assess_drive, DeviceProfile, Ruleset};
-use boothready_core::verify::{verify_volume, Expectations, VerifyRequest};
+use boothready_core::verify::{human_bytes, verify_volume, Expectations, VerifyRequest};
 use boothready_helper::{Backend, DemoBackend, NativeBackend};
 use boothready_model::{FilesystemKind, PartitionScheme, PhysicalDevice};
 use boothready_platform::Platform;
@@ -90,6 +91,18 @@ enum Cmd {
         /// Record the result in the drive's BoothReady manifest.
         #[arg(long)]
         save: bool,
+    },
+    /// Copy one drive's DJ export onto another prepared drive. Interrupted
+    /// copies resume, unchanged files are skipped, and `verify --full`
+    /// afterwards checks every file against the hashes taken while copying.
+    Copy {
+        /// Source: a device ID from `boothready devices`, or a mounted folder.
+        from: String,
+        /// Destination: a device ID or a mounted folder.
+        to: String,
+        /// Don't ask before copying.
+        #[arg(long)]
+        yes: bool,
     },
     /// Erase and prepare a drive (demo drives, or real ones when run as admin).
     Prepare {
@@ -278,6 +291,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Prepare { device, fs, label, yes } => prepare(&cli, device, fs, label, *yes)?,
+        Cmd::Copy { from, to, yes } => copy(&cli, &catalog, from, to, *yes)?,
         Cmd::Eject { device } => {
             let b = backend(&cli);
             let dev = find_device(b.platform(), device)?;
@@ -352,6 +366,90 @@ fn report_and_assess(cli: &Cli, report: &DriveReport, rules: &Ruleset, targets: 
     }
     render::report(report);
     render::assessment(&assessment);
+    Ok(())
+}
+
+/// A mounted volume named on the command line: its root, filesystem and a
+/// name to show.
+fn resolve_volume(
+    platform: &dyn Platform,
+    catalog: &UsbCatalog,
+    arg: &str,
+) -> Result<(PathBuf, Option<FilesystemKind>, String)> {
+    let dir = PathBuf::from(arg);
+    if dir.is_dir() {
+        return Ok((dir, None, arg.to_string()));
+    }
+    let dev = find_device(platform, arg)?;
+    let name = boothready_core::identify::identify(&dev, catalog).display_name;
+    let vol = dev.primary_mount().with_context(|| format!("{name} isn't mounted"))?;
+    let root = vol.mount_point.clone().with_context(|| format!("{name} isn't mounted"))?;
+    Ok((root, vol.filesystem, name))
+}
+
+fn copy(cli: &Cli, catalog: &UsbCatalog, from: &str, to: &str, yes: bool) -> Result<()> {
+    let b = backend(cli);
+    let (src, _, src_name) = resolve_volume(b.platform(), catalog, from)?;
+    let (dst, filesystem, dst_name) = resolve_volume(b.platform(), catalog, to)?;
+    let space = boothready_platform::space(&dst).with_context(|| format!("reading free space on {dst_name}"))?;
+    let target = CopyTarget { filesystem, free_bytes: space.free_bytes, cluster_bytes: space.cluster_bytes };
+    let plan = plan_copy(&src, &dst, &target)?;
+    if !plan.can_start() {
+        if cli.json {
+            print_json(&plan.problems)?;
+        } else {
+            eprintln!("Can't copy {src_name} to {dst_name}:");
+            for p in &plan.problems {
+                eprintln!("  {}", p.describe());
+            }
+        }
+        std::process::exit(1);
+    }
+    if plan.files_to_copy == 0 && plan.stale.is_empty() {
+        eprintln!("{dst_name} already has everything on {src_name}. Nothing to copy.");
+        return Ok(());
+    }
+    if !cli.json {
+        eprintln!(
+            "Copy {} files ({}) from {src_name} to {dst_name}.",
+            plan.files_to_copy,
+            human_bytes(plan.bytes_to_copy)
+        );
+        if plan.files_done > 0 {
+            eprintln!("{} files are already there from an earlier copy and will be skipped.", plan.files_done);
+        }
+        if !plan.stale.is_empty() {
+            eprintln!(
+                "{} files an earlier copy put there are gone from {src_name} and will be removed.",
+                plan.stale.len()
+            );
+        }
+    }
+    if !yes {
+        eprint!("Copy now? [y/N] ");
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !line.trim().eq_ignore_ascii_case("y") {
+            bail!("Not confirmed. Nothing was copied.");
+        }
+    }
+    let quiet = cli.json;
+    let report = run_copy(&plan, &src, &dst, &AtomicBool::new(false), |p| {
+        if !quiet && p.bytes_total > 0 {
+            eprint!("\r{} of {} copied   ", human_bytes(p.bytes_done), human_bytes(p.bytes_total));
+        }
+    })?;
+    if cli.json {
+        return print_json(&report);
+    }
+    eprintln!(
+        "\nCopied {} files ({}), skipped {} unchanged, removed {}.",
+        report.files_copied,
+        human_bytes(report.bytes_copied),
+        report.files_skipped,
+        report.files_removed
+    );
+    eprintln!("Run `boothready verify {} --full --save` to check every file on {dst_name}.", dst.display());
     Ok(())
 }
 

@@ -25,9 +25,9 @@ use windows::Win32::Foundation::{
     CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, GENERIC_READ, GENERIC_WRITE, HANDLE,
 };
 use windows::Win32::Storage::FileSystem::{
-    BusTypeUsb, CreateFileW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetVolumeInformationW,
-    GetVolumePathNamesForVolumeNameW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
+    BusTypeUsb, CreateFileW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetDiskFreeSpaceExW,
+    GetDiskFreeSpaceW, GetVolumeInformationW, GetVolumePathNameW, GetVolumePathNamesForVolumeNameW,
+    FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
 };
 use windows::Win32::System::Ioctl::{
     PropertyStandardQuery, StorageDeviceProperty, DISK_GEOMETRY, DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX,
@@ -460,6 +460,23 @@ impl WindowsPlatform {
         }
         out
     }
+}
+
+/// Free space for the current user and the cluster size of the volume
+/// holding `path`.
+pub(crate) fn space(path: &std::path::Path) -> std::io::Result<crate::Space> {
+    let w = wide(&path.to_string_lossy());
+    let mut root = vec![0u16; 1024];
+    // SAFETY: `w` is NUL-terminated and `root` is writable for its length.
+    unsafe { GetVolumePathNameW(PCWSTR(w.as_ptr()), &mut root) }.map_err(std::io::Error::other)?;
+    let mut free = 0u64;
+    // SAFETY: valid path and out-pointer.
+    unsafe { GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut free), None, None) }.map_err(std::io::Error::other)?;
+    let (mut spc, mut bps) = (0u32, 0u32);
+    // SAFETY: `root` holds the NUL-terminated volume root; out-pointers are valid.
+    unsafe { GetDiskFreeSpaceW(PCWSTR(root.as_ptr()), Some(&mut spc), Some(&mut bps), None, None) }
+        .map_err(std::io::Error::other)?;
+    Ok(crate::Space { free_bytes: free, cluster_bytes: spc as u64 * bps as u64 })
 }
 
 impl Platform for WindowsPlatform {

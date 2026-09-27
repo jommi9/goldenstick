@@ -6,6 +6,8 @@ import type {
   AppInfo,
   Candidate,
   ConfirmationDetails,
+  CopyReport,
+  CopySource,
   DemoStickInfo,
   DeviceCard,
   DeviceEvent,
@@ -43,6 +45,9 @@ export interface Api {
   openRekordbox(): Promise<void>;
   verify(deviceId: string, full: boolean): Promise<VerifyReport>;
   cancelVerify(): Promise<void>;
+  copySources(deviceId: string): Promise<CopySource[]>;
+  copyDrive(fromId: string, toId: string): Promise<CopyReport>;
+  cancelCopy(): Promise<void>;
   eject(deviceId: string): Promise<EjectResult>;
   knownMedia(): Promise<KnownMedia[]>;
   profiles(): Promise<GigProfile[]>;
@@ -56,6 +61,7 @@ export interface Api {
   onScanProgress(cb: (p: { device_id: string; files: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
   onVerifyProgress(cb: (p: { device_id: string; progress: VerifyProgress }) => void): void;
+  onCopyProgress(cb: (p: { device_id: string; progress: VerifyProgress }) => void): void;
 }
 
 declare global {
@@ -90,6 +96,9 @@ async function tauriApi(): Promise<Api> {
     openRekordbox: () => invoke("open_rekordbox"),
     verify: (deviceId, full) => invoke("verify", { deviceId, full }),
     cancelVerify: () => invoke("cancel_verify"),
+    copySources: (deviceId) => invoke("copy_sources", { deviceId }),
+    copyDrive: (fromId, toId) => invoke("copy_drive", { fromId, toId }),
+    cancelCopy: () => invoke("cancel_copy"),
     eject: (deviceId) => invoke("eject", { deviceId }),
     knownMedia: () => invoke("known_media"),
     profiles: () => invoke("profiles"),
@@ -103,6 +112,7 @@ async function tauriApi(): Promise<Api> {
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),
     onVerifyProgress: on("verify-progress"),
+    onCopyProgress: on("copy-progress"),
   };
 }
 

@@ -69,6 +69,8 @@ jobs:
           npm run build
       - name: Clippy (Tauri shell)
         run: cargo clippy -p boothready-app --all-targets -- -D warnings
+      - name: Tests (Tauri shell)
+        run: cargo test -p boothready-app
       - name: UI walkthrough screenshots
         if: runner.os == 'Linux'
         working-directory: app

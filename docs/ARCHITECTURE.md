@@ -13,6 +13,7 @@
  │ rules      device profiles, evidence, assessment, "why"      │
  │ planner    Main / Legacy Rescue / Backup, capacity fitting   │
  │ format     MBR + FAT32 builder (mkfs.fat geometry)           │
+ │ copy       drive-to-drive copy, resumable, hash journal      │
  │ verify     quick/full read-back, manifest, fingerprints      │
  │ identify   USB catalog matching with confidence              │
  │ state      PRD §64 state machine                             │
@@ -74,6 +75,14 @@ Elevation is per operation for now: `pkexec` on Linux, `osascript ... with admin
 FAT32 is built in pure Rust so that Windows' 32 GB FAT32 limit doesn't apply. The MBR layout starts at 1 MiB, the first and last MiB are zeroed so no GPT header survives, and cluster sizes follow Microsoft's defaults but shrink on small volumes so they stay FAT32. `format::format_fat32` writes the volume itself from Microsoft's FAT specification, with the geometry mkfs.fat uses: 32 reserved sectors, or one cluster when clusters are bigger, and FATs rounded up to whole clusters, so the FATs and the data region all start on cluster boundaries. The boot sector carries the hidden-sector count and has its backup in sector 6, FSInfo holds a correct free count, and the label is in both the boot sector and the root directory. Tests compare the geometry with mkfs.fat's for volumes from 100 MB to 256 GB and check the output with `fsck.fat`, `sfdisk`, `sgdisk` and mtools, including a 64 GB volume, and through an alignment-checking device.
 
 exFAT has no mature pure-Rust formatter, so it uses `diskutil eraseDisk` on macOS, a generated `diskpart` script on Windows and `mkfs.exfat` on Linux.
+
+## Copying between drives
+
+`copy` puts one drive's contents onto another, which is how a kit's Backup gets filled from a verified Main without a second export. rekordbox and Engine DJ store track paths relative to the volume root, so copying the whole tree, including the `PIONEER/USBANLZ` analysis files, gives a working export on the second drive. BoothReady never writes a partial DJ database (PRD §77), so when the tree doesn't fit, the answer is another export from the DJ software.
+
+Before anything is written, the plan checks free space in whole clusters, FAT32's 4 GB file limit, names FAT, exFAT or Windows can't store, and that the destination holds nothing this copy didn't put there, so two libraries never get mixed. Each file is written under a temporary name, given the source's modification time and renamed into place, and a journal of finished files with their BLAKE3 hashes is flushed every few seconds. An interrupted copy resumes from the journal (PRD §61), running the same copy again copies nothing (PRD §71), and files an earlier run wrote that the source no longer has are removed. When the copy finishes, the hashes go into the destination's manifest, and full verification reads every file back against them.
+
+The app offers a copy on the export step when another connected drive holds a DJ library and a passing verification that still matches its contents, and only between drives with compatible jobs: a Legacy Rescue needs its own conservative export.
 
 ## Verification
 

@@ -16,6 +16,8 @@ cargo build
 ./target/debug/boothready --demo /tmp/br demo init
 ./target/debug/boothready --demo /tmp/br demo insert sandisk-128
 ./target/debug/boothready --demo /tmp/br check sandisk-128
+./target/debug/boothready --demo /tmp/br demo insert kingston-32
+./target/debug/boothready --demo /tmp/br copy sandisk-128 kingston-32
 ./target/debug/boothready plan --library-gb 94 --essential-gb 20 \
     --drive "SanDisk Ultra:SanDisk:128" --drive "Kingston DT:Kingston:32"
 

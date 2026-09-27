@@ -89,6 +89,33 @@ async function run(scheme) {
   await click("Continue");
   await page.getByText("Legacy Rescue").first().waitFor();
   await shot("15-ready", true);
+
+  // USB 3: the 64 GB Samsung becomes the Independent Backup. It already
+  // holds another library, so the copy offer asks for an erase first; then
+  // the verified Main is copied onto it and every file is checked.
+  await page.getByRole("button", { name: /Backup USB/ }).click();
+  await page.locator('[data-act="demo-insert"][data-id="samsung-64"]').click();
+  await page.getByText("Scanned").waitFor({ timeout: 10000 });
+  await click("Yes, that's it");
+  await click("See detailed report");
+  await page.getByRole("table").waitFor();
+  await click("It's fine, go to the export step");
+  await page.getByRole("button", { name: "Erase this USB first" }).waitFor({ timeout: 15000 });
+  await shot("16-backup-copy-blocked");
+  await click("Erase this USB first");
+  await page.getByRole("button", { name: /^Erase and prepare/ }).click();
+  const copy = page.getByRole("button", { name: /^Copy \d+ files/ });
+  await copy.waitFor({ timeout: 15000 });
+  await shot("17-backup-copy-offer");
+  await copy.click();
+  await page.getByText(/copied/).waitFor();
+  await shot("18-copying");
+  await page.getByText("Verify before the gig").waitFor({ timeout: 15000 });
+  await click("Start verification");
+  await page.getByText(/^Verified \d+ files?/).waitFor({ timeout: 10000 });
+  await click("Continue");
+  await page.getByText("You're booth-ready").waitFor();
+  await shot("19-kit-complete", true);
   await page.close();
 }
 

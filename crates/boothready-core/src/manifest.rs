@@ -1,9 +1,11 @@
 //! The small BoothReady manifest kept on each prepared drive.
 //!
-//! It holds non-sensitive preparation metadata only: no track names, no
-//! playlist names. It lives in a hidden `.boothready` folder that DJ players
-//! ignore, and it's always replaced atomically so a yanked drive never ends
-//! up with half a manifest.
+//! It holds preparation metadata and, after BoothReady copies files onto the
+//! drive, each copied file's path, size and hash so verification can prove
+//! the copy. The paths are ones the drive already shows to anyone holding
+//! it, and none of this leaves the computer. It lives in a hidden
+//! `.boothready` folder that DJ players ignore, and it's always replaced
+//! atomically so a yanked drive never ends up with half a manifest.
 
 use crate::planner::Role;
 use boothready_model::{FilesystemKind, PartitionScheme};

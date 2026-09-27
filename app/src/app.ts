@@ -8,6 +8,8 @@ import type {
   AppInfo,
   Candidate,
   ConfirmationDetails,
+  CopyReport,
+  CopySource,
   DemoStickInfo,
   DeviceAssessment,
   DeviceCard,
@@ -54,6 +56,7 @@ type View =
   | { v: "confirm"; id: string; fs: Filesystem }
   | { v: "preparing"; id: string }
   | { v: "export"; id: string }
+  | { v: "copying"; id: string; from: string }
   | { v: "verify"; id: string }
   | { v: "ready" }
   | { v: "kit-next"; role: Role };
@@ -107,6 +110,13 @@ const S = {
   verifyReport: null as VerifyReport | null,
   /** Device the progress/report above belong to. Never show one drive's result for another. */
   verifyFor: null as string | null,
+  copySources: [] as CopySource[],
+  /** Device the copy sources above were listed for. */
+  copySourcesFor: null as string | null,
+  copyRunning: false,
+  copyProgress: null as VerifyProgress | null,
+  copyReport: null as CopyReport | null,
+  copyError: null as string | null,
   done: [] as Done[],
   ejectMessages: new Map<string, string>(),
   alert: null as { kind: "bad" | "warn" | "ok"; text: string } | null,
@@ -237,13 +247,58 @@ async function onDeviceEvent(e: { kind: string; id?: string; device?: { id: stri
   } else if (e.kind === "changed" && viewId === id && view.v === "export") {
     void checkExport();
   }
+  if (view.v === "copying" && e.kind === "disappeared" && (id === view.id || id === view.from) && S.copyRunning) {
+    S.alert = { kind: "warn", text: "A USB was disconnected during the copy. Plug it back in and copy again; it picks up where it stopped." };
+  }
+  // A drive plugged in or pulled out may change what can be copied from.
+  if (S.view.v === "export" && viewId !== id) void loadCopySources(S.view.id);
   render();
 }
 
 // ------------------------------------------------------------------ actions
 
+async function loadCopySources(id: string) {
+  const list = await S.api.copySources(id).catch(() => [] as CopySource[]);
+  S.copySources = list;
+  S.copySourcesFor = id;
+  if (S.view.v === "export" && S.view.id === id) render();
+}
+
+/** Copies only make sense between drives with the same job: a Legacy Rescue
+ * needs its own conservative export, and nothing else should get one. */
+function copyFits(src: Role | null, dest: Role | null): boolean {
+  return (src === "legacy_rescue") === (dest === "legacy_rescue");
+}
+
+async function runCopy(id: string, from: string) {
+  S.copyRunning = true;
+  S.copyProgress = null;
+  S.copyReport = null;
+  S.copyError = null;
+  go({ v: "copying", id, from });
+  try {
+    const r = await S.api.copyDrive(from, id);
+    S.copyReport = r;
+    if (!r.cancelled) {
+      S.copyRunning = false;
+      await scan(id);
+      await reassess(id);
+      S.verifyMode = "full";
+      S.verifyFor = null;
+      go({ v: "verify", id });
+      toast(`Copied ${plural(r.files_copied, "file")}. A full verification now checks each one against the original.`);
+      return;
+    }
+  } catch (e) {
+    S.copyError = String(e);
+  }
+  S.copyRunning = false;
+  render();
+}
+
 async function startExportWatch(id: string) {
   S.exportDetected = false;
+  void loadCopySources(id);
   const st = await S.api.exportStatus(id).catch(() => null);
   S.exportBaseline = JSON.stringify(st);
   clearInterval(S.exportTimer);
@@ -462,6 +517,12 @@ async function act(el: HTMLElement) {
     case "check-export-now":
       S.exportBaseline = "force";
       await checkExport();
+      break;
+    case "copy-from":
+      await runCopy(vid, id);
+      break;
+    case "cancel-copy":
+      await S.api.cancelCopy();
       break;
     case "go-verify":
       S.verifyFor = null;
@@ -941,9 +1002,22 @@ function exportView(id: string): Raw {
   const engine = formats.includes("engine_database") && !formats.some((f) => f.startsWith("rekordbox"));
   const legacy = role === "legacy_rescue";
   const label = s?.fs_label ?? "the USB";
+  const src = S.copySourcesFor === id ? S.copySources.find((c) => copyFits(c.role, role)) : undefined;
+  const software = engine ? "Engine DJ" : "rekordbox";
   return html`<section class="card" style="max-width:720px;margin:0 auto">
     <div class="eyebrow">${nameOf(id)}${role ? ` · ${ROLE_LABEL[role]}` : ""}</div>
-    <h1>${engine ? "Now add your music in Engine DJ" : "Now export from rekordbox"}</h1>
+    ${src
+      ? html`<h1>Put your music on this USB</h1>
+        <div class="copy-offer">
+          <h2>Copy from ${src.display_name}</h2>
+          <p class="muted">It passed verification${src.role ? ` as your ${ROLE_LABEL[src.role]}` : ""}. BoothReady can copy its whole export onto this USB instead of a second export from ${software}, then check every file against the original.</p>
+          ${src.problems.length ? html`<div class="banner ${src.needs_erase ? "warn" : "bad"}"><div>${src.problems.join(". ")}.</div></div>` : ""}
+          <div class="actions">${src.needs_erase
+            ? html`<button class="btn primary" data-act="go-confirm" data-fs="${S.assessments.get(id)?.recommended_format.filesystem ?? "fat32"}">Erase this USB first</button>`
+            : html`<button class="btn primary" data-act="copy-from" data-id="${src.device_id}" ${src.problems.length ? "disabled" : ""}>Copy ${plural(src.files, "file")}, ${gb(src.bytes)}</button>`}</div>
+        </div>
+        <h2>${engine ? "Or add your music in Engine DJ" : "Or export from rekordbox"}</h2>`
+      : html`<h1>${engine ? "Now add your music in Engine DJ" : "Now export from rekordbox"}</h1>`}
     <p class="muted">BoothReady doesn't write rekordbox databases itself. rekordbox does that part, then BoothReady checks the result.</p>
     ${engine
       ? html`<ol><li>Open Engine DJ and find <b>${label}</b> under Devices.</li><li>Drag the playlists you need onto it and wait for the sync to finish.</li></ol>`
@@ -959,6 +1033,27 @@ function exportView(id: string): Raw {
       <button class="btn" data-act="check-export-now">I've finished, check now</button>
       <button class="btn link" data-act="detailed-report">Back to the report</button>
     </div>
+  </section>`;
+}
+
+function copyingView(id: string, from: string): Raw {
+  const p = S.copyProgress;
+  const r = S.copyReport;
+  const pct = p && p.bytes_total ? Math.min(100, (100 * p.bytes_done) / p.bytes_total) : 0;
+  const stopped = S.copyError !== null || r?.cancelled;
+  return html`<section class="card" style="max-width:720px;margin:0 auto">
+    <div class="eyebrow">${nameOf(id)}</div>
+    <h1>${S.copyError ? "The copy stopped" : r?.cancelled ? "Copy paused" : `Copying from ${nameOf(from)}`}</h1>
+    ${S.copyRunning
+      ? html`<p class="muted">Don't unplug either USB.</p>
+        <div style="margin-top:16px"><div class="bar"><span style="width:${pct.toFixed(1)}%"></span></div>
+          <p class="small" style="margin-top:8px" aria-live="polite">${p ? `${gb(p.bytes_done)} of ${gb(p.bytes_total)} copied${p.eta_secs != null ? `, about ${Math.max(1, Math.round(p.eta_secs / 60))} min left` : ""}` : "Starting…"}</p>
+          <div class="actions"><button class="btn" data-act="cancel-copy">Pause</button></div></div>`
+      : ""}
+    ${stopped
+      ? html`${S.copyError ? html`<div class="banner bad">${S.copyError}</div>` : html`<div class="banner warn"><div>Nothing is lost. Copying again picks up where it stopped.</div></div>`}
+        <div class="actions"><button class="btn primary" data-act="copy-from" data-id="${from}">${S.copyError ? "Try again" : "Continue copying"}</button><button class="btn link" data-act="go-export">Back</button></div>`
+      : ""}
   </section>`;
 }
 
@@ -1056,6 +1151,8 @@ function body(): Raw {
       return preparingView(v.id);
     case "export":
       return exportView(v.id);
+    case "copying":
+      return copyingView(v.id, v.from);
     case "verify":
       return verifyView(v.id);
     case "ready":
@@ -1096,6 +1193,11 @@ export async function start(api: Api) {
   api.onPrepareProgress((p) => {
     S.prepareSteps.push(p);
     if (S.view.v === "preparing") render();
+  });
+  api.onCopyProgress((p) => {
+    if (S.view.v !== "copying" || p.device_id !== S.view.id) return;
+    S.copyProgress = p.progress;
+    render();
   });
   api.onVerifyProgress((p) => {
     if (p.device_id !== S.verifyFor) return;

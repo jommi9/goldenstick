@@ -6,6 +6,7 @@
 //! are executed by `boothready-helper`.
 
 pub mod audio;
+pub mod copy;
 #[cfg(feature = "fixtures")]
 pub mod demo;
 pub mod drive;
