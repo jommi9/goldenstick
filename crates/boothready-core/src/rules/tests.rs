@@ -100,7 +100,7 @@ fn audio_rules() {
     let flac = info(Codec::Flac, Container::Flac, 44_100, Some(16));
     assert!(matches!(evaluate_audio(cdj2000, &flac), TrackVerdict::Unsupported { evidence: Evidence::Vendor, .. }));
     assert_eq!(evaluate_audio(nxs2, &flac), TrackVerdict::Supported { evidence: Evidence::Vendor });
-    assert_eq!(evaluate_audio(x3000, &flac), TrackVerdict::Supported { evidence: Evidence::Inferred });
+    assert_eq!(evaluate_audio(x3000, &flac), TrackVerdict::Supported { evidence: Evidence::Vendor });
 
     let hires = info(Codec::Pcm, Container::Wav, 96_000, Some(24));
     match evaluate_audio(cdj2000, &hires) {
@@ -118,6 +118,10 @@ fn audio_rules() {
         TrackVerdict::Unsupported { reason, .. } => assert!(reason.contains("32-bit"), "{reason}"),
         v => panic!("{v:?}"),
     }
+
+    // The OPUS-QUAD stops at 48 kHz; the OMNIS-DUO plays 96 kHz.
+    assert!(!evaluate_audio(r.device("opus-quad").unwrap(), &hires).is_supported());
+    assert!(evaluate_audio(r.device("omnis-duo").unwrap(), &hires).is_supported());
 
     let opus = info(Codec::Opus, Container::Ogg, 48_000, None);
     assert!(matches!(evaluate_audio(sc6000, &opus), TrackVerdict::Unknown { .. }));
@@ -156,7 +160,10 @@ fn prd_acceptance_scenario() {
 
     assert_eq!(a.overall, Verdict::FixNeeded);
     assert_eq!(dev("cdj-2000").verdict, Verdict::FixNeeded);
-    assert_eq!(dev("cdj-3000").verdict, Verdict::AtRisk, "{:#?}", dev("cdj-3000").layers);
+    // AlphaTheta documents that even the CDJ-3000 doesn't support GPT.
+    let cdj3000 = dev("cdj-3000");
+    assert_eq!(cdj3000.verdict, Verdict::FixNeeded, "{:#?}", cdj3000.layers);
+    assert_eq!(cdj3000.layers.iter().find(|l| l.layer == Layer::Partition).unwrap().status, LayerStatus::Fail);
     let x = dev("cdj-3000x");
     assert_eq!(x.verdict, Verdict::FixNeeded);
     let lib = x.layers.iter().find(|l| l.layer == Layer::Library).unwrap();
@@ -177,7 +184,7 @@ fn prd_acceptance_scenario() {
     assert!(
         export.contains(&LibraryFormat::RekordboxOneLibrary) && export.contains(&LibraryFormat::RekordboxDeviceLibrary)
     );
-    assert_eq!(general_headline(&f, &r), "DJ players may not recognise this drive as formatted");
+    assert_eq!(general_headline(&f, &r), "DJ players won't recognise this drive as formatted");
     let mbr_exfat = facts(PartitionScheme::Mbr, FilesystemKind::Exfat, &[], vec![]);
     assert_eq!(general_headline(&mbr_exfat, &r), "Fine for newer players, won't work on older ones");
 }
@@ -269,23 +276,116 @@ fn engine_hardware_with_rekordbox_drive_is_not_assumed() {
 fn signed_bundles() {
     let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
     let trusted = [TrustedKey { id: "release-1".into(), key: key.verifying_key() }];
-    let newer = BUILTIN_RULESET.replacen("\"version\": 1,", "\"version\": 2,", 1);
+    let installed = rules().version;
+    let newer =
+        BUILTIN_RULESET.replacen(&format!("\"version\": {installed},"), &format!("\"version\": {},", installed + 1), 1);
     let bundle = serde_json::to_vec(&sign_bundle(&newer, "release-1", &key)).unwrap();
-    let r = verify_bundle(&bundle, &trusted, 1).unwrap();
-    assert_eq!(r.version, 2);
+    let r = verify_bundle(&bundle, &trusted, installed).unwrap();
+    assert_eq!(r.version, installed + 1);
 
-    assert!(matches!(verify_bundle(&bundle, &trusted, 2), Err(BundleError::Rollback { .. })));
+    assert!(matches!(verify_bundle(&bundle, &trusted, installed + 1), Err(BundleError::Rollback { .. })));
     let other = sign_bundle(&newer, "someone", &ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]));
     assert!(matches!(
-        verify_bundle(&serde_json::to_vec(&other).unwrap(), &trusted, 1),
+        verify_bundle(&serde_json::to_vec(&other).unwrap(), &trusted, installed),
         Err(BundleError::UnknownKey(_))
     ));
     let mut forged = sign_bundle(&newer, "release-1", &key);
     let tampered = newer.replacen("\"fat32\": \"supported/vendor\"", "\"fat32\": \"unsupported/vendor\"", 1);
     forged.payload = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, tampered.as_bytes());
     assert!(matches!(
-        verify_bundle(&serde_json::to_vec(&forged).unwrap(), &trusted, 1),
+        verify_bundle(&serde_json::to_vec(&forged).unwrap(), &trusted, installed),
         Err(BundleError::BadSignature)
     ));
-    assert!(matches!(verify_bundle(b"{}", &trusted, 1), Err(BundleError::Format)));
+    assert!(matches!(verify_bundle(b"{}", &trusted, installed), Err(BundleError::Format)));
+}
+
+/// Edit the built-in ruleset as JSON and try to load it.
+fn load_edited(edit: impl FnOnce(&mut serde_json::Value)) -> Result<Ruleset, RulesError> {
+    let mut v: serde_json::Value = serde_json::from_str(BUILTIN_RULESET).unwrap();
+    edit(&mut v);
+    Ruleset::from_json(&v.to_string())
+}
+
+fn device_json<'a>(v: &'a mut serde_json::Value, id: &str) -> &'a mut serde_json::Value {
+    v["devices"].as_array_mut().unwrap().iter_mut().find(|d| d["id"] == id).unwrap()
+}
+
+#[test]
+fn documented_claims_must_cite_their_documents() {
+    // Dropping the CDJ-2000's filesystem documents leaves "vendor" claims unbacked.
+    let err = load_edited(|v| {
+        device_json(v, "cdj-2000")["sources"].as_object_mut().unwrap().remove("filesystems");
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("cdj-2000: filesystems claims Vendor documented evidence"), "{err}");
+
+    // A forum thread can't back a vendor claim.
+    let err = load_edited(|v| {
+        device_json(v, "cdj-2000")["sources"]["filesystems"] = serde_json::json!(["c-nxs2-gpt"]);
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("filesystems"), "{err}");
+
+    // Community quirks need a community source.
+    let err = load_edited(|v| {
+        device_json(v, "cdj-3000")["quirks"].as_array_mut().unwrap().iter_mut().for_each(|q| {
+            q.as_object_mut().unwrap().remove("sources");
+        })
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("quirk"), "{err}");
+
+    assert!(load_edited(|v| device_json(v, "cdj-2000")["sources"]["audio"] = serde_json::json!(["nope"])).is_err());
+    assert!(load_edited(|v| v["references"]["at-exfat-list"]["url"] = "http://example.com".into()).is_err());
+    assert!(load_edited(|v| v["schema"] = 1.into()).is_err());
+}
+
+#[test]
+fn citations_name_the_document_and_site() {
+    let r = rules();
+    let cite = r.device("cdj-2000").unwrap().source("partition_tables").unwrap();
+    assert!(cite.contains("CDJ-2000") && cite.contains("(support.pioneerdj.com)"), "{cite}");
+    // Every reference is cited by something, and every citation resolves.
+    for d in &r.devices {
+        for (aspect, ids) in &d.sources {
+            assert_eq!(d.source(aspect).unwrap().matches(';').count() + 1, ids.len(), "{} {aspect}", d.id);
+        }
+    }
+}
+
+#[test]
+fn quirks_only_show_for_drives_they_concern() {
+    let r = rules();
+    let cdj3000 = r.device("cdj-3000").unwrap();
+    let notes = |fs: FilesystemKind| {
+        let f = facts(PartitionScheme::Mbr, fs, &[LibraryFormat::RekordboxDeviceLibrary], standard_tracks());
+        assess_drive(&f, &[cdj3000], &r).devices[0].notes.clone()
+    };
+    let exfat = notes(FilesystemKind::Exfat);
+    assert!(exfat.iter().any(|n| n.contains("firmware 1.20")), "{exfat:?}");
+    let fat32 = notes(FilesystemKind::Fat32);
+    assert!(!fat32.iter().any(|n| n.contains("exFAT")), "{fat32:?}");
+    // Unconditional quirks show for every drive.
+    assert!(fat32.iter().any(|n| n.contains("Firmware 3.30")), "{fat32:?}");
+}
+
+#[test]
+fn onelibrary_only_players_need_onelibrary() {
+    let r = rules();
+    for id in ["cdj-1500x", "xdj-an", "cdj-3000x", "xdj-az", "opus-quad", "omnis-duo"] {
+        let d = r.device(id).unwrap();
+        assert_eq!(d.library(LibraryFormat::RekordboxDeviceLibrary).support, Support::Unsupported, "{id}");
+        let f = facts(
+            PartitionScheme::Mbr,
+            FilesystemKind::Fat32,
+            &[LibraryFormat::RekordboxDeviceLibrary],
+            standard_tracks(),
+        );
+        let a = assess_drive(&f, &[d], &r);
+        assert_eq!(a.devices[0].verdict, Verdict::FixNeeded, "{id}");
+    }
+    // The CDJ-3000 and XDJ-XZ still read the Device Library.
+    for id in ["cdj-3000", "xdj-xz", "cdj-2000nxs2"] {
+        assert_eq!(r.device(id).unwrap().library(LibraryFormat::RekordboxDeviceLibrary).support, Support::Supported);
+    }
 }

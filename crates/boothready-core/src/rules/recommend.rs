@@ -103,8 +103,10 @@ fn explain(targets: &[&DeviceProfile], scheme: PartitionScheme, fs: FilesystemKi
             .filter(|d| matches!(d.partition(PartitionScheme::Gpt).support, Support::Unsupported | Support::Unreliable))
             .collect();
         if !no_gpt.is_empty() {
+            let refused = no_gpt.iter().all(|d| d.partition(PartitionScheme::Gpt).support == Support::Unsupported);
             parts.push(format!(
-                "The drive gets an MBR partition table, because the GUID partition map macOS uses by default isn't reliably recognised by the {}.",
+                "The drive gets an MBR partition table, because the GUID partition map macOS uses by default {} by the {}.",
+                if refused { "isn't supported" } else { "isn't reliably recognised" },
                 join_models(&no_gpt)
             ));
         }

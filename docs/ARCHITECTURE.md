@@ -39,6 +39,12 @@ The core has no OS dependencies. Everything that touches a real device goes thro
 
 `data/ruleset.json` is the only place hardware knowledge lives. A claim reads like `"supported/vendor"`, meaning a support level from supported, unsupported, unreliable and unknown combined with an evidence level from vendor, lab, community, inferred and unknown. A claim that asserts support with unknown evidence fails to load.
 
+Evidence has to point at something. The ruleset holds a table of references, each with a title, an https link, the date it was read and whether it's a vendor document or a community report, and every device lists the references behind each aspect (partition tables, filesystems, library formats, folder browsing, audio, USB power). A ruleset where a vendor claim cites no vendor document for that aspect, or a community claim cites no forum report, fails to load, and so does a signed update with the same gap. Claims no document covers are marked inferred, and the UI says so. `boothready rules device <id>` prints a profile with the documents it cites.
+
+Quirks are notes that ride along with a device verdict, like the CDJ-3000 needing firmware 1.20 for exFAT. A quirk can be limited to drives with a given filesystem or partition scheme, so an exFAT warning never shows up for a FAT32 stick.
+
+The current ruleset was checked on 27 September 2026 against AlphaTheta's help center articles, product pages and notices, Denon DJ and Engine DJ support articles and user guides, the Mixxx manual, and threads on the Pioneer DJ and Engine DJ community forums. Where a document confirms FAT32 support it describes MBR-partitioned sticks and names the GUID partition map as the exception, so it also backs the MBR claim.
+
 Each layer contributes a verdict, and the device verdict is the worst of them:
 
 | Verdict | Meaning |
@@ -47,7 +53,7 @@ Each layer contributes a verdict, and the device verdict is the worst of them:
 | Expected to work | Passes, but some evidence is inferred or community-reported |
 | Partly ready | Some tracks won't play, or the export is out of date |
 | Not enough data | A layer has no reliable data for this device |
-| At risk | The vendor warns it may not work (GPT on a CDJ-3000, power draw, dirty filesystem) |
+| At risk | The vendor warns it may not work (power draw, a dirty filesystem, a partition that isn't first) |
 | Fix needed | Documented not to work |
 
 An untested USB model doesn't block Ready, because the format decides compatibility, but the physical column always shows that the exact stick hasn't been tested. OneLibrary databases are encrypted, so their presence can be checked but their contents can't, and any device that relies on them tops out at Expected to work.
@@ -94,7 +100,7 @@ The Tauri commands in `app/src-tauri/src/lib.rs` are thin wrappers that run engi
 
 ## What still needs verifying
 
-- **Rules.** `ruleset.json` is seed data. Every `vendor` claim needs checking against current manuals and firmware notes, and the OneLibrary file name (`PIONEER/rekordbox/exportLibrary.db`) needs confirming against a rekordbox 7.2.x export. No claim is lab verified.
+- **Rules.** The ruleset cites a document for every vendor and community claim, but the documents were read through web search excerpts because this project's build environment couldn't open AlphaTheta's, Denon's or Reddit's sites directly. The links should be opened and the claims re-read against the full pages, starting with the per-model audio details. Reddit hasn't been searched at all. The CDJ-900NXS, CDJ-2000NXS and XDJ-700 audio lists, the XDJ-XZ's ALAC support and the new CDJ-1500X and XDJ-AN audio specs are still inferred, and so is GPT behaviour on most players. No claim is lab verified.
 - **Hardware.** The macOS and Windows backends parse sample `diskutil`, `ioreg` and IOCTL output in tests, and CI runs them against each runner's own disks, but they haven't enumerated, erased or ejected a real USB stick. That needs doing with a set of sticks before any public build.
 - **APFS sticks on macOS.** The volumes of an APFS partition live on a synthesized container disk, which the backend maps back to the partition from `diskutil list -plist virtual`. That's tested against sample output and against the CI runner's startup disk, but not yet against an APFS-formatted USB stick.
 - **FAT32 output on players.** The layout matches mkfs.fat's and passes `fsck.fat`, but it has to be tried on CDJs from each generation.

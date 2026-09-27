@@ -337,7 +337,18 @@ fn main() -> Result<()> {
             }
             RulesCmd::Device { id } => {
                 let d = rules.device(id).with_context(|| format!("unknown device '{id}'"))?;
-                print_json(d)?;
+                // The profile plus the documents it cites, so every claim can
+                // be checked at its source.
+                let cited: std::collections::BTreeMap<_, _> = d
+                    .sources
+                    .values()
+                    .flatten()
+                    .chain(d.quirks.iter().flat_map(|q| &q.sources))
+                    .map(|id| (id, &rules.references[id]))
+                    .collect();
+                let mut v = serde_json::to_value(d)?;
+                v["references"] = serde_json::to_value(cited)?;
+                print_json(&v)?;
             }
             RulesCmd::Why { targets } => {
                 let devs = resolve_targets(&rules, targets)?;

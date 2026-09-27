@@ -41,6 +41,7 @@ import {
   raw,
   Raw,
   ROLE_LABEL,
+  RULES_STATUS,
   when,
 } from "./ui";
 
@@ -653,7 +654,7 @@ function shell(content: Raw): Raw {
     </main>
     <footer class="foot">
       <span>BoothReady ${info?.version ?? ""}</span>
-      <span>Compatibility rules v${info?.rules_version ?? "?"}${info?.rules_review_status === "seed" ? " (seed data, awaiting review against vendor documentation)" : ""}</span>
+      <span>Compatibility rules v${info?.rules_version ?? "?"}${RULES_STATUS[info?.rules_review_status ?? ""] ?? ""}</span>
       <span>Runs locally. Nothing about your music leaves this computer.</span>
     </footer>
     <div aria-live="polite" class="sr-only" id="live">${S.toast ?? ""}</div>
