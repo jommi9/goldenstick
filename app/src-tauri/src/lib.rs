@@ -279,6 +279,21 @@ fn confirm_identity(state: State<'_, AppState>, device_id: String, catalog_id: S
 
 // ---------------------------------------------------------------- rules
 
+/// Save a diagnostics report to the Downloads folder and return its path.
+#[tauri::command]
+async fn save_diagnostics(app: AppHandle, state: State<'_, AppState>) -> Res<String> {
+    let platform = state.platform();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        boothready_platform::diagnostics::collect(platform.as_ref(), env!("CARGO_PKG_VERSION"))
+    })
+    .await
+    .map_err(e2s)?;
+    let dir = app.path().download_dir().or_else(|_| app.path().home_dir()).map_err(e2s)?;
+    let path = dir.join(format!("boothready-diagnostics-{}-{}.json", report.os, report.created_unix));
+    std::fs::write(&path, serde_json::to_vec_pretty(&report).map_err(e2s)?).map_err(e2s)?;
+    Ok(path.display().to_string())
+}
+
 #[tauri::command]
 fn presets(state: State<'_, AppState>) -> Vec<Preset> {
     state.rules.presets.clone()
@@ -769,6 +784,7 @@ pub fn run() {
             demo_remove,
             demo_reset,
             demo_simulate_export,
+            save_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BoothReady");

@@ -330,6 +330,87 @@ pub fn build_device(
     }
 }
 
+/// Build the device list from `diskutil list -plist physical`, the APFS
+/// containers from `diskutil list -plist virtual`, `ioreg` output and a way
+/// to get `diskutil info -plist <id>` for each disk and partition. The live
+/// backend and diagnostics replay both go through here.
+pub fn assemble(
+    list: &[DiskListEntry],
+    apfs: &HashMap<String, Vec<ApfsVolume>>,
+    ioreg: &[u8],
+    info: impl Fn(&str) -> Option<Vec<u8>>,
+) -> Result<Vec<PhysicalDevice>, crate::PlatformError> {
+    let usb = parse_ioreg_usb(ioreg).unwrap_or_default();
+    let disk_info = |id: &str| info(id).and_then(|b| parse_disk_info(&b).ok());
+    let mut devs = Vec::new();
+    for entry in list {
+        let whole = disk_info(&entry.id)
+            .ok_or_else(|| crate::PlatformError::Failed(format!("diskutil info {} failed", entry.id)))?;
+        let parts: Vec<DiskInfo> = entry.partitions.iter().map(|p| disk_info(&p.id).unwrap_or_default()).collect();
+        devs.push(build_device(entry, &whole, &parts, usb.get(&entry.id), apfs));
+    }
+    Ok(devs)
+}
+
+const DISKUTIL: &str = "/usr/sbin/diskutil";
+const IOREG: &str = "/usr/sbin/ioreg";
+const LIST_PHYSICAL: [&str; 4] = [DISKUTIL, "list", "-plist", "physical"];
+const LIST_VIRTUAL: [&str; 4] = [DISKUTIL, "list", "-plist", "virtual"];
+const IOREG_USB: [&str; 6] = [IOREG, "-r", "-c", "IOUSBHostDevice", "-l", "-a"];
+
+/// Keep only the USB devices that carry a disk, so a report doesn't list
+/// the keyboards, phones and hubs on the machine.
+pub fn storage_only_ioreg(bytes: &[u8]) -> Option<Vec<u8>> {
+    let devices = match plist::from_bytes::<Value>(bytes).ok()? {
+        Value::Array(a) => a,
+        v => vec![v],
+    };
+    let kept: Vec<Value> = devices
+        .into_iter()
+        .filter(|v| {
+            v.as_dictionary().is_some_and(|d| {
+                let mut names = Vec::new();
+                collect_bsd_names(d, &mut names);
+                !names.is_empty()
+            })
+        })
+        .collect();
+    let mut out = Vec::new();
+    Value::Array(kept).to_writer_xml(&mut out).ok()?;
+    Some(out)
+}
+
+/// Rebuild a Mac's device list from a diagnostics report.
+pub fn replay(d: &crate::diagnostics::Diagnostics) -> Option<Result<Vec<PhysicalDevice>, crate::PlatformError>> {
+    let list = parse_disk_list(&d.output(&LIST_PHYSICAL)?).ok()?;
+    let apfs = d.output(&LIST_VIRTUAL).and_then(|v| parse_apfs_containers(&v).ok()).unwrap_or_default();
+    let ioreg = d.output(&IOREG_USB).unwrap_or_default();
+    Some(assemble(&list, &apfs, &ioreg, |id| d.output(&[DISKUTIL, "info", "-plist", id])))
+}
+
+/// The raw output a report needs to replay this Mac's listing.
+#[cfg(target_os = "macos")]
+pub(crate) fn captures() -> Vec<crate::diagnostics::Capture> {
+    use crate::diagnostics::Capture;
+    let list = Capture::command(LIST_PHYSICAL[0], &LIST_PHYSICAL[1..]);
+    let ids: Vec<String> = list
+        .decoded()
+        .and_then(|b| parse_disk_list(&b).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|e| std::iter::once(e.id).chain(e.partitions.into_iter().map(|p| p.id)))
+        .collect();
+    let mut out = vec![list, Capture::command(LIST_VIRTUAL[0], &LIST_VIRTUAL[1..])];
+    let mut ioreg = Capture::command(IOREG_USB[0], &IOREG_USB[1..]);
+    if let Some(text) = ioreg.text.take() {
+        ioreg.text = storage_only_ioreg(text.as_bytes()).map(|b| String::from_utf8_lossy(&b).into_owned());
+    }
+    out.push(ioreg);
+    out.extend(ids.iter().map(|id| Capture::command(DISKUTIL, &["info", "-plist", id])));
+    out.push(Capture::command("/usr/bin/sw_vers", &[]));
+    out
+}
+
 #[cfg(target_os = "macos")]
 pub use imp::MacPlatform;
 
@@ -344,19 +425,16 @@ mod imp {
     type Listing = (Vec<DiskListEntry>, HashMap<String, Vec<ApfsVolume>>);
     static CACHE: Mutex<Option<(Listing, Vec<PhysicalDevice>)>> = Mutex::new(None);
 
-    fn info(id: &str) -> Result<DiskInfo, PlatformError> {
-        let out = std::process::Command::new("/usr/sbin/diskutil").args(["info", "-plist", id]).output()?;
-        parse_disk_info(&out.stdout).map_err(|e| PlatformError::Failed(e.to_string()))
+    fn output(cmd: &[&str]) -> Result<Vec<u8>, PlatformError> {
+        Ok(std::process::Command::new(cmd[0]).args(&cmd[1..]).output()?.stdout)
     }
 
     impl Platform for MacPlatform {
         fn list_devices(&self) -> Result<Vec<PhysicalDevice>, PlatformError> {
-            let out = std::process::Command::new("/usr/sbin/diskutil").args(["list", "-plist", "physical"]).output()?;
-            let list = parse_disk_list(&out.stdout).map_err(|e| PlatformError::Failed(e.to_string()))?;
+            let list = parse_disk_list(&output(&LIST_PHYSICAL)?).map_err(|e| PlatformError::Failed(e.to_string()))?;
             // APFS volumes mount on a synthesized disk, so their mount points
             // only change in the virtual listing.
-            let virt = std::process::Command::new("/usr/sbin/diskutil").args(["list", "-plist", "virtual"]).output()?;
-            let apfs = parse_apfs_containers(&virt.stdout).unwrap_or_default();
+            let apfs = parse_apfs_containers(&output(&LIST_VIRTUAL)?).unwrap_or_default();
             let listing = (list, apfs);
             // diskutil info is slow; only re-query when a listing changed.
             let mut cache = CACHE.lock().unwrap();
@@ -366,16 +444,8 @@ mod imp {
                 }
             }
             let (list, apfs) = &listing;
-            let ioreg = std::process::Command::new("/usr/sbin/ioreg")
-                .args(["-r", "-c", "IOUSBHostDevice", "-l", "-a"])
-                .output()?;
-            let usb = parse_ioreg_usb(&ioreg.stdout).unwrap_or_default();
-            let mut devs = Vec::new();
-            for entry in list {
-                let whole = info(&entry.id)?;
-                let parts: Vec<DiskInfo> = entry.partitions.iter().map(|p| info(&p.id).unwrap_or_default()).collect();
-                devs.push(build_device(entry, &whole, &parts, usb.get(&entry.id), apfs));
-            }
+            let ioreg = output(&IOREG_USB)?;
+            let devs = assemble(list, apfs, &ioreg, |id| output(&[DISKUTIL, "info", "-plist", id]).ok())?;
             *cache = Some((listing, devs.clone()));
             Ok(devs)
         }
@@ -494,6 +564,48 @@ mod tests {
   </array>
  </dict>
 </array></plist>"#;
+
+    #[test]
+    fn a_diagnostics_report_replays_on_any_os() {
+        use crate::diagnostics::{replay, Capture, Diagnostics};
+        const INFO_DISK0: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>BusProtocol</key><string>Apple Fabric</string><key>Internal</key><true/></dict></plist>"#;
+        // Only USB devices carrying a disk make it into a report.
+        let with_keyboard = IOREG.replace(
+            "</array></plist>",
+            "<dict><key>USB Product Name</key><string>Magic Keyboard</string></dict></array></plist>",
+        );
+        let ioreg = String::from_utf8(storage_only_ioreg(with_keyboard.as_bytes()).unwrap()).unwrap();
+        assert!(ioreg.contains("SanDisk 3.2Gen1") && !ioreg.contains("Magic Keyboard"), "{ioreg}");
+
+        let mut captures = vec![Capture::text(&LIST_PHYSICAL, LIST), Capture::text(&IOREG_USB, ioreg)];
+        for (id, info) in [("disk0", INFO_DISK0), ("disk4", INFO_DISK4), ("disk4s1", INFO_DISK4S1)] {
+            captures.push(Capture::text(&[DISKUTIL, "info", "-plist", id], info));
+        }
+        let mut report = Diagnostics {
+            format: crate::diagnostics::FORMAT,
+            boothready_version: "0.1.0".into(),
+            created_unix: 0,
+            os: "macos".into(),
+            arch: "aarch64".into(),
+            backend: "macos".into(),
+            devices: Vec::new(),
+            error: None,
+            captures,
+        };
+        let devs = replay(&report).unwrap().unwrap();
+        let list = parse_disk_list(LIST.as_bytes()).unwrap();
+        let usb = parse_ioreg_usb(IOREG.as_bytes()).unwrap();
+        let whole = parse_disk_info(INFO_DISK4.as_bytes()).unwrap();
+        let part = parse_disk_info(INFO_DISK4S1.as_bytes()).unwrap();
+        assert_eq!(devs.len(), 2);
+        assert_eq!(devs[1], build_device(&list[1], &whole, &[part], usb.get("disk4"), &HashMap::new()));
+        assert!(devs[0].is_system);
+
+        // Missing whole-disk output fails the listing, as it does live.
+        report.captures.retain(|c| c.source.last().map(String::as_str) != Some("disk0"));
+        assert!(replay(&report).unwrap().is_err());
+    }
 
     #[test]
     fn assembles_usb_stick_from_diskutil_and_ioreg() {

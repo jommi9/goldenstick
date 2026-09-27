@@ -57,6 +57,8 @@ export interface Api {
   demoRemove(name: string): Promise<void>;
   demoReset(): Promise<void>;
   demoSimulateExport(deviceId: string, legacySafe: boolean): Promise<void>;
+  /** Writes a diagnostics report to the Downloads folder; returns its path. */
+  saveDiagnostics(): Promise<string>;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
   onScanProgress(cb: (p: { device_id: string; files: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
@@ -108,6 +110,7 @@ async function tauriApi(): Promise<Api> {
     demoRemove: (name) => invoke("demo_remove", { name }),
     demoReset: () => invoke("demo_reset"),
     demoSimulateExport: (deviceId, legacySafe) => invoke("demo_simulate_export", { deviceId, legacySafe }),
+    saveDiagnostics: () => invoke("save_diagnostics"),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),
