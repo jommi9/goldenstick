@@ -10,6 +10,19 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Raw output for a diagnostics report. Linux isn't a release target, so
+/// this is for comparing against `lsblk`, not for replay.
+pub(crate) fn captures() -> Vec<crate::diagnostics::Capture> {
+    use crate::diagnostics::Capture;
+    vec![
+        Capture::command(
+            "lsblk",
+            &["-J", "-b", "-o", "NAME,SIZE,TYPE,TRAN,RM,PTTYPE,PARTTYPE,FSTYPE,LABEL,MOUNTPOINT,MODEL,VENDOR"],
+        ),
+        Capture::command("uname", &["-sr"]),
+    ]
+}
+
 pub struct LinuxPlatform {
     sys: PathBuf,
     mountinfo: PathBuf,

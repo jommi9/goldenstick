@@ -6,6 +6,7 @@
 //! drive letter or mount point, because those change.
 
 pub mod demo;
+pub mod diagnostics;
 #[cfg(target_os = "linux")]
 pub mod linux;
 pub mod macos;

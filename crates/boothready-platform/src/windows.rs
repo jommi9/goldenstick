@@ -142,7 +142,8 @@ struct Descriptor {
     serial: Option<String>,
 }
 
-fn descriptor(h: &Handle) -> Option<Descriptor> {
+/// The raw `STORAGE_DEVICE_DESCRIPTOR` buffer, strings included.
+fn descriptor_raw(h: &Handle) -> Option<Vec<u8>> {
     let q = STORAGE_PROPERTY_QUERY {
         PropertyId: StorageDeviceProperty,
         QueryType: PropertyStandardQuery,
@@ -152,7 +153,11 @@ fn descriptor(h: &Handle) -> Option<Descriptor> {
     let qb = unsafe {
         std::slice::from_raw_parts(&q as *const _ as *const u8, std::mem::size_of::<STORAGE_PROPERTY_QUERY>())
     };
-    let buf = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, Some(qb), 1024)?;
+    ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, Some(qb), 1024)
+}
+
+fn descriptor(h: &Handle) -> Option<Descriptor> {
+    let buf = descriptor_raw(h)?;
     let d: STORAGE_DEVICE_DESCRIPTOR = read_struct(&buf)?;
     Some(Descriptor {
         bus_usb: d.BusType == BusTypeUsb,
@@ -276,6 +281,8 @@ fn system_disks(vols: &[VolumeRec]) -> HashSet<u32> {
 struct UsbIdentity {
     desc: UsbDescriptor,
     devinst: u32,
+    /// "USB\VID_0781&PID_5581\<serial>", kept for diagnostics.
+    instance_id: String,
 }
 
 /// Map disk numbers to the USB device instance above each disk.
@@ -335,13 +342,61 @@ fn usb_by_disk_number() -> HashMap<u32, UsbIdentity> {
                 }
                 let id = from_wide(&id);
                 if let Some(desc) = parse_usb_instance_id(&id) {
-                    out.insert(num.DeviceNumber, UsbIdentity { desc, devinst: inst });
+                    out.insert(num.DeviceNumber, UsbIdentity { desc, devinst: inst, instance_id: id });
                     break;
                 }
             }
         }
         let _ = SetupDiDestroyDeviceInfoList(info);
     }
+    out
+}
+
+/// PowerShell's own view of the disks, to hold our reading against.
+const POWERSHELL_DISKS: &str = "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,OSArchitecture | ConvertTo-Json; \
+Get-Disk | Select-Object Number,FriendlyName,BusType,PartitionStyle,Size,LogicalSectorSize,IsSystem,IsBoot,IsOffline | ConvertTo-Json; \
+Get-Partition | Select-Object DiskNumber,PartitionNumber,Offset,Size,Type,GptType,MbrType,DriveLetter,IsSystem | ConvertTo-Json; \
+Get-Volume | Select-Object DriveLetter,FileSystemLabel,FileSystem,DriveType,Size,SizeRemaining,AllocationUnitSize | ConvertTo-Json";
+
+/// Raw output for a diagnostics report: the IOCTL buffers each drive
+/// answered with, every volume with its disk extent, the USB instance above
+/// each disk, and PowerShell's view of the same disks.
+pub(crate) fn captures() -> Vec<crate::diagnostics::Capture> {
+    use crate::diagnostics::Capture;
+    let mut out = Vec::new();
+    for n in 0..64u32 {
+        let Some(h) = open(&format!("\\\\.\\PhysicalDrive{n}"), 0) else { continue };
+        let drive = format!("PhysicalDrive{n}");
+        let buffers = [
+            ("IOCTL_STORAGE_QUERY_PROPERTY", descriptor_raw(&h)),
+            ("IOCTL_DISK_GET_DRIVE_GEOMETRY_EX", ioctl(&h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, None, 256)),
+            ("IOCTL_DISK_GET_DRIVE_LAYOUT_EX", ioctl(&h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, None, 4096)),
+        ];
+        for (call, buf) in buffers {
+            out.push(match buf {
+                Some(b) => Capture::bytes(&[call, &drive], &b),
+                None => Capture::failed(&[call, &drive], "no answer"),
+            });
+        }
+    }
+    for v in volumes() {
+        let d = volume_details(&v.guid_path);
+        let rec = serde_json::json!({
+            "disk": v.disk,
+            "offset": v.offset,
+            "length": v.length,
+            "mount": d.mount,
+            "label": d.label,
+            "filesystem": d.fs,
+        });
+        out.push(Capture::text(&["IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS", &v.guid_path], rec.to_string()));
+    }
+    let mut usb: Vec<(u32, UsbIdentity)> = usb_by_disk_number().into_iter().collect();
+    usb.sort_by_key(|(n, _)| *n);
+    for (n, id) in usb {
+        out.push(Capture::text(&["CM_Get_Device_IDW", &format!("PhysicalDrive{n}")], id.instance_id));
+    }
+    out.push(Capture::command("powershell.exe", &["-NoProfile", "-NonInteractive", "-Command", POWERSHELL_DISKS]));
     out
 }
 

@@ -41,6 +41,7 @@ import {
   raw,
   Raw,
   ROLE_LABEL,
+  RULES_STATUS,
   when,
 } from "./ui";
 
@@ -601,6 +602,13 @@ async function act(el: HTMLElement) {
       S.alert = null;
       render();
       break;
+    case "save-diagnostics":
+      try {
+        toast(`Diagnostics saved to ${await S.api.saveDiagnostics()}`);
+      } catch (e) {
+        toast(`Couldn't save diagnostics: ${e}`);
+      }
+      break;
   }
 }
 
@@ -653,8 +661,9 @@ function shell(content: Raw): Raw {
     </main>
     <footer class="foot">
       <span>BoothReady ${info?.version ?? ""}</span>
-      <span>Compatibility rules v${info?.rules_version ?? "?"}${info?.rules_review_status === "seed" ? " (seed data, awaiting review against vendor documentation)" : ""}</span>
+      <span>Compatibility rules v${info?.rules_version ?? "?"}${RULES_STATUS[info?.rules_review_status ?? ""] ?? ""}</span>
       <span>Runs locally. Nothing about your music leaves this computer.</span>
+      <button class="btn link small" data-act="save-diagnostics" title="Saves how BoothReady reads your drives to a file in Downloads, for bug reports. No file names.">Save diagnostics</button>
     </footer>
     <div aria-live="polite" class="sr-only" id="live">${S.toast ?? ""}</div>
     ${S.toast ? html`<div class="toast" role="status">${S.toast}</div>` : ""}

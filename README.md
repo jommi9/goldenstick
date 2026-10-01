@@ -44,6 +44,8 @@ scripts/build-helper-sidecar.sh            # or: scripts/build-helper-sidecar.sh
 cd app && npm ci && npx tauri build --config src-tauri/tauri.release.conf.json
 ```
 
+[`docs/FIELD-TEST.md`](docs/FIELD-TEST.md) walks through a first test with real sticks. When a drive is misread, **Save diagnostics** in the app's footer, or `boothready diagnose`, writes a report of how BoothReady and the OS each see the machine's drives. It holds no file names.
+
 The release config ships `boothready-helper` next to the app's executable. A development build looks in the same place, which is `target/debug` once you've run `cargo build -p boothready-helper`, and `BOOTHREADY_HELPER` can point it somewhere else.
 
 ## What's here
@@ -69,4 +71,4 @@ On Linux the image tests use `sfdisk`, `sgdisk`, `mkfs.fat`, `mkfs.exfat`, `fsck
 
 ## Status
 
-The engine is tested against real rekordbox exports, ffmpeg-encoded audio and disk images built with the standard Linux tools. The macOS and Windows device backends run their parsers in tests and enumerate the CI runners' own disks, but haven't touched a real USB stick yet. The compatibility rules are seed data that still need checking against current manufacturer documentation, and the app says so on every screen. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#what-still-needs-verifying) lists what has to happen before anyone relies on this at a gig.
+The engine is tested against real rekordbox exports, ffmpeg-encoded audio and disk images built with the standard Linux tools. The macOS and Windows device backends run their parsers in tests and enumerate the CI runners' own disks, but haven't touched a real USB stick yet. The compatibility rules cite a vendor document or a forum report for every documented claim and mark everything else as inferred, but none of them has been tested on hardware yet, and the app says so on every screen. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#what-still-needs-verifying) lists what has to happen before anyone relies on this at a gig.

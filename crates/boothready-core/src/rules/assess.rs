@@ -4,7 +4,7 @@
 //! false "Needs attention" only costs a few minutes.
 
 use super::evaluate::{evaluate_audio, TrackVerdict};
-use super::model::{Claim, DeviceProfile, Evidence, Support};
+use super::model::{Claim, DeviceKind, DeviceProfile, Evidence, Support};
 use super::recommend::{recommend_format, FormatRecommendation};
 use super::Ruleset;
 use crate::audio::AudioInfo;
@@ -695,7 +695,8 @@ pub fn assess_device(
     format: &FormatRecommendation,
 ) -> DeviceAssessment {
     let mut fixes = Vec::new();
-    let mut notes: Vec<String> = d.quirks.iter().map(|q| q.text.clone()).collect();
+    let mut notes: Vec<String> =
+        d.quirks.iter().filter(|q| q.applies(facts.scheme, facts.filesystem)).map(|q| q.text.clone()).collect();
     let physical = physical_layer(d, facts, rules);
 
     let mut partition =
@@ -925,9 +926,9 @@ pub fn general_headline(facts: &DriveFacts, rules: &Ruleset) -> String {
         "Fine for newer players, won't work on older ones".into()
     } else if pioneer.iter().any(|d| loose(d)) {
         "DJ players may not recognise this drive as formatted".into()
-    } else if rules.devices.iter().any(strict) {
+    } else if rules.devices.iter().any(|d| d.kind != DeviceKind::Software && strict(d)) {
         "Only suits some DJ equipment as formatted".into()
     } else {
-        "Not ready for DJ hardware as formatted".into()
+        "DJ players won't recognise this drive as formatted".into()
     }
 }

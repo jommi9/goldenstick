@@ -117,6 +117,14 @@ enum Cmd {
     },
     /// Safely eject a drive.
     Eject { device: String },
+    /// Save a report of how BoothReady reads this machine's drives, with
+    /// the raw OS output behind it. Holds disk and volume names, sizes,
+    /// layouts and USB IDs, no file names.
+    Diagnose {
+        /// Where to write the report (default: boothready-diagnostics-<os>-<time>.json).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Build an MBR + FAT32 disk image (never touches devices).
     MakeImage {
         path: PathBuf,
@@ -189,6 +197,28 @@ fn main() -> Result<()> {
     let rules = Ruleset::builtin();
     let catalog = UsbCatalog::builtin();
     match &cli.cmd {
+        Cmd::Diagnose { out } => {
+            let b = backend(&cli);
+            let report = boothready_platform::diagnostics::collect(b.platform(), env!("CARGO_PKG_VERSION"));
+            let path = out
+                .clone()
+                .unwrap_or_else(|| format!("boothready-diagnostics-{}-{}.json", report.os, report.created_unix).into());
+            std::fs::write(&path, serde_json::to_vec_pretty(&report)?)
+                .with_context(|| format!("couldn't write {}", path.display()))?;
+            if cli.json {
+                return print_json(
+                    &serde_json::json!({ "path": path, "devices": report.devices.len(), "captures": report.captures.len(), "error": report.error }),
+                );
+            }
+            println!(
+                "Saved {} ({} drives, {} pieces of OS output{}).",
+                path.display(),
+                report.devices.len(),
+                report.captures.len(),
+                report.error.as_ref().map(|e| format!("; listing failed: {e}")).unwrap_or_default()
+            );
+            println!("It lists disk and volume names, sizes, partition layouts and USB IDs. It holds no file names.");
+        }
         Cmd::Devices => {
             let b = backend(&cli);
             let devices = b.platform().list_devices()?;
@@ -337,7 +367,18 @@ fn main() -> Result<()> {
             }
             RulesCmd::Device { id } => {
                 let d = rules.device(id).with_context(|| format!("unknown device '{id}'"))?;
-                print_json(d)?;
+                // The profile plus the documents it cites, so every claim can
+                // be checked at its source.
+                let cited: std::collections::BTreeMap<_, _> = d
+                    .sources
+                    .values()
+                    .flatten()
+                    .chain(d.quirks.iter().flat_map(|q| &q.sources))
+                    .map(|id| (id, &rules.references[id]))
+                    .collect();
+                let mut v = serde_json::to_value(d)?;
+                v["references"] = serde_json::to_value(cited)?;
+                print_json(&v)?;
             }
             RulesCmd::Why { targets } => {
                 let devs = resolve_targets(&rules, targets)?;

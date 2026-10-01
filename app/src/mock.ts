@@ -225,6 +225,7 @@ export async function createMockApi(): Promise<Api> {
     cancelCopy: async () => {
       copyCancelled = true;
     },
+    saveDiagnostics: async () => "~/Downloads/boothready-diagnostics-demo.json",
     eject: async (id) => {
       inserted.delete(id);
       setTimeout(() => deviceEvent({ kind: "disappeared", id }), 300);

@@ -80,9 +80,15 @@ export const LIB_LABEL: Record<string, string> = {
 export const EVIDENCE_LABEL: Record<string, string> = {
   vendor: "Vendor documented",
   lab: "BoothReady lab verified",
-  community: "Community verified",
+  community: "Community reports",
   inferred: "Inferred",
   unknown: "No reliable evidence",
+};
+
+/** Footer note per ruleset review status. */
+export const RULES_STATUS: Record<string, string> = {
+  seed: " (seed data, awaiting review against vendor documentation)",
+  desk_reviewed: " (checked against vendor documentation and DJ forums, not yet tested on hardware)",
 };
 
 export const ROLE_LABEL: Record<string, string> = {

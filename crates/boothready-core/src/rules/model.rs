@@ -29,7 +29,7 @@ impl Evidence {
         match self {
             Evidence::Unknown => "No reliable evidence",
             Evidence::Inferred => "Inferred",
-            Evidence::Community => "Community verified",
+            Evidence::Community => "Community reports",
             Evidence::Vendor => "Vendor documented",
             Evidence::Lab => "BoothReady lab verified",
         }
@@ -157,6 +157,45 @@ pub struct Quirk {
     pub severity: Severity,
     pub evidence: Evidence,
     pub text: String,
+    /// Reference IDs backing a vendor or community quirk.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
+    /// Only mention the quirk for drives with one of these filesystems.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when_filesystem: Vec<FilesystemKind>,
+    /// Only mention the quirk for drives with one of these partition schemes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub when_scheme: Vec<PartitionScheme>,
+}
+
+impl Quirk {
+    pub fn applies(&self, scheme: PartitionScheme, filesystem: Option<FilesystemKind>) -> bool {
+        (self.when_scheme.is_empty() || self.when_scheme.contains(&scheme))
+            && (self.when_filesystem.is_empty() || filesystem.is_some_and(|f| self.when_filesystem.contains(&f)))
+    }
+}
+
+/// A document behind one or more claims. Kept at ruleset level because one
+/// vendor notice often covers several players.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reference {
+    pub title: String,
+    pub url: String,
+    /// What kind of evidence the document is: `vendor` for manufacturer
+    /// manuals, FAQs and notices, `community` for forum reports.
+    pub kind: Evidence,
+    /// When the page was last read, as YYYY-MM-DD.
+    pub accessed: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl Reference {
+    /// "Title (host)", short enough for one line under a verdict.
+    pub fn cite(&self) -> String {
+        let host = self.url.split("://").nth(1).unwrap_or(&self.url).split('/').next().unwrap_or_default();
+        format!("{} ({host})", self.title)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,9 +232,13 @@ pub struct DeviceProfile {
     pub usb_power_ma: Option<PowerClaim>,
     #[serde(default)]
     pub quirks: Vec<Quirk>,
+    /// Reference IDs per aspect ("filesystems", "audio", ...).
     #[serde(default)]
-    pub sources: BTreeMap<String, String>,
+    pub sources: BTreeMap<String, Vec<String>>,
     pub last_reviewed: Option<String>,
+    /// `sources` resolved to readable citations when the ruleset loads.
+    #[serde(skip)]
+    pub(crate) cited: BTreeMap<String, String>,
 }
 
 impl DeviceProfile {
@@ -220,8 +263,23 @@ impl DeviceProfile {
         self.library_formats.iter().filter(|(_, c)| c.support == Support::Supported).map(|(f, c)| (*f, *c)).collect()
     }
 
+    /// The documents behind an aspect, as one line of citations.
     pub fn source(&self, aspect: &str) -> Option<&str> {
-        self.sources.get(aspect).map(String::as_str)
+        self.cited.get(aspect).map(String::as_str)
+    }
+
+    /// Every (aspect, evidence) pair this profile claims, for checking that
+    /// each vendor or community claim cites a document of that kind.
+    pub(crate) fn claimed_evidence(&self) -> Vec<(&'static str, Evidence)> {
+        let mut out = Vec::new();
+        out.extend(self.partition_tables.values().map(|c| ("partition_tables", c.evidence)));
+        out.extend(self.filesystems.values().map(|c| ("filesystems", c.evidence)));
+        out.extend(self.library_formats.values().map(|c| ("library_formats", c.evidence)));
+        out.push(("folder_browsing", self.folder_browsing.evidence));
+        out.extend(self.audio.iter().map(|r| ("audio", r.evidence)));
+        out.extend(self.audio_list_exhaustive.map(|e| ("audio", e)));
+        out.extend(self.usb_power_ma.map(|p| ("usb_power_ma", p.evidence)));
+        out
     }
 }
 

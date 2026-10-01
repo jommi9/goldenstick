@@ -15,9 +15,13 @@ pub use model::*;
 pub use recommend::{recommend_format, FormatRecommendation};
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub const BUILTIN_RULESET: &str = include_str!("../../data/ruleset.json");
+
+/// Version 2 moved sources from free text to a table of dated, linked
+/// references that every vendor or community claim must cite.
+pub const SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ruleset {
@@ -25,9 +29,13 @@ pub struct Ruleset {
     /// Monotonic; signed updates must carry a higher number.
     pub version: u64,
     pub published: String,
+    /// "seed" (unchecked), "desk_reviewed" (checked against documents) or
+    /// "lab_verified".
     pub review_status: String,
     #[serde(default)]
     pub review_note: Option<String>,
+    #[serde(default)]
+    pub references: BTreeMap<String, Reference>,
     pub devices: Vec<DeviceProfile>,
     pub presets: Vec<Preset>,
     #[serde(default)]
@@ -48,22 +56,69 @@ impl Ruleset {
     }
 
     pub fn from_json(s: &str) -> Result<Ruleset, RulesError> {
-        let r: Ruleset = serde_json::from_str(s)?;
+        let mut r: Ruleset = serde_json::from_str(s)?;
         r.validate()?;
+        for d in &mut r.devices {
+            d.cited = d
+                .sources
+                .iter()
+                .map(|(aspect, ids)| {
+                    let line = ids.iter().map(|id| r.references[id].cite()).collect::<Vec<_>>().join("; ");
+                    (aspect.clone(), line)
+                })
+                .collect();
+        }
         Ok(r)
     }
 
     fn validate(&self) -> Result<(), RulesError> {
-        if self.schema != 1 {
-            return Err(RulesError::Invalid(format!("unsupported schema {}", self.schema)));
+        let invalid = |msg: String| Err(RulesError::Invalid(msg));
+        if self.schema != SCHEMA {
+            return invalid(format!("unsupported schema {}", self.schema));
         }
+        for (id, r) in &self.references {
+            if !r.url.starts_with("https://") {
+                return invalid(format!("reference {id} needs an https URL"));
+            }
+            if !matches!(r.kind, Evidence::Vendor | Evidence::Community | Evidence::Lab) {
+                return invalid(format!("reference {id} must be vendor, community or lab evidence"));
+            }
+        }
+        // A claim is only as strong as the document behind it: "vendor" needs
+        // a manufacturer document for that aspect, "community" a forum report.
+        let cites = |ids: &[String], kind: Evidence| ids.iter().any(|id| self.references[id].kind == kind);
         let mut ids = HashSet::new();
         for d in &self.devices {
             if !ids.insert(d.id.as_str()) {
-                return Err(RulesError::Invalid(format!("duplicate device id {}", d.id)));
+                return invalid(format!("duplicate device id {}", d.id));
             }
             if d.audio.iter().any(|r| r.codecs.is_empty()) {
-                return Err(RulesError::Invalid(format!("{}: audio rule with no codecs", d.id)));
+                return invalid(format!("{}: audio rule with no codecs", d.id));
+            }
+            let quirk_refs = d.quirks.iter().flat_map(|q| &q.sources);
+            if let Some(id) =
+                d.sources.values().flatten().chain(quirk_refs).find(|id| !self.references.contains_key(*id))
+            {
+                return invalid(format!("{} cites unknown reference {id}", d.id));
+            }
+            for (aspect, ev) in d.claimed_evidence() {
+                if matches!(ev, Evidence::Vendor | Evidence::Community | Evidence::Lab)
+                    && !cites(d.sources.get(aspect).map(Vec::as_slice).unwrap_or_default(), ev)
+                {
+                    return invalid(format!("{}: {aspect} claims {} evidence without citing any", d.id, ev.label()));
+                }
+            }
+            for q in &d.quirks {
+                if matches!(q.evidence, Evidence::Vendor | Evidence::Community | Evidence::Lab)
+                    && !cites(&q.sources, q.evidence)
+                {
+                    return invalid(format!(
+                        "{}: quirk {} claims {} evidence without citing any",
+                        d.id,
+                        q.id,
+                        q.evidence.label()
+                    ));
+                }
             }
         }
         for p in &self.presets {
