@@ -2,6 +2,7 @@
 
 mod demo;
 mod render;
+mod testlab;
 
 use anyhow::{bail, Context, Result};
 use boothready_core::copy::{plan_copy, run_copy, CopyTarget};
@@ -139,6 +140,9 @@ enum Cmd {
     /// Create and manage simulated USB drives for demos.
     #[command(subcommand)]
     Demo(demo::DemoCmd),
+    /// Run the virtual matrix or a read-only test against one real USB.
+    #[command(subcommand)]
+    Test(testlab::TestCmd),
 }
 
 #[derive(Subcommand)]
@@ -390,6 +394,7 @@ fn main() -> Result<()> {
             }
         },
         Cmd::Demo(d) => demo::run(d, &cli.demo)?,
+        Cmd::Test(t) => testlab::run(t, &cli, &rules, &catalog)?,
     }
     Ok(())
 }

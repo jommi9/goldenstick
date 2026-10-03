@@ -9,6 +9,8 @@ This is the first run of BoothReady against real USB sticks, on a Mac and on a W
 - On a Mac, ideally also a stick formatted as APFS in Disk Utility.
 - rekordbox 7.2.11 or later, for the export step.
 
+Use the connection setup you expect to use at a gig. If the computer needs a USB-C adapter or hub, leave it in place for the test and note its make, model and whether it is powered. BoothReady evaluates the storage device behind that connection, while the negotiated link speed and the operating system's view remain part of the diagnostics report.
+
 Nothing here touches your internal disk or any stick you don't pick, but only use sticks whose contents you don't need.
 
 ## Whenever something looks wrong
@@ -19,6 +21,8 @@ The file lists disk and volume names, sizes, partition layouts and USB IDs, as B
 
 From a terminal, `boothready diagnose` writes the same report.
 
+For a read-only end-to-end check of one named USB, run `boothready test real <exact-device-id> --out test-reports/real-<date>`. It saves diagnostics before and after the read and writes the compatibility assessment. It refuses system disks and never prepares, copies or ejects the device.
+
 ## Steps
 
 Do these on the Mac first, then repeat them on Windows. Note the result of each step, even when it works.
@@ -27,9 +31,10 @@ Do these on the Mac first, then repeat them on Windows. Note the result of each 
    - On the Mac, open the `.dmg`, drag BoothReady to Applications, then right-click it and choose Open, because the alpha is unsigned.
    - On Windows, run the `.msi`, and choose **More info**, then **Run anyway** if SmartScreen stops it.
    - Expected: the home screen says "Plug in a USB", and the footer says it runs locally.
-2. **Nothing plugged in.** Click Save diagnostics once before inserting any stick. This report is the baseline for your machine.
-3. **Insert the small stick.**
+2. **Nothing plugged in.** Open **Test lab** and click **Save baseline diagnostics** before inserting any stick. This report is the baseline for your machine. The same action is available as **Save diagnostics** in the footer.
+3. **Insert the small stick.** Use the Test lab device list to confirm its exact device ID, model and size before running the read-only USB test.
    - Expected: it appears within about two seconds with the right brand and size.
+   - If it is connected through an adapter or hub, the adapter is part of the setup being tested. BoothReady should still identify the stick itself rather than the adapter.
    - Your internal disk is never offered.
    - Save diagnostics if the brand, size, filesystem or partition scheme is wrong.
 4. **Assess it** for "Unknown club or festival equipment".

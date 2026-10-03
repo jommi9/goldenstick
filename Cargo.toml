@@ -5,6 +5,7 @@ members = [
     "crates/boothready-core",
     "crates/boothready-platform",
     "crates/boothready-helper",
+    "crates/boothready-testlab",
     "crates/boothready-cli",
     "app/src-tauri",
 ]
@@ -13,6 +14,7 @@ default-members = [
     "crates/boothready-core",
     "crates/boothready-platform",
     "crates/boothready-helper",
+    "crates/boothready-testlab",
     "crates/boothready-cli",
 ]
 
@@ -27,6 +29,7 @@ rust-version = "1.85"
 boothready-model = { path = "crates/boothready-model" }
 boothready-core = { path = "crates/boothready-core", default-features = false }
 boothready-platform = { path = "crates/boothready-platform" }
+boothready-testlab = { path = "crates/boothready-testlab" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

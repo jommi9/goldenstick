@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 boothready-model.workspace = true
 boothready-core = { workspace = true, features = ["sqlite", "fixtures"] }
 boothready-platform.workspace = true
+boothready-testlab.workspace = true
 boothready-helper = { path = "../../crates/boothready-helper" }
 tauri = { version = "2", features = [] }
 serde.workspace = true

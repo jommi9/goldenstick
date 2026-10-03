@@ -5,6 +5,7 @@ app/src-tauri/gen/schemas
 *.img
 .DS_Store
 app/screenshots
+/test-reports
 app/test-results
 app/src-tauri/binaries
 /research

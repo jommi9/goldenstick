@@ -2,6 +2,7 @@
 // wired through data-act attributes. Screens follow PRD §11-§43 and the
 // prototype flow in §99.
 
+import { inTauri } from "./api";
 import type { Api } from "./api";
 import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus } from "./art";
 import type {
@@ -26,6 +27,9 @@ import type {
   Preset,
   Role,
   RolePlan,
+  RealTestResult,
+  TestScenario,
+  VirtualTestSuite,
   VerifyProgress,
   VerifyReport,
 } from "./types";
@@ -60,7 +64,9 @@ type View =
   | { v: "copying"; id: string; from: string }
   | { v: "verify"; id: string }
   | { v: "ready" }
-  | { v: "kit-next"; role: Role };
+  | { v: "kit-next"; role: Role }
+  | { v: "testlab" }
+  | { v: "devtools" };
 
 interface Done {
   role: Role | null;
@@ -126,6 +132,18 @@ const S = {
   demoSticks: [] as DemoStickInfo[],
   known: [] as KnownMedia[],
   profiles: [] as GigProfile[],
+  testScenarios: [] as TestScenario[],
+  testLabScenario: "all",
+  testLabRunning: false,
+  testLabSuite: null as VirtualTestSuite | null,
+  testLabError: null as string | null,
+  testLabKeepFixtures: false,
+  testLabDeviceId: "",
+  testLabRealRunning: false,
+  testLabReal: null as RealTestResult | null,
+  testLabBaselinePath: null as string | null,
+  devLog: [] as string[],
+  demoEpoch: 0,
   busy: false,
 };
 
@@ -160,6 +178,60 @@ const summary = (id: string) => S.summaries.get(id);
 const nameOf = (id: string) => summary(id)?.identification.display_name ?? card(id)?.identification.display_name ?? "USB drive";
 const preset = () => S.presets.find((p) => p.id === S.presetId) ?? null;
 const hwName = (id: string) => S.hardware.find((h) => h.id === id)?.model ?? id;
+const devEnabled = () => Boolean(S.info?.demo || !inTauri);
+
+function devLog(message: string) {
+  if (!devEnabled()) return;
+  const stamp = new Date().toLocaleTimeString([], { hour12: false });
+  S.devLog.unshift(`${stamp} ${message}`);
+  if (S.devLog.length > 80) S.devLog.length = 80;
+}
+
+function devSnapshot(): string {
+  return JSON.stringify(
+    {
+      captured_at: new Date().toISOString(),
+      app: S.info,
+      view: S.view,
+      devices: S.devices.map((d) => ({
+        id: d.device.id,
+        name: d.identification.display_name,
+        bus: d.device.bus,
+        size_bytes: d.device.size_bytes,
+        is_system: d.device.is_system,
+        is_usb: d.is_usb,
+        partition_scheme: d.device.partition_scheme,
+        volumes: d.device.volumes.map((v) => ({ label: v.label, filesystem: v.filesystem, mount_point: v.mount_point, efi_system: v.efi_system })),
+      })),
+      summaries: [...S.summaries.entries()].map(([id, s]) => ({
+        id,
+        name: s.identification.display_name,
+        scheme: s.scheme,
+        filesystem: s.filesystem,
+        headline: s.headline,
+        verified: s.verified,
+        interrupted: s.interrupted,
+        connection: s.connection,
+      })),
+      scanning: [...S.scanning.entries()],
+      assessments: [...S.assessments.entries()].map(([id, a]) => ({ id, overall: a.overall, devices: a.devices.map((d) => ({ id: d.device_id, model: d.model, verdict: d.verdict })) })),
+      demo_sticks: S.demoSticks,
+      done: S.done.map((d) => ({ role: d.role, device_id: d.deviceId, name: d.name, tracks: d.tracks, playlists: d.playlists, passed: d.report.passed })),
+      test_lab: {
+        scenario: S.testLabScenario,
+        running: S.testLabRunning || S.testLabRealRunning,
+        suite: S.testLabSuite,
+        real: S.testLabReal
+          ? { device_id: S.testLabReal.device.id, verdict: S.testLabReal.assessment.overall, report: S.testLabReal.report }
+          : null,
+        baseline: S.testLabBaselinePath,
+      },
+      alert: S.alert,
+    },
+    null,
+    2,
+  );
+}
 
 function setPreset(id: string) {
   const p = S.presets.find((x) => x.id === id);
@@ -169,28 +241,122 @@ function setPreset(id: string) {
   S.redundancy = p.redundancy;
 }
 
+const testableDevices = () => S.devices.filter((d) => d.is_usb && !d.device.is_system);
+
+async function runVirtualTests() {
+  const epoch = S.demoEpoch;
+  S.testLabRunning = true;
+  S.testLabError = null;
+  S.testLabSuite = null;
+  render();
+  const selected = S.testLabScenario === "all" ? undefined : S.testLabScenario;
+  devLog(`virtual test lab started${selected ? `: ${selected}` : ""}`);
+  try {
+    const suite = await S.api.runVirtualTests(selected, S.testLabKeepFixtures);
+    if (epoch !== S.demoEpoch) return;
+    S.testLabSuite = suite;
+    devLog(`virtual test lab finished: ${suite.passed ? "PASS" : "FAIL"}`);
+  } catch (e) {
+    if (epoch !== S.demoEpoch) return;
+    S.testLabError = String(e);
+    devLog(`virtual test lab failed: ${String(e)}`);
+  }
+  S.testLabRunning = false;
+  render();
+}
+
+async function runRealUsbTest() {
+  const id = S.testLabDeviceId;
+  if (!id) {
+    toast("Select a USB drive first.");
+    return;
+  }
+  const d = card(id);
+  if (!d || !d.is_usb || d.device.is_system) {
+    toast("Select a removable USB drive. Internal and system disks are excluded.");
+    return;
+  }
+  const epoch = S.demoEpoch;
+  S.testLabRealRunning = true;
+  S.testLabError = null;
+  S.testLabReal = null;
+  render();
+  devLog(`real USB test started: ${id}`);
+  try {
+    const result = await S.api.runRealUsbTest(id, S.targets);
+    if (epoch !== S.demoEpoch) return;
+    S.testLabReal = result;
+    devLog(`real USB test finished: ${id} (${result.assessment.overall})`);
+  } catch (e) {
+    if (epoch !== S.demoEpoch) return;
+    S.testLabError = String(e);
+    devLog(`real USB test failed: ${id}: ${String(e)}`);
+  }
+  S.testLabRealRunning = false;
+  render();
+}
+
+async function saveTestLabDiagnostics() {
+  try {
+    S.testLabBaselinePath = await S.api.saveTestLabDiagnostics("baseline");
+    devLog(`saved test lab baseline: ${S.testLabBaselinePath}`);
+    toast(`Baseline diagnostics saved to ${S.testLabBaselinePath}`);
+    render();
+  } catch (e) {
+    S.testLabError = String(e);
+    devLog(`baseline diagnostics failed: ${String(e)}`);
+    render();
+  }
+}
+
+async function copyTestLabReport() {
+  const value = S.testLabReal ?? S.testLabSuite;
+  if (!value) {
+    toast("Run a test first.");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+    toast("Test-lab report copied to the clipboard.");
+  } catch (e) {
+    toast(`Couldn't copy the test-lab report: ${e}`);
+  }
+}
+
 // ------------------------------------------------------------------ data flow
 
 async function refreshDevices() {
   try {
     S.devices = await S.api.listDevices();
+    const selectable = S.devices.find((d) => d.is_usb && !d.device.is_system);
+    if (!S.testLabDeviceId || !S.devices.some((d) => d.device.id === S.testLabDeviceId)) S.testLabDeviceId = selectable?.device.id ?? "";
+    devLog(`listed ${S.devices.length} device${S.devices.length === 1 ? "" : "s"}`);
   } catch (e) {
     S.alert = { kind: "bad", text: String(e) };
+    devLog(`device listing failed: ${String(e)}`);
   }
   if (S.info?.demo) S.demoSticks = await S.api.demoAvailable().catch(() => []);
 }
 
 async function scan(id: string) {
+  const epoch = S.demoEpoch;
+  devLog(`scan started: ${id}`);
   S.scanning.set(id, { files: 0, bytes: 0 });
   S.scanErrors.delete(id);
   render();
   try {
     const s = await S.api.analyze(id);
+    if (epoch !== S.demoEpoch) {
+      S.scanning.delete(id);
+      return;
+    }
     S.summaries.set(id, s);
     if (s.identification.confirmed_by_user) S.confirmedId.add(id);
     S.assessments.set(id, await S.api.assess(id, S.targets));
+    devLog(`scan finished: ${id} (${s.headline})`);
   } catch (e) {
     S.scanErrors.set(id, String(e));
+    devLog(`scan failed: ${id}: ${String(e)}`);
   }
   S.scanning.delete(id);
   if (S.advanceWhenScanned.has(id) && S.view.v === "identify" && S.view.id === id) {
@@ -210,8 +376,13 @@ async function openDevice(id: string) {
 
 async function reassess(id: string) {
   if (!S.targets.length) return;
-  S.assessments.set(id, await S.api.assess(id, S.targets));
-  S.plan = await S.api.plan(S.targets, S.redundancy, id).catch(() => null);
+  const epoch = S.demoEpoch;
+  const assessment = await S.api.assess(id, S.targets);
+  if (epoch !== S.demoEpoch) return;
+  S.assessments.set(id, assessment);
+  const plan = await S.api.plan(S.targets, S.redundancy, id).catch(() => null);
+  if (epoch !== S.demoEpoch) return;
+  S.plan = plan;
 }
 
 function roleForDevice(id: string): RolePlan | undefined {
@@ -220,6 +391,7 @@ function roleForDevice(id: string): RolePlan | undefined {
 }
 
 async function onDeviceEvent(e: { kind: string; id?: string; device?: { id: string; bus: unknown } }) {
+  devLog(`device event: ${e.kind} ${e.id ?? e.device?.id ?? ""}`.trim());
   await refreshDevices();
   const id = e.kind === "disappeared" ? e.id! : e.device!.id;
   const view = S.view;
@@ -259,7 +431,9 @@ async function onDeviceEvent(e: { kind: string; id?: string; device?: { id: stri
 // ------------------------------------------------------------------ actions
 
 async function loadCopySources(id: string) {
+  const epoch = S.demoEpoch;
   const list = await S.api.copySources(id).catch(() => [] as CopySource[]);
+  if (epoch !== S.demoEpoch) return;
   S.copySources = list;
   S.copySourcesFor = id;
   if (S.view.v === "export" && S.view.id === id) render();
@@ -272,6 +446,8 @@ function copyFits(src: Role | null, dest: Role | null): boolean {
 }
 
 async function runCopy(id: string, from: string) {
+  const epoch = S.demoEpoch;
+  devLog(`copy started: ${from} -> ${id}`);
   S.copyRunning = true;
   S.copyProgress = null;
   S.copyReport = null;
@@ -279,11 +455,15 @@ async function runCopy(id: string, from: string) {
   go({ v: "copying", id, from });
   try {
     const r = await S.api.copyDrive(from, id);
+    if (epoch !== S.demoEpoch) return;
     S.copyReport = r;
+    devLog(`copy finished: ${from} -> ${id} (${r.files_copied} files)`);
     if (!r.cancelled) {
       S.copyRunning = false;
       await scan(id);
+      if (epoch !== S.demoEpoch) return;
       await reassess(id);
+      if (epoch !== S.demoEpoch) return;
       S.verifyMode = "full";
       S.verifyFor = null;
       go({ v: "verify", id });
@@ -292,57 +472,74 @@ async function runCopy(id: string, from: string) {
     }
   } catch (e) {
     S.copyError = String(e);
+    devLog(`copy failed: ${from} -> ${id}: ${String(e)}`);
   }
   S.copyRunning = false;
   render();
 }
 
 async function startExportWatch(id: string) {
+  const epoch = S.demoEpoch;
   S.exportDetected = false;
   void loadCopySources(id);
   const st = await S.api.exportStatus(id).catch(() => null);
+  if (epoch !== S.demoEpoch) return;
   S.exportBaseline = JSON.stringify(st);
   clearInterval(S.exportTimer);
   S.exportTimer = window.setInterval(() => void checkExport(), 2000);
 }
 
 async function checkExport() {
+  const epoch = S.demoEpoch;
   const view = S.view;
   if (view.v !== "export" || S.exportDetected) return;
   const st = await S.api.exportStatus(view.id).catch(() => null);
+  if (epoch !== S.demoEpoch) return;
   if (!st || JSON.stringify(st) === S.exportBaseline) return;
   S.exportDetected = true;
   clearInterval(S.exportTimer);
   toast("rekordbox export detected. Checking USB…");
   await scan(view.id);
+  if (epoch !== S.demoEpoch) return;
   await reassess(view.id);
+  if (epoch !== S.demoEpoch) return;
   const a = S.assessments.get(view.id);
   const libOk = a?.devices.every((d) => d.layers.find((l) => l.layer === "library")?.status === "pass");
   go(libOk ? { v: "verify", id: view.id } : { v: "report", id: view.id });
 }
 
 async function prepare(id: string, fs: Filesystem) {
+  const epoch = S.demoEpoch;
   const conf = S.confirmation;
   if (!conf) return;
   S.prepareSteps = [];
   S.prepareError = null;
+  devLog(`prepare started: ${id} as ${fs}`);
   go({ v: "preparing", id });
   try {
     await S.api.prepare(id, conf.token, fs, S.role ?? roleForDevice(id)?.role ?? "main", S.targets);
+    if (epoch !== S.demoEpoch) return;
     S.done = S.done.filter((d) => d.deviceId !== id);
     if (S.verifyFor === id) S.verifyFor = null;
     await refreshDevices();
+    if (epoch !== S.demoEpoch) return;
     await scan(id);
+    if (epoch !== S.demoEpoch) return;
     await reassess(id);
+    if (epoch !== S.demoEpoch) return;
     go({ v: "export", id });
     await startExportWatch(id);
+    devLog(`prepare finished: ${id}`);
   } catch (e) {
     S.prepareError = String(e);
+    devLog(`prepare failed: ${id}: ${String(e)}`);
     render();
   }
 }
 
 async function runVerify(id: string) {
+  const epoch = S.demoEpoch;
+  devLog(`verification started: ${id} (${S.verifyMode})`);
   S.verifyFor = id;
   S.verifyRunning = true;
   S.verifyReport = null;
@@ -350,12 +547,16 @@ async function runVerify(id: string) {
   render();
   try {
     const r = await S.api.verify(id, S.verifyMode === "full");
+    if (epoch !== S.demoEpoch) return;
     S.verifyReport = r;
+    devLog(`verification finished: ${id} (${r.passed ? "passed" : "failed"})`);
     if (r.passed) {
       await scan(id);
+      if (epoch !== S.demoEpoch) return;
       const role = S.role ?? roleForDevice(id)?.role ?? null;
       const targets = role && S.plan ? S.plan.roles.find((x) => x.role === role)?.targets ?? S.targets : S.targets;
       const a = await S.api.assess(id, targets).catch(() => null);
+      if (epoch !== S.demoEpoch) return;
       const s = summary(id);
       S.done = S.done.filter((d) => d.deviceId !== id && (role === null || d.role !== role));
       S.done.push({
@@ -372,7 +573,9 @@ async function runVerify(id: string) {
       });
     }
   } catch (e) {
+    if (epoch !== S.demoEpoch) return;
     S.alert = { kind: "bad", text: String(e) };
+    devLog(`verification failed: ${id}: ${String(e)}`);
   }
   S.verifyRunning = false;
   render();
@@ -400,6 +603,45 @@ async function act(el: HTMLElement) {
     case "home":
       S.role = null;
       go({ v: "home" });
+      await refreshDevices();
+      render();
+      break;
+    case "open-devtools":
+      if (devEnabled()) go({ v: "devtools" });
+      break;
+    case "open-test-lab":
+      go({ v: "testlab" });
+      break;
+    case "run-virtual-tests":
+      await runVirtualTests();
+      break;
+    case "save-testlab-diagnostics":
+      await saveTestLabDiagnostics();
+      break;
+    case "run-real-test":
+      await runRealUsbTest();
+      break;
+    case "copy-testlab-report":
+      await copyTestLabReport();
+      break;
+    case "dismiss-testlab-error":
+      S.testLabError = null;
+      render();
+      break;
+    case "testlab-refresh":
+      await refreshDevices();
+      render();
+      break;
+    case "copy-dev-snapshot":
+      try {
+        await navigator.clipboard.writeText(devSnapshot());
+        toast("Developer snapshot copied to the clipboard.");
+        devLog("copied state snapshot");
+      } catch (e) {
+        toast(`Couldn't copy the snapshot: ${e}`);
+      }
+      break;
+    case "refresh-devices":
       await refreshDevices();
       render();
       break;
@@ -572,31 +814,81 @@ async function act(el: HTMLElement) {
     case "demo-on":
       await S.api.setDemoMode(true);
       S.info = await S.api.appInfo();
+      devLog("enabled demo mode");
       await refreshDevices();
       render();
       break;
     case "demo-off":
       await S.api.setDemoMode(false);
       S.info = await S.api.appInfo();
+      devLog("disabled demo mode");
       await refreshDevices();
       render();
       break;
     case "demo-insert":
       await S.api.demoInsert(id);
+      devLog(`inserted demo drive: ${id}`);
       S.demoSticks = await S.api.demoAvailable();
       render();
       break;
     case "demo-remove":
       await S.api.demoRemove(id);
+      devLog(`removed demo drive: ${id}`);
       S.demoSticks = await S.api.demoAvailable();
       render();
       break;
     case "demo-reset":
+      S.demoEpoch += 1;
       await S.api.demoReset();
+      clearInterval(S.exportTimer);
+      S.exportTimer = 0;
+      devLog("reset demo drives");
       S.done = [];
       S.summaries.clear();
+      S.scanning.clear();
+      S.scanErrors.clear();
+      S.confirmedId.clear();
+      S.advanceWhenScanned.clear();
+      S.assessments.clear();
+      S.plan = null;
+      S.role = null;
+      S.targets = [];
+      S.presetId = "unknown_club";
+      S.redundancy = true;
+      S.hardware = [];
+      S.hwQuery = "";
+      S.candidates = [];
+      S.candQuery = "";
+      S.cell = null;
+      S.showTracks = false;
+      S.showWhy = false;
+      S.confirmation = null;
+      S.prepareSteps = [];
+      S.prepareError = null;
+      S.exportBaseline = null;
+      S.exportDetected = false;
+      S.verifyRunning = false;
+      S.verifyProgress = null;
+      S.verifyReport = null;
+      S.verifyFor = null;
+      S.copyRunning = false;
+      S.copyProgress = null;
+      S.copyReport = null;
+      S.copyError = null;
+      S.copySources = [];
+      S.copySourcesFor = null;
+      S.ejectMessages.clear();
+      S.alert = null;
+      S.busy = false;
+      S.testLabRunning = false;
+      S.testLabRealRunning = false;
+      S.testLabSuite = null;
+      S.testLabReal = null;
+      S.testLabError = null;
+      S.testLabBaselinePath = null;
+      S.testLabScenario = "all";
       await refreshDevices();
-      go({ v: "home" });
+      go(S.view.v === "devtools" ? { v: "devtools" } : { v: "home" });
       break;
     case "dismiss-alert":
       S.alert = null;
@@ -653,6 +945,8 @@ function shell(content: Raw): Raw {
       <button class="btn link brand" data-act="home" aria-label="BoothReady home"><span class="brand-mark">BR</span><span style="color:var(--text)">BoothReady</span></button>
       <span class="spacer"></span>
       ${info?.demo ? html`<span class="pill accent">Demo mode: simulated USB drives</span>` : ""}
+      <button class="btn link small" data-act="open-test-lab">Test lab</button>
+      ${devEnabled() ? html`<button class="btn link small" data-act="open-devtools">Dev tools</button>` : ""}
       ${S.done.length ? html`<button class="btn" data-act="to-ready">Gig kit (${S.done.length})</button>` : ""}
     </header>
     <main id="main" tabindex="-1">
@@ -689,6 +983,106 @@ function homeView(): Raw {
     </div>`;
 }
 
+function developerView(): Raw {
+  const devices = S.devices;
+  return html`<div class="devtools">
+    <div class="devtools-heading">
+      <div><div class="eyebrow">Local development</div><h1>Developer tools</h1><p class="muted">Inspect the current UI state and drive the simulated USBs without leaving the app.</p></div>
+      <button class="btn" data-act="home">Back to app</button>
+    </div>
+    <div class="dev-grid">
+      <section class="card">
+        <div class="eyebrow">Environment</div>
+        <dl class="facts">
+          <dt>API</dt><dd>${S.info?.demo ? "Tauri demo backend" : "Browser mock backend"}</dd>
+          <dt>Platform</dt><dd>${S.info?.platform ?? "unknown"}</dd>
+          <dt>App version</dt><dd>${S.info?.version ?? "unknown"}</dd>
+          <dt>Rules</dt><dd>v${S.info?.rules_version ?? "?"} ${S.info?.rules_review_status ?? ""}</dd>
+          <dt>Current view</dt><dd>${S.view.v}</dd>
+          <dt>Connected</dt><dd>${plural(devices.length, "device")}</dd>
+        </dl>
+      </section>
+      <section class="card">
+        <div class="eyebrow">Quick controls</div>
+        <div class="actions" style="justify-content:flex-start;margin-top:10px"><button class="btn primary" data-act="demo-reset">Reset demo state</button><button class="btn" data-act="refresh-devices">Refresh devices</button></div>
+        ${S.info?.demo ? html`<p class="small muted" style="margin-bottom:0">The reset removes simulated drive state and returns this panel to a clean starting point.</p>` : html`<p class="small muted" style="margin-bottom:0">The browser mock is active. Use the generated snapshot to reproduce UI states in Playwright.</p>`}
+      </section>
+    </div>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">Simulated drives</div><h2>Insert or remove fixtures</h2></div>${inTauri ? html`<button class="btn link small" data-act="demo-off">Use real drives</button>` : ""}</div>
+      ${S.demoSticks.length ? html`<div class="dev-drive-list">${S.demoSticks.map((s) => html`<div class="dev-drive-row"><div class="grow"><b>${s.title}</b><div class="small muted">${s.name} · ${s.size_gb} GB · ${s.description}</div></div>${s.inserted ? html`<button class="btn" data-act="demo-remove" data-id="${s.name}">Pull out</button>` : html`<button class="btn primary" data-act="demo-insert" data-id="${s.name}">Plug in</button>`}</div>`)}</div>` : html`<p class="muted">Demo controls are unavailable for this backend.</p>`}
+    </section>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">Connected devices</div><h2>Open a fixture or inspect the host</h2></div><span class="small muted">Device IDs are safe to share in a bug report.</span></div>
+      ${devices.length ? html`<div class="dev-device-list">${devices.map((d) => html`<div class="dev-device-row"><div class="grow"><b>${d.identification.display_name}</b><div class="small muted">${d.device.id} · ${gb(d.device.size_bytes)} · ${d.device.bus === "usb" ? "USB" : "non-USB"}${d.device.is_system ? " · system" : ""}</div></div><button class="btn" data-act="open-device" data-id="${d.device.id}">Open</button></div>`)}</div>` : html`<p class="muted">No devices are currently connected.</p>`}
+    </section>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">State snapshot</div><h2>Copy a compact reproduction</h2></div><button class="btn primary" data-act="copy-dev-snapshot">Copy JSON</button></div>
+      <pre class="dev-json">${devSnapshot()}</pre>
+    </section>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">Event log</div><h2>Recent actions</h2></div><span class="small muted">Newest first</span></div>
+      <pre class="dev-log">${S.devLog.length ? S.devLog.join("\n") : "No events yet."}</pre>
+    </section>
+  </div>`;
+}
+
+function testLabView(): Raw {
+  const usbDevices = testableDevices();
+  const selected = card(S.testLabDeviceId);
+  const selectedModel = selected?.device.storage_model ?? selected?.device.usb?.product ?? selected?.identification.display_name ?? "USB drive";
+  const targetNames = S.targets.map(hwName).join(", ");
+  const suite = S.testLabSuite;
+  const real = S.testLabReal;
+  return html`<div class="devtools test-lab">
+    <div class="devtools-heading">
+      <div><div class="eyebrow">Local development</div><h1>Test lab</h1><p class="muted">Run the engine's virtual matrix, save diagnostics and inspect one real USB without changing it.</p></div>
+      <button class="btn" data-act="home">Back to app</button>
+    </div>
+    <div class="banner warn"><div><b>Safety boundary:</b> every test here is read-only for real hardware. The real USB test never prepares, copies or ejects. Internal and system disks are excluded.</div></div>
+    ${S.testLabError ? html`<div class="banner bad" role="alert"><div>${S.testLabError}</div><button class="btn link" data-act="dismiss-testlab-error">Dismiss</button></div>` : ""}
+    <div class="dev-grid">
+      <section class="card">
+        <div class="eyebrow">Virtual suite</div>
+        <h2>Exercise isolated fixtures</h2>
+        <p class="small muted">These scenarios use the same core engine and helper as BoothReady. Fixture writes stay under the report folder.</p>
+        <label class="field-label" for="testlab-scenario">Scenario</label>
+        <select id="testlab-scenario" class="select" ${S.testLabRunning ? "disabled" : ""}>
+          <option value="all" ${S.testLabScenario === "all" ? "selected" : ""}>All scenarios</option>
+          ${S.testScenarios.map((s) => html`<option value="${s.id}" ${S.testLabScenario === s.id ? "selected" : ""}>${s.title}</option>`)}
+        </select>
+        <label class="check-row"><input id="testlab-keep" type="checkbox" ${S.testLabKeepFixtures ? "checked" : ""} ${S.testLabRunning ? "disabled" : ""}><span>Keep fixture folders for inspection</span></label>
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" data-act="run-virtual-tests" ${S.testLabRunning ? "disabled" : ""}>${S.testLabRunning ? "Running…" : "Run virtual tests"}</button><button class="btn" data-act="copy-testlab-report" ${suite ? "" : "disabled"}>Copy report JSON</button></div>
+        ${suite ? html`<p class="small muted">Reports: <code>${suite.root}</code></p>` : html`<p class="small faint">No virtual run yet.</p>`}
+      </section>
+      <section class="card">
+        <div class="eyebrow">Diagnostics</div>
+        <h2>Capture a baseline</h2>
+        <p class="small muted">Save this before inserting a real stick, then save another report if a read looks wrong.</p>
+        <button class="btn" data-act="save-testlab-diagnostics">Save baseline diagnostics</button>
+        ${S.testLabBaselinePath ? html`<p class="small muted" style="margin-top:12px"><b>Saved:</b><br><code>${S.testLabBaselinePath}</code></p>` : html`<p class="small faint" style="margin-top:12px">No baseline saved in this session.</p>`}
+      </section>
+    </div>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">Virtual results</div><h2>${suite ? suite.passed ? "All selected scenarios passed" : "A scenario needs attention" : "Waiting for a run"}</h2></div>${suite ? html`<span class="pill ${suite.passed ? "accent" : ""}">${suite.scenarios.filter((s) => s.passed).length}/${suite.scenarios.length} passed</span>` : ""}</div>
+      ${suite ? html`<div class="test-results">${suite.scenarios.map((r) => html`<details class="test-result" ${r.passed ? "" : "open"}><summary><span class="test-result-status ${r.passed ? "pass" : "fail"}">${r.passed ? "PASS" : "FAIL"}</span><span class="grow"><b>${r.title}</b><span class="small muted">${r.id} · ${r.duration_ms} ms</span></span></summary><p class="small muted">${r.description}</p>${r.checks.length ? html`<ul class="checks">${r.checks.map((c) => html`<li><span class="test-check ${c.passed ? "pass" : "fail"}">${c.passed ? "✓" : "×"}</span><span><b>${c.name}</b>: ${c.detail}</span></li>`)}</ul>` : ""}${r.error ? html`<div class="banner bad">${r.error}</div>` : ""}${r.artifact ? html`<p class="small muted"><code>${r.artifact}</code></p>` : ""}</details>`)}</div>` : html`<p class="muted">Run the virtual suite to see scenario checks here.</p>`}
+    </section>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">Real USB</div><h2>Read-only device test</h2></div><button class="btn" data-act="testlab-refresh">Refresh devices</button></div>
+      <p class="small muted">Select the exact stick after checking its ID, model and size. The report records diagnostics before and after the read.</p>
+      ${S.info?.demo ? html`<div class="banner warn"><div>Demo mode is on. Turn it off before testing real hardware.</div><button class="btn" data-act="demo-off">Use real drives</button></div>` : ""}
+      ${usbDevices.length ? html`<label class="field-label" for="testlab-device">USB drive</label><select id="testlab-device" class="select" ${S.testLabRealRunning || S.info?.demo ? "disabled" : ""}>${usbDevices.map((d) => html`<option value="${d.device.id}" ${S.testLabDeviceId === d.device.id ? "selected" : ""}>${d.identification.display_name} · ${d.device.id} · ${gb(d.device.size_bytes)}</option>`)}</select>
+        ${selected ? html`<dl class="facts test-device-facts"><dt>Device ID</dt><dd><code>${selected.device.id}</code></dd><dt>Model</dt><dd>${selectedModel}</dd><dt>Size</dt><dd>${gb(selected.device.size_bytes)}</dd><dt>Mount</dt><dd>${primaryVolume(selected.device)?.mount_point ?? "not mounted"}</dd><dt>Targets</dt><dd>${targetNames || "none selected"}</dd></dl>` : ""}
+        <div class="actions" style="justify-content:flex-start"><button class="btn primary" data-act="run-real-test" ${S.testLabRealRunning || S.info?.demo ? "disabled" : ""}>${S.testLabRealRunning ? "Reading…" : "Run read-only test"}</button><button class="btn" data-act="open-device" data-id="${S.testLabDeviceId}" ${S.testLabRealRunning ? "disabled" : ""}>Open in BoothReady</button></div>` : html`<div class="banner"><div>No removable USB drives are available. Internal and system disks are deliberately omitted.</div></div>`}
+      ${real ? html`<div class="test-real-result"><div class="devtools-section-heading"><h3>Read complete</h3><span class="verdict ${verdictStatus(real.assessment.overall)}">${VERDICT_LABEL[real.assessment.overall]}</span></div><p class="small muted">${real.device.display_name} · ${real.device.id} · ${gb(real.device.size_bytes)}</p><dl class="facts"><dt>Connection</dt><dd>${real.summary.connection}</dd><dt>Before</dt><dd><code>${real.diagnostics_before}</code></dd><dt>After</dt><dd><code>${real.diagnostics_after}</code></dd><dt>Report</dt><dd><code>${real.report}</code></dd></dl><button class="btn" data-act="copy-testlab-report">Copy result JSON</button></div>` : ""}
+    </section>
+    <section class="card">
+      <div class="devtools-section-heading"><div><div class="eyebrow">Scenario catalog</div><h2>What is covered</h2></div><span class="small muted">${plural(S.testScenarios.length, "scenario")}</span></div>
+      <div class="test-catalog">${S.testScenarios.map((s) => html`<div><b>${s.title}</b><div class="small muted"><code>${s.id}</code> · ${s.description}</div></div>`)}</div>
+    </section>
+  </div>`;
+}
+
 function deviceRow(d: DeviceCard): Raw {
   const v = primaryVolume(d.device);
   return html`<button class="devrow" data-act="open-device" data-id="${d.device.id}">
@@ -711,7 +1105,7 @@ function buyingView(): Raw {
   return html`<h1>Choosing a USB for DJ gear</h1>
     <p class="muted">Characteristics matter more than brands. BoothReady doesn't have lab results for specific models yet, so it won't claim any stick is guaranteed.</p>
     <div class="grid-2" style="margin-top:18px">
-      <div class="card"><h3>Main USB</h3><ul><li>Big enough for your whole library plus 10 %</li><li>USB-A plug, or a USB-C stick with a USB-A adapter you trust</li><li>A plain flash drive, not a portable SSD, because SSDs can draw more power than older players supply</li></ul></div>
+      <div class="card"><h3>Main USB</h3><ul><li>Big enough for your whole library plus 10 %</li><li>A stick that fits your setup; a USB-C adapter or hub is fine when your computer needs one</li><li>A plain flash drive, not a portable SSD, because SSDs can draw more power than older players supply</li></ul></div>
       <div class="card"><h3>Legacy Rescue</h3><ul><li>16 to 32 GB</li><li>USB-A, simple mass-storage stick</li><li>Holds essential playlists in formats older CDJs play</li></ul></div>
       <div class="card"><h3>Backup</h3><ul><li>Same size as Main, or big enough for your essentials</li><li>A different brand from Main, so one bad batch can't take out both</li></ul></div>
       <div class="card"><h3>Test before trusting it</h3><p class="small muted">Plug any new stick into BoothReady and run a full verification after preparing it. Counterfeit sticks that report fake capacity fail that read-back.</p></div>
@@ -746,6 +1140,7 @@ function identifyView(id: string): Raw {
         <dt>Partition layout</dt><dd>${s?.scheme ?? c?.device.partition_scheme?.toUpperCase() ?? "Unknown"}</dd>
         <dt>Status</dt><dd>${err ? html`<span style="color:var(--bad)">${err}</span>` : scanning ? html`<span class="spinner" aria-hidden="true"></span> Scanning… ${scanning.files ? plural(scanning.files, "track") : ""}` : "Scanned"}</dd>
       </dl>
+      <p class="small faint" style="margin-bottom:0">This is the link BoothReady negotiated with the computer. A USB-C adapter or hub may be in between; BoothReady checks the storage device itself.</p>
     </section>
     <section class="card" style="text-align:center">
       <div class="eyebrow">We think this is</div>
@@ -1168,6 +1563,10 @@ function body(): Raw {
       return readyView();
     case "kit-next":
       return kitNextView(v.role);
+    case "testlab":
+      return testLabView();
+    case "devtools":
+      return developerView();
   }
 }
 
@@ -1189,6 +1588,7 @@ export async function start(api: Api) {
   S.info = await api.appInfo();
   S.presets = await api.presets();
   S.hardware = await api.hardware();
+  S.testScenarios = await api.testLabScenarios().catch(() => []);
   setPreset("unknown_club");
   [S.known, S.profiles] = await Promise.all([api.knownMedia(), api.profiles()]);
   await refreshDevices();
@@ -1229,6 +1629,18 @@ export async function start(api: Api) {
         S.hardware = await api.hardware(S.hwQuery);
         renderHwGrid();
       }, 150);
+    }
+  });
+  root().addEventListener("change", (ev) => {
+    const t = ev.target as HTMLInputElement | HTMLSelectElement;
+    if (t.id === "testlab-scenario") {
+      S.testLabScenario = t.value;
+      render();
+    } else if (t.id === "testlab-device") {
+      S.testLabDeviceId = t.value;
+      render();
+    } else if (t.id === "testlab-keep") {
+      S.testLabKeepFixtures = (t as HTMLInputElement).checked;
     }
   });
   render();

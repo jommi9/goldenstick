@@ -294,6 +294,142 @@ async fn save_diagnostics(app: AppHandle, state: State<'_, AppState>) -> Res<Str
     Ok(path.display().to_string())
 }
 
+// ------------------------------------------------------------- test lab
+
+fn test_lab_dir(app: &AppHandle, kind: &str, stamp: u64) -> Res<PathBuf> {
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(e2s)?
+        .join("BoothReady")
+        .join("test-lab")
+        .join(format!("{kind}-{stamp}"));
+    std::fs::create_dir_all(&dir).map_err(e2s)?;
+    Ok(dir)
+}
+
+fn safe_test_label(label: Option<String>) -> String {
+    let raw = label.unwrap_or_else(|| "baseline".into());
+    let mut out: String =
+        raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+    if out.is_empty() {
+        out = "baseline".into();
+    }
+    out.truncate(48);
+    out
+}
+
+#[tauri::command]
+fn test_lab_scenarios() -> Vec<boothready_testlab::ScenarioInfo> {
+    boothready_testlab::scenarios()
+}
+
+#[tauri::command]
+async fn test_lab_virtual(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    scenario: Option<String>,
+    keep_fixtures: bool,
+) -> Res<boothready_testlab::VirtualSuite> {
+    let root = test_lab_dir(&app, "virtual", now_unix())?;
+    let rules = state.rules.clone();
+    let catalog = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        boothready_testlab::run_virtual_suite(scenario.as_deref(), keep_fixtures, Some(root), &rules, &catalog)
+            .map_err(e2s)
+    })
+    .await
+    .map_err(e2s)?
+}
+
+#[tauri::command]
+async fn test_lab_save_diagnostics(app: AppHandle, state: State<'_, AppState>, label: Option<String>) -> Res<String> {
+    let platform = state.platform();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        boothready_platform::diagnostics::collect(platform.as_ref(), env!("CARGO_PKG_VERSION"))
+    })
+    .await
+    .map_err(e2s)?;
+    let dir = test_lab_dir(&app, "diagnostics", report.created_unix)?;
+    let path = dir.join(format!("diagnostics-{}-{}.json", safe_test_label(label), report.created_unix));
+    std::fs::write(&path, serde_json::to_vec_pretty(&report).map_err(e2s)?).map_err(e2s)?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+async fn test_lab_real(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device_id: String,
+    targets: Vec<String>,
+) -> Res<TestLabRealResult> {
+    if state.demo_root().is_some() {
+        return Err("Turn off Demo mode before reading a real USB. This test is read-only and never prepares, copies or ejects the drive.".into());
+    }
+    let out = test_lab_dir(&app, "real", now_unix())?;
+    let platform = state.platform();
+    let rules = state.rules.clone();
+    let catalog = state.catalog.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Res<TestLabRealResult> {
+        let before = boothready_platform::diagnostics::collect(platform.as_ref(), env!("CARGO_PKG_VERSION"));
+        let before_path = out.join("diagnostics-before.json");
+        std::fs::write(&before_path, serde_json::to_vec_pretty(&before).map_err(e2s)?).map_err(e2s)?;
+
+        let dev = platform
+            .list_devices()
+            .map_err(e2s)?
+            .into_iter()
+            .find(|d| d.id == device_id)
+            .ok_or_else(|| format!("No exact device ID '{device_id}'. Refresh devices and try again."))?;
+        if dev.is_system {
+            return Err(format!("Refusing to test system device {}.", dev.id));
+        }
+        if dev.bus != boothready_model::BusType::Usb {
+            return Err(format!("Refusing to test non-USB device {}.", dev.id));
+        }
+        let backend = NativeBackend::new();
+        let raw = backend.open_read(&dev).ok().and_then(|f| boothready_core::media::inspect(f).ok());
+        let drive = analyze_drive(&dev, raw, &rules, &catalog, |_, _| {});
+        let target_ids = if targets.is_empty() {
+            rules.preset("unknown_club").map(|p| p.devices.clone()).unwrap_or_default()
+        } else {
+            targets
+        };
+        let target_devices = rules.devices_by_id(&target_ids);
+        if target_devices.is_empty() {
+            return Err("Pick at least one target device before running the real USB test.".into());
+        }
+        let assessment = assess_drive(&drive.facts, &target_devices, &rules);
+        let after = boothready_platform::diagnostics::collect(platform.as_ref(), env!("CARGO_PKG_VERSION"));
+        let after_path = out.join("diagnostics-after.json");
+        std::fs::write(&after_path, serde_json::to_vec_pretty(&after).map_err(e2s)?).map_err(e2s)?;
+        let device = TestLabDevice {
+            id: dev.id.clone(),
+            display_name: drive.identification.display_name.clone(),
+            model: dev.storage_model.clone().or_else(|| dev.usb.as_ref().and_then(|u| u.product.clone())),
+            size_bytes: dev.size_bytes,
+            is_usb: dev.bus == boothready_model::BusType::Usb,
+            is_system: dev.is_system,
+            mount_point: dev.primary_mount().and_then(|v| v.mount_point.as_ref().map(|p| p.display().to_string())),
+        };
+        let result = TestLabRealResult {
+            kind: "real_read_only",
+            read_ok: true,
+            device,
+            summary: DriveSummary::from_report(&drive),
+            assessment,
+            diagnostics_before: before_path.display().to_string(),
+            diagnostics_after: after_path.display().to_string(),
+            report: out.join("report.json").display().to_string(),
+        };
+        std::fs::write(out.join("report.json"), serde_json::to_vec_pretty(&result).map_err(e2s)?).map_err(e2s)?;
+        Ok(result)
+    })
+    .await
+    .map_err(e2s)?
+}
+
 #[tauri::command]
 fn presets(state: State<'_, AppState>) -> Vec<Preset> {
     state.rules.presets.clone()
@@ -785,6 +921,10 @@ pub fn run() {
             demo_reset,
             demo_simulate_export,
             save_diagnostics,
+            test_lab_scenarios,
+            test_lab_virtual,
+            test_lab_save_diagnostics,
+            test_lab_real,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BoothReady");

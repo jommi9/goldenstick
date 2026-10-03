@@ -40,6 +40,8 @@ jobs:
         run: cargo build -p boothready-helper
       - name: Real device enumeration smoke test
         run: cargo run -q -p boothready-cli -- devices
+      - name: Virtual test lab
+        run: cargo run -q -p boothready-cli -- test virtual
 
   app:
     name: Desktop app (${{ matrix.os }})
@@ -77,8 +79,17 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           SHOTS_DIR=screenshots npm run screenshots
+      - name: Browser UI test lab
+        if: runner.os == 'Linux'
+        working-directory: app
+        run: npm run test-lab
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
           name: ui-screenshots
           path: app/screenshots
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: ui-test-lab
+          path: app/test-results
