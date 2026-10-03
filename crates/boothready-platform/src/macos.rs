@@ -176,34 +176,52 @@ pub fn parse_ioreg_usb(bytes: &[u8]) -> Result<HashMap<String, UsbDescriptor>, p
         v => vec![v],
     };
     for dev in devices.iter().filter_map(|v| v.as_dictionary()) {
-        let desc = UsbDescriptor {
-            vendor_id: u(dev, "idVendor").map(|v| v as u16),
-            product_id: u(dev, "idProduct").map(|v| v as u16),
-            manufacturer: s(dev, "USB Vendor Name").or_else(|| s(dev, "kUSBVendorString")),
-            product: s(dev, "USB Product Name").or_else(|| s(dev, "kUSBProductString")),
-            serial: s(dev, "USB Serial Number").or_else(|| s(dev, "kUSBSerialNumberString")),
-            bcd_device: u(dev, "bcdDevice").map(|v| v as u16),
-            usb_version: u(dev, "bcdUSB").map(|v| format!("{}.{:02x}", v >> 8, v & 0xFF)),
-            speed_mbps: u(dev, "Device Speed").map(|sp| match sp {
-                0 => 1,
-                1 => 12,
-                2 => 480,
-                3 => 5000,
-                4 => 10000,
-                _ => 20000,
-            }),
-            max_power_ma: None,
-        };
-        let mut names = Vec::new();
-        collect_bsd_names(dev, &mut names);
-        for n in names {
-            // Only whole disks ("disk4", not "disk4s1").
-            if n.starts_with("disk") && !n[4..].contains('s') {
-                out.insert(n, desc.clone());
-            }
-        }
+        map_usb_disks(dev, None, &mut out);
     }
     Ok(out)
+}
+
+fn map_usb_disks(dev: &Dictionary, parent: Option<&UsbDescriptor>, out: &mut HashMap<String, UsbDescriptor>) {
+    // A hub contains other USB devices. Only a device node replaces the
+    // inherited descriptor; interface nodes can repeat incomplete USB fields.
+    let is_device = match s(dev, "IOObjectClass").as_deref() {
+        Some("IOUSBHostDevice" | "IOUSBDevice") => true,
+        None => u(dev, "idVendor").is_some() && u(dev, "idProduct").is_some(),
+        _ => false,
+    };
+    let own = is_device.then(|| UsbDescriptor {
+        vendor_id: u(dev, "idVendor").map(|v| v as u16),
+        product_id: u(dev, "idProduct").map(|v| v as u16),
+        manufacturer: s(dev, "USB Vendor Name").or_else(|| s(dev, "kUSBVendorString")),
+        product: s(dev, "USB Product Name").or_else(|| s(dev, "kUSBProductString")),
+        serial: s(dev, "USB Serial Number").or_else(|| s(dev, "kUSBSerialNumberString")),
+        bcd_device: u(dev, "bcdDevice").map(|v| v as u16),
+        usb_version: u(dev, "bcdUSB").map(|v| format!("{}.{:02x}", v >> 8, v & 0xFF)),
+        speed_mbps: u(dev, "Device Speed").map(|sp| match sp {
+            0 => 1,
+            1 => 12,
+            2 => 480,
+            3 => 5000,
+            4 => 10000,
+            _ => 20000,
+        }),
+        max_power_ma: None,
+    });
+    let descriptor = own.as_ref().or(parent);
+    if let (Some(name), Some(descriptor)) = (s(dev, "BSD Name"), descriptor) {
+        // Partition names contain an s after the disk number.
+        if name
+            .strip_prefix("disk")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+        {
+            out.insert(name, descriptor.clone());
+        }
+    }
+    if let Some(children) = dev.get("IORegistryEntryChildren").and_then(Value::as_array) {
+        for child in children.iter().filter_map(Value::as_dictionary) {
+            map_usb_disks(child, descriptor, out);
+        }
+    }
 }
 
 fn collect_bsd_names(d: &Dictionary, out: &mut Vec<String>) {
@@ -564,6 +582,51 @@ mod tests {
   </array>
  </dict>
 </array></plist>"#;
+
+    #[test]
+    fn diagnostics_replay_uses_stick_identity_behind_a_hub() {
+        let report: crate::diagnostics::Diagnostics =
+            serde_json::from_str(include_str!("../tests/fixtures/macos-kingston-via-hub.json")).unwrap();
+        let devices = crate::diagnostics::replay(&report).unwrap().unwrap();
+        assert_eq!(devices.len(), 1);
+        let device = &devices[0];
+        assert_eq!(device.id, "disk7");
+        assert_eq!(device.size_bytes, 30_943_995_904);
+        let usb = device.usb.as_ref().unwrap();
+        assert_eq!(usb.vendor_id, Some(0x0951));
+        assert_eq!(usb.product_id, Some(0x1666));
+        assert_eq!(usb.manufacturer.as_deref(), Some("Kingston"));
+        assert_eq!(usb.product.as_deref(), Some("DataTraveler 3.0"));
+    }
+
+    #[test]
+    fn hub_mapping_preserves_siblings_and_ignores_root_order() {
+        let report: crate::diagnostics::Diagnostics =
+            serde_json::from_str(include_str!("../tests/fixtures/macos-kingston-via-hub.json")).unwrap();
+        let bytes = report.output(&IOREG_USB).unwrap();
+        let mut roots: Value = plist::from_bytes(&bytes).unwrap();
+        let direct: Value = plist::from_bytes(IOREG.as_bytes()).unwrap();
+        let stick = direct.as_array().unwrap()[0].clone();
+        roots.as_array_mut().unwrap()[0]
+            .as_dictionary_mut()
+            .unwrap()
+            .get_mut("IORegistryEntryChildren")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .push(stick.clone());
+        roots.as_array_mut().unwrap().push(stick);
+        for _ in 0..2 {
+            let mut data = Vec::new();
+            roots.to_writer_xml(&mut data).unwrap();
+            let devices = parse_ioreg_usb(&data).unwrap();
+            assert_eq!(devices.len(), 2);
+            assert_eq!(devices["disk7"].vendor_id, Some(0x0951));
+            assert_eq!(devices["disk4"].vendor_id, Some(0x0781));
+            assert_eq!(devices["disk4"].serial.as_deref(), Some("4C530001230518104F82"));
+            roots.as_array_mut().unwrap().reverse();
+        }
+    }
 
     #[test]
     fn a_diagnostics_report_replays_on_any_os() {
