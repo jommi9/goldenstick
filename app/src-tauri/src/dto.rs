@@ -6,11 +6,11 @@ use boothready_core::identify::{Candidate, CatalogProduct, Identification};
 use boothready_core::library::LibraryFormat;
 use boothready_core::planner::Role;
 use boothready_core::privileged::{eligibility, DeviceFingerprint, Eligibility};
-use boothready_core::rules::DeviceProfile;
+use boothready_core::rules::{DeviceProfile, DriveAssessment};
 use boothready_core::scan::TrackProbe;
 use boothready_core::store::KnownMedia;
 use boothready_core::verify::VerifyProgress;
-use boothready_model::PhysicalDevice;
+use boothready_model::{PhysicalDevice, UsbDescriptor};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -116,13 +116,7 @@ impl DriveSummary {
                 })
             })
             .unwrap_or_default();
-        let usb = r.device.usb.as_ref();
-        let connection = match (usb.and_then(|u| u.usb_version.as_deref()), usb.and_then(|u| u.speed_mbps)) {
-            (_, Some(s)) if s >= 5000 => "USB-A / USB 3.x device".to_string(),
-            (_, Some(s)) if s >= 480 => "USB 2.0 device".to_string(),
-            (Some(v), _) => format!("USB {v} device"),
-            _ => "USB device".to_string(),
-        };
+        let connection = connection_label(r.device.usb.as_ref());
         DriveSummary {
             device_id: r.device.id.clone(),
             identification: r.identification.clone(),
@@ -151,6 +145,36 @@ impl DriveSummary {
             role: r.manifest.as_ref().and_then(|m| m.role).map(|role| role.label().to_string()),
             connection,
         }
+    }
+}
+
+/// Describe the negotiated USB link without guessing the connector or whether
+/// a hub or dongle sits between the computer and the storage device. The
+/// connector is not exposed consistently by the operating systems, while the
+/// link speed is useful when diagnosing a slow or unstable setup.
+fn connection_label(usb: Option<&UsbDescriptor>) -> String {
+    match (usb.and_then(|u| u.usb_version.as_deref()), usb.and_then(|u| u.speed_mbps)) {
+        (_, Some(s)) if s >= 5000 => "USB 3.x link".to_string(),
+        (_, Some(s)) if s >= 480 => "USB 2.0 link".to_string(),
+        (Some(v), _) => format!("USB {v} link"),
+        _ => "USB link".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connection_label;
+    use boothready_model::UsbDescriptor;
+
+    #[test]
+    fn connection_label_does_not_guess_a_connector() {
+        let usb = UsbDescriptor { speed_mbps: Some(5000), ..Default::default() };
+        assert_eq!(connection_label(Some(&usb)), "USB 3.x link");
+    }
+
+    #[test]
+    fn connection_label_handles_usb_without_speed() {
+        assert_eq!(connection_label(None), "USB link");
     }
 }
 
@@ -281,4 +305,27 @@ pub struct ExportStatus {
     pub device_library: Option<u64>,
     pub one_library: Option<u64>,
     pub engine: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct TestLabDevice {
+    pub id: String,
+    pub display_name: String,
+    pub model: Option<String>,
+    pub size_bytes: u64,
+    pub is_usb: bool,
+    pub is_system: bool,
+    pub mount_point: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct TestLabRealResult {
+    pub kind: &'static str,
+    pub read_ok: bool,
+    pub device: TestLabDevice,
+    pub summary: DriveSummary,
+    pub assessment: DriveAssessment,
+    pub diagnostics_before: String,
+    pub diagnostics_after: String,
+    pub report: String,
 }

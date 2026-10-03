@@ -27,6 +27,9 @@ BOOTHREADY_DEMO=1 npx tauri dev
 
 # UI only, in a browser, against a mock generated from real engine output
 cd app && npm run dev
+
+# Virtual test lab
+cargo run -p boothready-cli -- test virtual
 ```
 
 The simulated 128 GB SanDisk is the PRD's acceptance scenario: GPT and exFAT from a Mac, with only a rekordbox Device Library. BoothReady fails it for the original CDJ-2000, flags OneLibrary as missing for the CDJ-3000X and XDJ-AZ, recommends MBR and FAT32, and plans a separate Legacy Rescue drive.
@@ -56,6 +59,7 @@ The release config ships `boothready-helper` next to the app's executable. A dev
 | `crates/boothready-core/data/ruleset.json` | Device profiles and target presets. Every claim has a support level and an evidence level. |
 | `crates/boothready-platform` | Device discovery, watching and ejecting on Linux (sysfs), macOS (`diskutil`/`ioreg`) and Windows (storage IOCTLs, SetupAPI, CfgMgr32), plus the folder-backed demo platform. |
 | `crates/boothready-helper` | The elevated helper. It takes a closed set of JSON requests and refuses to erase unless the drive still matches what the user confirmed. |
+| `crates/boothready-testlab` | Virtual USB scenarios shared by the CLI and the desktop Test lab panel. |
 | `crates/boothready-cli` | The `boothready` command. |
 | `app/` | The Tauri 2 desktop app with a TypeScript UI. |
 | `docs/ARCHITECTURE.md` | How the pieces fit, the safety model and what still needs verifying. |
@@ -67,7 +71,30 @@ cargo test                  # engine, platform, helper, CLI
 cd app && npm run build && npm run screenshots   # full UI walkthrough in headless Chromium
 ```
 
+The repeatable test lab is documented in [`docs/TEST-LAB.md`](docs/TEST-LAB.md). It includes a Rust virtual USB matrix, browser state scenarios and a read-only runner for a named real USB. `cargo run -p boothready-cli -- test real <device-id>` saves diagnostics before and after the read, then writes a compatibility report. It refuses system disks and never prepares, copies or ejects a real device.
+
 On Linux the image tests use `sfdisk`, `sgdisk`, `mkfs.fat`, `mkfs.exfat`, `fsck.fat`, mtools and ffmpeg when they're installed, and skip themselves when they aren't. CI runs the engine and the app on Ubuntu, macOS and Windows.
+
+## Developer tooling
+
+The app has a **Test lab** panel in the top bar. It runs the virtual matrix, saves baseline diagnostics and offers a read-only test for one exact removable USB. **Dev tools** remains available in demo mode and in the browser mock for resetting simulated drives, opening fixtures and copying a compact JSON state snapshot for a bug report or a Playwright reproduction.
+
+The browser mock also accepts reproducible state parameters. For example, `http://127.0.0.1:5173/?insert=sandisk-128&stage=sandisk-128:exported&verified=sandisk-128` opens the exported, verified SanDisk fixture. Use `initial`, `prepared` or `exported` for stages, and separate multiple drives with commas.
+
+From `app/`, the helper commands wrap the recurring setup work:
+
+```sh
+npm run dev:doctor       # check Node, Rust and the Playwright browser
+npm run dev:mock         # regenerate mock-data.json from the real Rust engine
+npm run dev:check        # fmt, clippy, Rust tests, app tests, typecheck and build
+npm run dev:test         # Rust virtual matrix plus browser UI scenarios
+npm run dev:test-ui      # browser UI scenarios only
+npm run dev:screenshots  # run the complete browser walkthrough
+npm run dev:desktop      # start Tauri with BOOTHREADY_DEMO=1
+npm run dev:clean        # remove generated app output and screenshots
+```
+
+Use `npm run devtools -- help` to see the same commands without the package aliases. Dev tools and the helper commands are development aids. The Test lab remains available in desktop builds because its real-device action is read-only.
 
 ## Status
 

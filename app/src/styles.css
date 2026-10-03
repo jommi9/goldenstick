@@ -761,3 +761,190 @@ p {
 .copy-offer h2 {
   margin-top: 0;
 }
+
+.devtools {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.devtools-heading,
+.devtools-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.devtools-heading {
+  margin-bottom: 20px;
+}
+
+.devtools-heading h1,
+.devtools-section-heading h2 {
+  margin-top: 0;
+}
+
+.dev-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.dev-drive-list,
+.dev-device-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.dev-drive-row,
+.dev-device-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.dev-drive-row:first-child,
+.dev-device-row:first-child {
+  border-top: none;
+}
+
+.dev-json,
+.dev-log {
+  overflow: auto;
+  margin: 14px 0 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-3);
+  color: var(--text);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dev-json {
+  max-height: 420px;
+}
+
+.dev-log {
+  max-height: 180px;
+}
+
+.test-lab .select {
+  width: 100%;
+  margin: 4px 0 10px;
+}
+
+.field-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 14px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 10px 0;
+}
+
+.check-row input {
+  accent-color: var(--accent);
+}
+
+.test-results,
+.test-catalog {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.test-result {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bg-3);
+}
+
+.test-result summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.test-result summary::-webkit-details-marker {
+  display: none;
+}
+
+.test-result-status {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+}
+
+.test-result-status.pass,
+.test-check.pass {
+  color: var(--ok);
+}
+
+.test-result-status.fail,
+.test-check.fail {
+  color: var(--bad);
+}
+
+.test-result .checks {
+  margin: 10px 0 0;
+}
+
+.test-check {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  font-weight: 800;
+}
+
+.test-device-facts {
+  margin: 14px 0;
+}
+
+.test-device-facts code,
+.test-real-result code,
+.test-lab code {
+  overflow-wrap: anywhere;
+}
+
+.test-real-result {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.test-catalog > div {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.test-catalog > div:first-child {
+  border-top: none;
+}
+
+@media (max-width: 760px) {
+  .dev-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .devtools-heading,
+  .devtools-section-heading {
+    flex-direction: column;
+  }
+}

@@ -261,6 +261,7 @@ dependencies = [
  "boothready-helper",
  "boothready-model",
  "boothready-platform",
+ "boothready-testlab",
  "serde",
  "serde_json",
  "tauri",
@@ -279,6 +280,7 @@ dependencies = [
  "boothready-helper",
  "boothready-model",
  "boothready-platform",
+ "boothready-testlab",
  "clap",
  "serde",
  "serde_json",
@@ -336,6 +338,20 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "boothready-testlab"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "boothready-core",
+ "boothready-helper",
+ "boothready-model",
+ "boothready-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

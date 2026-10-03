@@ -321,3 +321,54 @@ export interface CopyReport {
   files_removed: number;
   cancelled: boolean;
 }
+
+export interface TestScenario {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface TestCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface VirtualTestResult {
+  id: string;
+  title: string;
+  description: string;
+  passed: boolean;
+  duration_ms: number;
+  checks: TestCheck[];
+  artifact: string | null;
+  error: string | null;
+}
+
+export interface VirtualTestSuite {
+  kind: "virtual";
+  passed: boolean;
+  root: string;
+  scenarios: VirtualTestResult[];
+}
+
+export interface TestLabDevice {
+  id: string;
+  display_name: string;
+  model: string | null;
+  size_bytes: number;
+  is_usb: boolean;
+  is_system: boolean;
+  mount_point: string | null;
+}
+
+export interface RealTestResult {
+  kind: "real_read_only";
+  read_ok: boolean;
+  device: TestLabDevice;
+  summary: DriveSummary;
+  assessment: DriveAssessment;
+  diagnostics_before: string;
+  diagnostics_after: string;
+  report: string;
+}
