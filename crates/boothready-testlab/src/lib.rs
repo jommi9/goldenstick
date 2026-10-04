@@ -114,7 +114,7 @@ pub fn scenarios() -> Vec<ScenarioInfo> {
 }
 
 /// Run one scenario or the complete matrix. `root` is the report directory;
-/// if omitted, a timestamped `test-reports/virtual-*` directory is used.
+/// it must not exist yet. If omitted, a timestamped `test-reports/virtual-*` directory is used.
 pub fn run_virtual_suite(
     selected: Option<&str>,
     keep_fixtures: bool,
@@ -128,8 +128,16 @@ pub fn run_virtual_suite(
             vec![SCENARIOS.iter().find(|s| s.id == id).with_context(|| format!("unknown virtual scenario '{id}'"))?]
         }
     };
-    let root = root.unwrap_or_else(|| PathBuf::from("test-reports").join(format!("virtual-{}", timestamp())));
-    fs::create_dir_all(&root)?;
+    let root = match root {
+        Some(root) => {
+            if let Some(parent) = root.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent)?;
+            }
+            fs::create_dir(&root).context("test output directory must not already exist")?;
+            root
+        }
+        None => create_report_directory(Path::new("test-reports"), "virtual")?,
+    };
 
     let mut results = Vec::new();
     for scenario in selected {
@@ -374,13 +382,96 @@ fn check(checks: &mut Vec<Check>, name: &str, passed: bool, detail: String) {
     checks.push(Check { name: name.into(), passed, detail });
 }
 
-fn timestamp() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
+/// Problems that prevent a mounted-volume metadata/header scan being complete.
+pub fn read_issues(report: &DriveReport) -> Vec<String> {
+    let Some(mount) = &report.mount_point else {
+        return vec!["No mounted volume was available for a content scan.".into()];
+    };
+    let mut issues = Vec::new();
+    for entry in walkdir::WalkDir::new(mount).follow_links(false) {
+        if let Err(error) = entry {
+            issues.push(format!("Could not inspect a directory entry: {error}"));
+        }
+    }
+    if !Path::new(mount).is_dir() {
+        issues.push("The mounted volume is no longer an accessible directory.".into());
+    }
+    let unreadable = unreadable_count(report);
+    if unreadable > 0 {
+        issues.push(format!("{unreadable} audio files could not be probed."));
+    }
+    issues
+}
+
+/// Atomically reserve a fresh report folder, preserving all earlier runs.
+pub fn create_report_directory(parent: &Path, kind: &str) -> Result<PathBuf> {
+    fs::create_dir_all(parent)?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    for suffix in 0..1000 {
+        let path = parent.join(format!("{kind}-{stamp}-{suffix}"));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bail!("could not reserve a fresh test report directory")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_output_is_rejected_without_touching_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let usb = root.path().join("empty-drive/usb");
+        fs::create_dir_all(&usb).unwrap();
+        let sentinel = usb.join("personal-file.txt");
+        fs::write(&sentinel, "keep this").unwrap();
+        let result = run_virtual_suite(
+            Some("empty-drive"),
+            false,
+            Some(root.path().to_path_buf()),
+            &Ruleset::builtin(),
+            &UsbCatalog::builtin(),
+        );
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "keep this");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_mount_is_an_incomplete_read() {
+        let root = tempfile::tempdir().unwrap();
+        create_stick(root.path(), stick("kingston-32").unwrap()).unwrap();
+        let platform = boothready_platform::demo::DemoPlatform::new(root.path().to_path_buf());
+        let mut dev = platform.list_devices().unwrap().remove(0);
+        dev.volumes.clear();
+        let report = analyze_drive(&dev, None, &Ruleset::builtin(), &UsbCatalog::builtin(), |_, _| {});
+        assert!(!read_issues(&report).is_empty());
+    }
+
+    #[test]
+    fn removed_mount_is_an_incomplete_read_but_empty_mounted_volume_passes() {
+        let root = tempfile::tempdir().unwrap();
+        create_stick(root.path(), stick("kingston-32").unwrap()).unwrap();
+        let platform = boothready_platform::demo::DemoPlatform::new(root.path().to_path_buf());
+        let dev = platform.list_devices().unwrap().remove(0);
+        let report = analyze_drive(&dev, None, &Ruleset::builtin(), &UsbCatalog::builtin(), |_, _| {});
+        assert!(read_issues(&report).is_empty());
+        fs::remove_dir_all(report.mount_point.as_ref().unwrap()).unwrap();
+        assert!(!read_issues(&report).is_empty());
+    }
+
+    #[test]
+    fn repeated_reports_keep_separate_outputs() {
+        let root = tempfile::tempdir().unwrap();
+        let first = create_report_directory(root.path(), "real").unwrap();
+        fs::write(first.join("report.json"), "original").unwrap();
+        let second = create_report_directory(root.path(), "real").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(first.join("report.json")).unwrap(), "original");
+    }
 
     #[test]
     fn complete_virtual_matrix_passes() {

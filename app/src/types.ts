@@ -365,6 +365,7 @@ export interface TestLabDevice {
 export interface RealTestResult {
   kind: "real_read_only";
   read_ok: boolean;
+  read_issues: string[];
   device: TestLabDevice;
   summary: DriveSummary;
   assessment: DriveAssessment;

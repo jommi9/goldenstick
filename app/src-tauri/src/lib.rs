@@ -296,17 +296,10 @@ async fn save_diagnostics(app: AppHandle, state: State<'_, AppState>) -> Res<Str
 
 // ------------------------------------------------------------- test lab
 
-fn test_lab_dir(app: &AppHandle, kind: &str, stamp: u64) -> Res<PathBuf> {
-    let dir = app
-        .path()
-        .download_dir()
-        .or_else(|_| app.path().home_dir())
-        .map_err(e2s)?
-        .join("BoothReady")
-        .join("test-lab")
-        .join(format!("{kind}-{stamp}"));
-    std::fs::create_dir_all(&dir).map_err(e2s)?;
-    Ok(dir)
+fn test_lab_dir(app: &AppHandle, kind: &str) -> Res<PathBuf> {
+    let dir =
+        app.path().download_dir().or_else(|_| app.path().home_dir()).map_err(e2s)?.join("BoothReady").join("test-lab");
+    boothready_testlab::create_report_directory(&dir, kind).map_err(e2s)
 }
 
 fn safe_test_label(label: Option<String>) -> String {
@@ -332,7 +325,7 @@ async fn test_lab_virtual(
     scenario: Option<String>,
     keep_fixtures: bool,
 ) -> Res<boothready_testlab::VirtualSuite> {
-    let root = test_lab_dir(&app, "virtual", now_unix())?;
+    let root = test_lab_dir(&app, "virtual")?.join("suite");
     let rules = state.rules.clone();
     let catalog = state.catalog.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -351,7 +344,7 @@ async fn test_lab_save_diagnostics(app: AppHandle, state: State<'_, AppState>, l
     })
     .await
     .map_err(e2s)?;
-    let dir = test_lab_dir(&app, "diagnostics", report.created_unix)?;
+    let dir = test_lab_dir(&app, "diagnostics")?;
     let path = dir.join(format!("diagnostics-{}-{}.json", safe_test_label(label), report.created_unix));
     std::fs::write(&path, serde_json::to_vec_pretty(&report).map_err(e2s)?).map_err(e2s)?;
     Ok(path.display().to_string())
@@ -367,7 +360,7 @@ async fn test_lab_real(
     if state.demo_root().is_some() {
         return Err("Turn off Demo mode before reading a real USB. This test is read-only and never prepares, copies or ejects the drive.".into());
     }
-    let out = test_lab_dir(&app, "real", now_unix())?;
+    let out = test_lab_dir(&app, "real")?;
     let platform = state.platform();
     let rules = state.rules.clone();
     let catalog = state.catalog.clone();
@@ -413,9 +406,11 @@ async fn test_lab_real(
             is_system: dev.is_system,
             mount_point: dev.primary_mount().and_then(|v| v.mount_point.as_ref().map(|p| p.display().to_string())),
         };
+        let read_issues = boothready_testlab::read_issues(&drive);
         let result = TestLabRealResult {
             kind: "real_read_only",
-            read_ok: true,
+            read_ok: read_issues.is_empty(),
+            read_issues,
             device,
             summary: DriveSummary::from_report(&drive),
             assessment,

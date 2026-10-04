@@ -322,6 +322,7 @@ pub struct TestLabDevice {
 pub struct TestLabRealResult {
     pub kind: &'static str,
     pub read_ok: bool,
+    pub read_issues: Vec<String>,
     pub device: TestLabDevice,
     pub summary: DriveSummary,
     pub assessment: DriveAssessment,

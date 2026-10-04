@@ -18,7 +18,6 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Subcommand)]
 pub enum TestCmd {
@@ -59,6 +58,7 @@ pub struct RealArgs {
 struct RealResult<'a> {
     kind: &'static str,
     read_ok: bool,
+    read_issues: Vec<String>,
     device: &'a PhysicalDevice,
     drive: &'a DriveReport,
     assessment: &'a DriveAssessment,
@@ -132,8 +132,16 @@ fn real_test(args: &RealArgs, cli: &super::Cli, rules: &Ruleset, catalog: &UsbCa
     if cli.demo.is_some() {
         bail!("`test real` uses the native platform; omit --demo and use `test virtual` for fixtures");
     }
-    let out = args.out.clone().unwrap_or_else(|| PathBuf::from("test-reports").join(format!("real-{}", timestamp())));
-    fs::create_dir_all(&out)?;
+    let out = match &args.out {
+        Some(out) => {
+            if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+                fs::create_dir_all(parent)?;
+            }
+            fs::create_dir(out).context("test output directory must not already exist")?;
+            out.clone()
+        }
+        None => boothready_testlab::create_report_directory(Path::new("test-reports"), "real")?,
+    };
     let backend = NativeBackend::new();
     let before = diagnostics::collect(backend.platform(), env!("CARGO_PKG_VERSION"));
     let before_path = out.join("diagnostics-before.json");
@@ -165,9 +173,12 @@ fn real_test(args: &RealArgs, cli: &super::Cli, rules: &Ruleset, catalog: &UsbCa
     let after_path = out.join("diagnostics-after.json");
     write_json(&after_path, &after)?;
     let report_path = out.join("report.json");
+    let read_issues = boothready_testlab::read_issues(&drive);
+    let read_ok = read_issues.is_empty();
     let result = RealResult {
         kind: "real_read_only",
-        read_ok: true,
+        read_ok,
+        read_issues,
         device: &dev,
         drive: &drive,
         assessment: &assessment,
@@ -179,10 +190,17 @@ fn real_test(args: &RealArgs, cli: &super::Cli, rules: &Ruleset, catalog: &UsbCa
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
+        println!("  Content scan: {}", if read_ok { "complete" } else { "incomplete" });
+        for issue in &result.read_issues {
+            println!("  {issue}");
+        }
         println!("  Verdict: {}", assessment.overall.label());
         println!("  Before: {}", before_path.display());
         println!("  After:  {}", after_path.display());
         println!("  Report: {}", report_path.display());
+    }
+    if !read_ok {
+        bail!("USB content scan was incomplete; see the saved report")
     }
     Ok(())
 }
@@ -235,8 +253,4 @@ fn replay(path: &Path, json: bool) -> Result<()> {
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     fs::write(path, serde_json::to_vec_pretty(value)?).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
-}
-
-fn timestamp() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
 }

@@ -24,7 +24,7 @@ cargo run -p boothready-cli -- test virtual acceptance-main --keep
 cargo run -p boothready-cli -- --json test virtual
 ```
 
-The scenarios currently cover the PRD acceptance drive, an empty drive, a complete rekordbox export, helper formatting to MBR + FAT32 and a copy followed by full read-back verification. Reports are saved under `test-reports/virtual-<timestamp>/`. The default run removes fixture contents after saving each result; use `--keep` or `--root` when inspecting them.
+The scenarios currently cover the PRD acceptance drive, an empty drive, a complete rekordbox export, helper formatting to MBR + FAT32 and a copy followed by full read-back verification. Reports are saved under `test-reports/virtual-<timestamp>/`. The default run removes fixture contents after saving each result; use `--keep` or `--root` when inspecting them. An explicit `--root` must name a new directory because existing folders are refused before any fixture writes. Automatic output folders are reserved separately for each run.
 
 Each scenario reports named checks. A failing scenario exits with status 1, so it can run in CI or a pre-push hook. Add a failing scenario check before changing engine code when a fixture exposes a regression.
 
@@ -62,7 +62,7 @@ cargo run -p boothready-cli -- devices
 cargo run -p boothready-cli -- test real <exact-device-id> --out test-reports/real-<date>
 ```
 
-The command prints the device ID, model and size before reading it. It refuses system disks and non-USB devices. It writes `diagnostics-before.json`, `diagnostics-after.json` and `report.json` on the computer. The report contains the drive analysis and compatibility assessment; it does not perform a destructive operation.
+The command prints the device ID, model and size before reading it. It refuses system disks and non-USB devices. It writes `diagnostics-before.json`, `diagnostics-after.json` and `report.json` on the computer. An explicit `--out` must name a new directory so earlier reports remain intact. The report contains the drive analysis and compatibility assessment. `read_ok` means the mounted content directory could be traversed and the audio headers were readable. A missing mount, directory access error or unreadable audio header produces an incomplete scan with `read_issues`; the CLI also exits unsuccessfully after saving the report. Raw layout inspection can fall back to OS metadata when elevated access is unavailable. This scan does not perform a full-file read-back or establish playback compatibility.
 
 Use the connection setup you expect to use at a gig, including a USB-C adapter or hub. The report records the storage device and negotiated link details, while the adapter remains part of the setup being tested.
 
