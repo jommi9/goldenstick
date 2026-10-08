@@ -1,4 +1,4 @@
-use super::{AudioInfo, Codec, Container, ProbeError, Source};
+use super::{be64, AudioInfo, Codec, Container, ProbeError, Source};
 use std::io::{Read, Seek};
 
 pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>, start: u64) -> Result<AudioInfo, ProbeError> {
@@ -33,7 +33,7 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>, start: u64) -> Result<A
         }
     }
     let s = streaminfo.ok_or_else(|| ProbeError::Corrupt("FLAC file has no STREAMINFO".into()))?;
-    let packed = u64::from_be_bytes(s[10..18].try_into().unwrap());
+    let packed = be64(&s, 10);
     let rate = (packed >> 44) as u32;
     let channels = ((packed >> 41) & 0x7) as u16 + 1;
     let bits = ((packed >> 36) & 0x1F) as u16 + 1;

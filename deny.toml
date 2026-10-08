@@ -1,0 +1,74 @@
+# cargo-deny configuration: `cargo deny check` (CI runs it in the engine job).
+#
+# Every target is checked, not only the host, so the macOS and Windows
+# backends' dependencies are covered from a Linux runner.
+
+[graph]
+all-features = true
+# Dev-dependencies never ship. They are left out so the checks describe the
+# binaries: rekordcrate (MPL-2.0, and it pins a quick-xml with open
+# advisories) is only used by the tests to cross-check the PDB reader.
+exclude-dev = true
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Known vulnerabilities fail the check; a crate that is merely unmaintained
+# or yanked is reported so it can be replaced in time.
+unmaintained = "workspace"
+yanked = "warn"
+
+[licenses]
+version = 2
+# Permissive licences only. The helper (the privileged process) and the
+# CLI link nothing outside this list plus SQLite, which is public domain
+# (docs/ARCHITECTURE.md). Crates that only exist on another platform or
+# that no dependency uses today stay listed so a new transitive crate under
+# the same terms does not need a config change.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    "OpenSSL",
+]
+unused-allowed-license = "allow"
+confidence-threshold = 0.8
+# Workspace crates are proprietary (license = "UNLICENSED") and never
+# published, so they carry no SPDX expression to check.
+private = { ignore = true }
+# MPL-2.0 is file-level copyleft: fine for a proprietary app, but any change
+# to these files must be published, and it belongs in the legal review
+# (docs/ARCHITECTURE.md). Only the desktop app pulls them in, through
+# Tauri's HTML and CSS handling, so they are allowed one crate at a time
+# rather than globally; the helper and the CLI must stay free of MPL code.
+exceptions = [
+    { crate = "cssparser", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+    { crate = "selectors", allow = ["MPL-2.0"] },
+    { crate = "dtoa-short", allow = ["MPL-2.0"] },
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between the workspace's own crates are fine.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

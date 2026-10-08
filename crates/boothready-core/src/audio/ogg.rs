@@ -1,4 +1,4 @@
-use super::{le16, le32, le64, AudioInfo, Codec, Container, ProbeError, Source};
+use super::{be64, le16, le32, le64, AudioInfo, Codec, Container, ProbeError, Source};
 use std::io::{Read, Seek};
 
 pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, ProbeError> {
@@ -28,7 +28,7 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, Pr
     } else if payload.len() >= 13 + 34 && &payload[0..5] == b"\x7FFLAC" {
         info = AudioInfo::new(Container::Ogg, Codec::Flac);
         let s = &payload[13 + 4..];
-        let packed = u64::from_be_bytes(s[10..18].try_into().unwrap());
+        let packed = be64(s, 10);
         rate = (packed >> 44) as u32;
         info.channels = Some(((packed >> 41) & 7) as u16 + 1);
         info.bit_depth = Some(((packed >> 36) & 0x1F) as u16 + 1);

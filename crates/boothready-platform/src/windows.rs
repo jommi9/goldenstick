@@ -177,6 +177,19 @@ struct VolumeRec {
 }
 
 /// Every mounted volume and the physical disk it lives on.
+/// The little-endian `u32` at `o`. Like indexing, it panics when `b` is too
+/// short; callers check the length first.
+fn le_u32(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+}
+
+/// The little-endian `i64` at `o`, with the same bounds behaviour as `le_u32`.
+fn le_i64(b: &[u8], o: usize) -> i64 {
+    let mut a = [0u8; 8];
+    a.copy_from_slice(&b[o..o + 8]);
+    i64::from_le_bytes(a)
+}
+
 fn volumes() -> Vec<VolumeRec> {
     let mut out = Vec::new();
     let mut name = [0u16; 512];
@@ -188,7 +201,7 @@ fn volumes() -> Vec<VolumeRec> {
         if let Some(h) = open(guid_path.trim_end_matches('\\'), 0) {
             if let Some(buf) = ioctl(&h, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, None, 256) {
                 if buf.len() >= 8 {
-                    let count = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+                    let count = le_u32(&buf, 0) as usize;
                     // DISK_EXTENT { DiskNumber u32, pad u32, StartingOffset i64, ExtentLength i64 }
                     for i in 0..count {
                         let o = 8 + i * 24;
@@ -197,9 +210,9 @@ fn volumes() -> Vec<VolumeRec> {
                         }
                         out.push(VolumeRec {
                             guid_path: guid_path.clone(),
-                            disk: u32::from_le_bytes(buf[o..o + 4].try_into().unwrap()),
-                            offset: i64::from_le_bytes(buf[o + 8..o + 16].try_into().unwrap()) as u64,
-                            length: i64::from_le_bytes(buf[o + 16..o + 24].try_into().unwrap()) as u64,
+                            disk: le_u32(&buf, o),
+                            offset: le_i64(&buf, o + 8) as u64,
+                            length: le_i64(&buf, o + 16) as u64,
                         });
                     }
                 }

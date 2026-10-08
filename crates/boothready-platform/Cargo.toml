@@ -4,7 +4,11 @@ description = "Device discovery, watching and ejecting for macOS, Windows and Li
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 boothready-model.workspace = true

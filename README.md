@@ -33,7 +33,7 @@ The simulated 128 GB SanDisk is the PRD's acceptance scenario: GPT and exFAT fro
 
 ## Alpha builds
 
-The Installers workflow builds an unsigned macOS app (universal, as a `.dmg`) and Windows installers (`.msi` and `.exe`). Run it from the Actions tab to get them as artifacts, or push a `v*` tag to also get a draft pre-release with the files attached.
+The Installers workflow builds a macOS app (universal, as a `.dmg`) and Windows installers (`.msi` and `.exe`). Run it from the Actions tab to get them as artifacts, or push a `v*` tag to also get a draft pre-release with the files attached. The workflow signs and notarises the macOS app and signs the Windows installers as soon as the repository secrets listed at the top of [`.github/workflows/release.yml`](.github/workflows/release.yml) exist; until then it builds unsigned, and each run reports which it did.
 
 The builds aren't signed yet, so both systems warn before the first launch. On macOS, open the app with right-click and Open, or run `xattr -dr com.apple.quarantine /Applications/BoothReady.app`. On Windows, choose More info and then Run anyway.
 
