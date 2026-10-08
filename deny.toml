@@ -14,10 +14,25 @@ exclude-dev = true
 version = 2
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-# Known vulnerabilities fail the check; a crate that is merely unmaintained
-# or yanked is reported so it can be replaced in time.
-unmaintained = "workspace"
+# Known vulnerabilities fail the check, and so does an unmaintained crate
+# anywhere in the tree (this cargo-deny config cannot downgrade those to a
+# warning; `cargo deny check -W unmaintained` does on the command line), so
+# a new one has to be looked at and either replaced or listed here with the
+# reason. A yanked crate only warns: `cargo update -p <crate>` fixes it.
+unmaintained = "all"
 yanked = "warn"
+ignore = [
+    # Unmaintained crates that only Tauri itself depends on (tauri-macros,
+    # tauri-codegen and tauri-build through unic-ucd-ident, tauri-runtime
+    # through proc-macro-error). Nothing here uses them directly; they go
+    # away when Tauri drops them.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, via tauri-runtime" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident, via tauri-codegen" },
+]
 
 [licenses]
 version = 2
