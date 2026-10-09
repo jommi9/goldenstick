@@ -4,6 +4,8 @@
 //! Demo and test builds call the same code in-process against disk images,
 //! so the erase path that ships is the one the tests exercise.
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use boothready_core::format::{build_fat32, normalize_label, plan_layout, write_mbr};
 use boothready_core::io::AlignedIo;
 use boothready_core::media::{inspect, MediaLayout};

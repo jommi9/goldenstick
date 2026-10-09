@@ -138,7 +138,9 @@ fn tracks(with_issues: bool) -> Vec<Tr> {
 
 fn write(root: &Path, rel: &str, bytes: &[u8]) -> io::Result<()> {
     let p = root.join(rel);
-    fs::create_dir_all(p.parent().unwrap())?;
+    if let Some(dir) = p.parent() {
+        fs::create_dir_all(dir)?;
+    }
     fs::write(p, bytes)
 }
 

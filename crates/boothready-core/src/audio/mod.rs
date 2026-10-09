@@ -226,23 +226,30 @@ impl<R: Read + Seek> Source<R> {
     }
 }
 
+/// The `N` bytes at `o`, as an array. Like indexing, it panics when `b` is
+/// too short; callers check the length first.
+pub(crate) fn arr<const N: usize>(b: &[u8], o: usize) -> [u8; N] {
+    let mut a = [0u8; N];
+    a.copy_from_slice(&b[o..o + N]);
+    a
+}
 pub(crate) fn be16(b: &[u8], o: usize) -> u16 {
-    u16::from_be_bytes([b[o], b[o + 1]])
+    u16::from_be_bytes(arr(b, o))
 }
 pub(crate) fn be32(b: &[u8], o: usize) -> u32 {
-    u32::from_be_bytes(b[o..o + 4].try_into().unwrap())
+    u32::from_be_bytes(arr(b, o))
 }
 pub(crate) fn be64(b: &[u8], o: usize) -> u64 {
-    u64::from_be_bytes(b[o..o + 8].try_into().unwrap())
+    u64::from_be_bytes(arr(b, o))
 }
 pub(crate) fn le16(b: &[u8], o: usize) -> u16 {
-    u16::from_le_bytes([b[o], b[o + 1]])
+    u16::from_le_bytes(arr(b, o))
 }
 pub(crate) fn le32(b: &[u8], o: usize) -> u32 {
-    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
+    u32::from_le_bytes(arr(b, o))
 }
 pub(crate) fn le64(b: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes(b[o..o + 8].try_into().unwrap())
+    u64::from_le_bytes(arr(b, o))
 }
 
 #[cfg(any(test, feature = "fixtures"))]

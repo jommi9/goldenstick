@@ -1,6 +1,8 @@
 //! The PRD §100 acceptance scenario, driven through the real binary on
 //! simulated drives.
 
+#![allow(clippy::unwrap_used)]
+
 use std::process::Command;
 
 fn br(demo: &std::path::Path, args: &[&str]) -> (bool, String) {

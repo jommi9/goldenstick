@@ -4,7 +4,11 @@ description = "Privileged disk helper for BoothReady. Accepts only structured, w
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "boothready-helper"

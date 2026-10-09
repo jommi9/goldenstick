@@ -1,0 +1,89 @@
+# cargo-deny configuration: `cargo deny check` (CI runs it in the engine job).
+#
+# Every target is checked, not only the host, so the macOS and Windows
+# backends' dependencies are covered from a Linux runner.
+
+[graph]
+all-features = true
+# Dev-dependencies never ship. They are left out so the checks describe the
+# binaries: rekordcrate (MPL-2.0, and it pins a quick-xml with open
+# advisories) is only used by the tests to cross-check the PDB reader.
+exclude-dev = true
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# Known vulnerabilities fail the check, and so does an unmaintained crate
+# anywhere in the tree (this cargo-deny config cannot downgrade those to a
+# warning; `cargo deny check -W unmaintained` does on the command line), so
+# a new one has to be looked at and either replaced or listed here with the
+# reason. A yanked crate only warns: `cargo update -p <crate>` fixes it.
+unmaintained = "all"
+yanked = "warn"
+ignore = [
+    # Unmaintained crates that only Tauri itself depends on (tauri-macros,
+    # tauri-codegen and tauri-build through unic-ucd-ident, tauri-runtime
+    # through proc-macro-error). Nothing here uses them directly; they go
+    # away when Tauri drops them.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, via tauri-runtime" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version, via tauri-codegen" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident, via tauri-codegen" },
+]
+
+[licenses]
+version = 2
+# Permissive licences only. The helper (the privileged process) and the
+# CLI link nothing outside this list plus SQLite, which is public domain
+# (docs/ARCHITECTURE.md). Crates that only exist on another platform or
+# that no dependency uses today stay listed so a new transitive crate under
+# the same terms does not need a config change.
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "BSL-1.0",
+    "OpenSSL",
+]
+unused-allowed-license = "allow"
+confidence-threshold = 0.8
+# Workspace crates are proprietary (license = "UNLICENSED") and never
+# published, so they carry no SPDX expression to check.
+private = { ignore = true }
+# MPL-2.0 is file-level copyleft: fine for a proprietary app, but any change
+# to these files must be published, and it belongs in the legal review
+# (docs/ARCHITECTURE.md). Only the desktop app pulls them in, through
+# Tauri's HTML and CSS handling, so they are allowed one crate at a time
+# rather than globally; the helper and the CLI must stay free of MPL code.
+exceptions = [
+    { crate = "cssparser", allow = ["MPL-2.0"] },
+    { crate = "cssparser-macros", allow = ["MPL-2.0"] },
+    { crate = "selectors", allow = ["MPL-2.0"] },
+    { crate = "dtoa-short", allow = ["MPL-2.0"] },
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between the workspace's own crates are fine.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
