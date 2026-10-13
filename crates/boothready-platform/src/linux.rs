@@ -272,11 +272,12 @@ impl Platform for LinuxPlatform {
             .into_iter()
             .find(|d| d.id == device_id)
             .ok_or_else(|| PlatformError::NotFound(device_id.into()))?;
-        for v in dev.volumes.iter().filter(|v| v.mount_point.is_some()) {
+        for v in &dev.volumes {
+            let Some(mount_point) = v.mount_point.as_ref() else { continue };
             if have("udisksctl") {
                 run("udisksctl", &["unmount", "--no-user-interaction", "-b", &v.os_path])?;
             } else {
-                let mp = v.mount_point.as_ref().unwrap().to_string_lossy().into_owned();
+                let mp = mount_point.to_string_lossy().into_owned();
                 run("umount", &[&mp])?;
             }
         }

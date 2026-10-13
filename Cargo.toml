@@ -20,6 +20,8 @@ default-members = [
 version = "0.1.0"
 edition = "2021"
 license = "UNLICENSED"
+# Proprietary: never published to a registry.
+publish = false
 repository = "https://github.com/jommi9/goldenstick"
 rust-version = "1.85"
 
@@ -40,6 +42,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
+
+[workspace.lints.clippy]
+# A panic is never an acceptable way to handle bad input or a failed system
+# call in shipped code. Tests may still unwrap; each crate root allows it
+# under cfg(test), and integration tests and examples allow it at their top.
+unwrap_used = "deny"
 
 [profile.release]
 lto = "thin"

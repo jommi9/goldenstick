@@ -5,6 +5,8 @@
 //! them safely. Everything identifies drives by physical device, never by
 //! drive letter or mount point, because those change.
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 pub mod demo;
 pub mod diagnostics;
 #[cfg(target_os = "linux")]

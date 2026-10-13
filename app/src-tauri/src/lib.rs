@@ -4,6 +4,8 @@
 //! thread, and return plain data. Long operations stream progress as events
 //! so the UI stays responsive (PRD §70).
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 mod dto;
 mod elevate;
 
@@ -26,7 +28,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -60,19 +62,27 @@ fn e2s<E: std::fmt::Display>(e: E) -> String {
 }
 
 impl AppState {
+    /// The app state. A thread that panicked while holding the lock leaves
+    /// plain data behind (mode, reports, identities), which every command
+    /// can still use, so a poisoned lock is recovered rather than taking
+    /// the whole app down with it.
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn platform(&self) -> Arc<dyn Platform> {
-        self.inner.lock().unwrap().platform.clone()
+        self.lock().platform.clone()
     }
 
     fn backend(&self) -> Box<dyn Backend> {
-        match &self.inner.lock().unwrap().mode {
+        match &self.lock().mode {
             Mode::Demo(root) => Box::new(DemoBackend::new(root.join("usb"))),
             Mode::Real => Box::new(NativeBackend::new()),
         }
     }
 
     fn demo_root(&self) -> Option<PathBuf> {
-        match &self.inner.lock().unwrap().mode {
+        match &self.lock().mode {
             Mode::Demo(root) => Some(root.clone()),
             Mode::Real => None,
         }
@@ -90,12 +100,12 @@ impl AppState {
     /// The name a drive is shown with: the user's confirmed identity, or
     /// the best catalog match.
     fn display_name(&self, dev: &PhysicalDevice) -> String {
-        let confirmed = self.inner.lock().unwrap().identities.get(&media_key(dev)).cloned();
+        let confirmed = self.lock().identities.get(&media_key(dev)).cloned();
         confirmed.unwrap_or_else(|| boothready_core::identify::identify(dev, &self.catalog)).display_name
     }
 
     fn report(&self, id: &str) -> Res<DriveReport> {
-        self.inner.lock().unwrap().reports.get(id).cloned().ok_or_else(|| "Scan the drive first.".to_string())
+        self.lock().reports.get(id).cloned().ok_or_else(|| "Scan the drive first.".to_string())
     }
 }
 
@@ -104,7 +114,7 @@ fn start_watcher(app: &AppHandle, platform: Arc<dyn Platform>) -> Watcher {
     Watcher::spawn(platform, Duration::from_millis(1000), move |ev| {
         if let DeviceEvent::Disappeared { id } = &ev {
             if let Some(state) = handle.try_state::<AppState>() {
-                state.inner.lock().unwrap().reports.remove(id);
+                state.lock().reports.remove(id);
             }
         }
         let _ = handle.emit("device-event", &ev);
@@ -122,7 +132,7 @@ fn set_mode(app: &AppHandle, state: &AppState, mode: Mode) -> Res<()> {
             Arc::new(boothready_platform::demo::DemoPlatform::new(root.join("usb")))
         }
     };
-    let mut inner = state.inner.lock().unwrap();
+    let mut inner = state.lock();
     if let Some(w) = inner.watcher.take() {
         w.stop();
     }
@@ -147,7 +157,7 @@ struct AppInfo {
 
 #[tauri::command]
 fn app_info(state: State<'_, AppState>) -> AppInfo {
-    let inner = state.inner.lock().unwrap();
+    let inner = state.lock();
     AppInfo {
         version: env!("CARGO_PKG_VERSION").into(),
         demo: matches!(inner.mode, Mode::Demo(_)),
@@ -176,7 +186,7 @@ async fn list_devices(state: State<'_, AppState>) -> Res<Vec<DeviceCard>> {
     let platform = state.platform();
     let devices =
         tauri::async_runtime::spawn_blocking(move || platform.list_devices()).await.map_err(e2s)?.map_err(e2s)?;
-    let inner = state.inner.lock().unwrap();
+    let inner = state.lock();
     Ok(devices
         .into_iter()
         .map(|d| {
@@ -199,7 +209,7 @@ async fn analyze(app: AppHandle, state: State<'_, AppState>, device_id: String) 
     let rules = state.rules.clone();
     let catalog = state.catalog.clone();
     let key = media_key(&dev);
-    let confirmed = state.inner.lock().unwrap().identities.get(&key).cloned();
+    let confirmed = state.lock().identities.get(&key).cloned();
     let id2 = device_id.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
         // Raw inspection works in demo mode and when we happen to have
@@ -228,7 +238,7 @@ async fn analyze(app: AppHandle, state: State<'_, AppState>, device_id: String) 
         report.identification = c;
     }
     let summary = DriveSummary::from_report(&report);
-    let mut inner = state.inner.lock().unwrap();
+    let mut inner = state.lock();
     if let Some(store) = &inner.store {
         let _ = store.media_seen(&key, &report.identification.display_name, now_unix());
     }
@@ -264,7 +274,7 @@ fn identity_candidates(state: State<'_, AppState>, device_id: String, query: Opt
 #[tauri::command]
 fn confirm_identity(state: State<'_, AppState>, device_id: String, catalog_id: String) -> Res<Identification> {
     let product = state.catalog.product(&catalog_id).ok_or("unknown product")?.clone();
-    let mut inner = state.inner.lock().unwrap();
+    let mut inner = state.lock();
     let report = inner.reports.get_mut(&device_id).ok_or("Scan the drive first.")?;
     let id = apply_user_choice(report.identification.clone(), &product);
     report.identification = id.clone();
@@ -329,10 +339,8 @@ async fn plan(
     let platform = state.platform();
     let devices =
         tauri::async_runtime::spawn_blocking(move || platform.list_devices()).await.map_err(e2s)?.map_err(e2s)?;
-    let library_bytes = device_id
-        .as_ref()
-        .and_then(|id| state.inner.lock().unwrap().reports.get(id).map(|r| r.content.used_bytes))
-        .unwrap_or(0);
+    let library_bytes =
+        device_id.as_ref().and_then(|id| state.lock().reports.get(id).map(|r| r.content.used_bytes)).unwrap_or(0);
     let drives: Vec<DriveCandidate> = devices
         .iter()
         .filter(|d| boothready_core::privileged::eligibility(d).eligible)
@@ -427,7 +435,7 @@ async fn prepare(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    state.inner.lock().unwrap().reports.remove(&device_id);
+    state.lock().reports.remove(&device_id);
     Ok(result)
 }
 
@@ -598,7 +606,7 @@ async fn copy_drive(app: AppHandle, state: State<'_, AppState>, from_id: String,
     })
     .await
     .map_err(e2s)??;
-    state.inner.lock().unwrap().reports.remove(&to_id);
+    state.lock().reports.remove(&to_id);
     Ok(report)
 }
 
@@ -629,12 +637,12 @@ async fn eject(state: State<'_, AppState>, device_id: String) -> Res<EjectResult
 
 #[tauri::command]
 fn known_media(state: State<'_, AppState>) -> Vec<KnownMedia> {
-    state.inner.lock().unwrap().store.as_ref().and_then(|s| s.known_media().ok()).unwrap_or_default()
+    state.lock().store.as_ref().and_then(|s| s.known_media().ok()).unwrap_or_default()
 }
 
 #[tauri::command]
 fn profiles(state: State<'_, AppState>) -> Vec<GigProfile> {
-    state.inner.lock().unwrap().store.as_ref().and_then(|s| s.profiles().ok()).unwrap_or_default()
+    state.lock().store.as_ref().and_then(|s| s.profiles().ok()).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -654,7 +662,7 @@ fn save_profile(
         redundancy,
         updated_unix: now_unix(),
     };
-    let inner = state.inner.lock().unwrap();
+    let inner = state.lock();
     inner.store.as_ref().ok_or("storage unavailable")?.save_profile(&p).map_err(e2s)?;
     Ok(p)
 }
@@ -794,47 +802,52 @@ pub fn run() {
 /// (`cargo run -p boothready-app --example mock_snapshot`). Runs the demo
 /// flow through the same DTO code the commands use, so the mock can't drift
 /// from what the app really returns.
-pub fn mock_snapshot(root: &Path) -> serde_json::Value {
+pub fn mock_snapshot(root: &Path) -> Res<serde_json::Value> {
     use boothready_core::demo::{create_stick, populate, STICKS};
     use boothready_platform::demo::DemoPlatform;
     use serde_json::json;
     let rules = Ruleset::builtin();
     let catalog = UsbCatalog::builtin();
     let usb = root.join("usb");
-    std::fs::create_dir_all(&usb).unwrap();
+    std::fs::create_dir_all(&usb).map_err(e2s)?;
     for s in STICKS {
-        create_stick(&usb, s).unwrap();
+        create_stick(&usb, s).map_err(e2s)?;
     }
     let platform = DemoPlatform::new(usb.clone());
     let backend = DemoBackend::new(usb.clone());
-    let analyze = |id: &str| -> DriveReport {
-        let dev = platform.list_devices().unwrap().into_iter().find(|d| d.id == id).unwrap();
+    let analyze = |id: &str| -> Res<DriveReport> {
+        let dev = platform
+            .list_devices()
+            .map_err(e2s)?
+            .into_iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("demo drive {id} is missing"))?;
         let raw = backend.open_read(&dev).ok().and_then(|f| boothready_core::media::inspect(f).ok());
-        analyze_drive(&dev, raw, &rules, &catalog, |_, _| {})
+        Ok(analyze_drive(&dev, raw, &rules, &catalog, |_, _| {}))
     };
-    let assessments = |r: &DriveReport| -> serde_json::Value {
+    let assessments = |r: &DriveReport| -> Res<serde_json::Value> {
         let mut m = serde_json::Map::new();
         for p in &rules.presets {
             m.insert(
                 p.id.clone(),
-                serde_json::to_value(assess_drive(&r.facts, &rules.devices_by_id(&p.devices), &rules)).unwrap(),
+                serde_json::to_value(assess_drive(&r.facts, &rules.devices_by_id(&p.devices), &rules)).map_err(e2s)?,
             );
         }
-        serde_json::Value::Object(m)
+        Ok(serde_json::Value::Object(m))
     };
-    let state = |r: &DriveReport| -> serde_json::Value {
-        json!({
+    let state = |r: &DriveReport| -> Res<serde_json::Value> {
+        Ok(json!({
             "card": DeviceCard::new(r.device.clone(), r.identification.clone(), media_key(&r.device), None),
             "summary": DriveSummary::from_report(r),
-            "assessments": assessments(r),
+            "assessments": assessments(r)?,
             "confirmation": ConfirmationDetails::new(r, &r.fingerprint),
             "candidates": r.identification.candidates,
-        })
+        }))
     };
     let mut drives = serde_json::Map::new();
     for s in STICKS {
         let id = format!("demo:{}", s.name);
-        let initial = analyze(&id);
+        let initial = analyze(&id)?;
         // Rebuild as MBR + FAT32, then a fresh export: what the flow produces.
         let dev = initial.device.clone();
         let fp = DeviceFingerprint::of(&dev);
@@ -846,17 +859,17 @@ pub fn mock_snapshot(root: &Path) -> serde_json::Value {
             label: "BR_MAIN".into(),
         };
         boothready_helper::handle(&backend, req, &mut |_| {});
-        let prepared = analyze(&id);
+        let prepared = analyze(&id)?;
         let volume = usb.join(s.name).join("volume");
         populate(&volume, if s.name == "kingston-32" { DemoContent::BothLibraries } else { DemoContent::FullExport })
-            .unwrap();
-        let exported = analyze(&id);
+            .map_err(e2s)?;
+        let exported = analyze(&id)?;
         drives.insert(
             id,
-            json!({ "initial": state(&initial), "prepared": state(&prepared), "exported": state(&exported) }),
+            json!({ "initial": state(&initial)?, "prepared": state(&prepared)?, "exported": state(&exported)? }),
         );
     }
-    let club = rules.preset("unknown_club").unwrap();
+    let club = rules.preset("unknown_club").ok_or("the built-in ruleset has no unknown_club preset")?;
     let plan = plan_kit(
         &KitRequest {
             targets: club.devices.clone(),
@@ -875,7 +888,7 @@ pub fn mock_snapshot(root: &Path) -> serde_json::Value {
         },
         &rules,
     );
-    json!({
+    Ok(json!({
         "rules": { "version": rules.version, "review_status": rules.review_status, "review_note": rules.review_note },
         "presets": rules.presets,
         "hardware": rules.devices.iter().map(HardwareCard::from).collect::<Vec<_>>(),
@@ -886,7 +899,7 @@ pub fn mock_snapshot(root: &Path) -> serde_json::Value {
         "demo_sticks": STICKS.iter().map(|s| json!({"name": s.name, "title": format!("{} {}", s.maker, s.product), "size_gb": s.size / 1_000_000_000, "description": s.description})).collect::<Vec<_>>(),
         "drives": drives,
         "plan_unknown_club": plan,
-    })
+    }))
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "mock-data": "cargo run -q -p boothready-app --example mock_snapshot",
     "screenshots": "node scripts/screenshots.mjs",
+    "check-ui": "node scripts/check-ui.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
