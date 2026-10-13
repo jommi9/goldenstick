@@ -3,6 +3,8 @@
 //! Every write in this module is scoped to a fixture directory. The module
 //! never opens a native disk and never prepares, copies or ejects a real USB.
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use anyhow::{bail, Context, Result};
 use boothready_core::copy::{plan_copy, run_copy, CopyTarget};
 use boothready_core::demo::{create_stick, DemoStick, STICKS};

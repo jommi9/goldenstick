@@ -1,4 +1,4 @@
-use super::{be16, be32, AudioInfo, Codec, Container, ProbeError, Source};
+use super::{be16, be32, be64, AudioInfo, Codec, Container, ProbeError, Source};
 use std::io::{Read, Seek};
 
 pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, ProbeError> {
@@ -75,7 +75,7 @@ pub(super) fn probe<R: Read + Seek>(src: &mut Source<R>) -> Result<AudioInfo, Pr
 pub(crate) fn extended_to_f64(b: &[u8]) -> f64 {
     let sign = if b[0] & 0x80 != 0 { -1.0 } else { 1.0 };
     let exp = (((b[0] & 0x7F) as i32) << 8) | b[1] as i32;
-    let mant = u64::from_be_bytes(b[2..10].try_into().unwrap());
+    let mant = be64(b, 2);
     if exp == 0 && mant == 0 {
         return 0.0;
     }
