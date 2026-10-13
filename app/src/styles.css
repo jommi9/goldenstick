@@ -2181,3 +2181,12 @@ footer.foot {
   font-size: 10px;
   letter-spacing: 0.9px;
 }
+
+/* A verdict inside a heading keeps the heading's size. */
+h1 .verdict,
+h2 .verdict,
+h3 .verdict {
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: 0.5px;
+}
