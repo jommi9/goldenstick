@@ -4,8 +4,8 @@
 
 import { inTauri } from "./api";
 import type { Api } from "./api";
-import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus } from "./art";
-import { initLibrary, libraryAct, libraryChange, libraryHomeRow, libraryInput, librarySourceView, libraryView, refreshLibrary } from "./library";
+import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus, waveArt } from "./art";
+import { initLibrary, libraryAct, libraryChange, libraryHomeRow, libraryInput, librarySourceName, librarySourceView, libraryView, refreshLibrary } from "./library";
 import type {
   AppInfo,
   Candidate,
@@ -945,18 +945,54 @@ async function doFix(id: string, kind: string) {
 
 // ------------------------------------------------------------------ views
 
+/** Where the current screen sits, shown like a player's browse path. */
+const CRUMB: Record<View["v"], string[]> = {
+  home: ["USB"],
+  buying: ["USB", "Buying guide"],
+  identify: ["USB", "Identify"],
+  "looks-different": ["USB", "Identify"],
+  assessment: ["USB", "Check"],
+  targets: ["USB", "Players"],
+  hardware: ["USB", "Players", "Search"],
+  report: ["USB", "Report"],
+  confirm: ["USB", "Erase"],
+  preparing: ["USB", "Preparing"],
+  export: ["USB", "Export"],
+  copying: ["USB", "Copy"],
+  verify: ["USB", "Verify"],
+  ready: ["Gig kit"],
+  "kit-next": ["Gig kit", "Next USB"],
+  testlab: ["Test lab"],
+  devtools: ["Dev tools"],
+  library: ["Library"],
+  "library-source": ["Library", "Source"],
+};
+
 function shell(content: Raw): Raw {
   const info = S.info;
+  const v = S.view.v;
+  const section = v === "library" || v === "library-source" ? "library" : v === "testlab" || v === "devtools" ? v : "usb";
+  const tab = (id: string, act: string, label: string) => html`<button class="tab" data-act="${act}" ${section === id ? raw('aria-current="page"') : ""}>${label}</button>`;
+  const usbs = S.devices.filter((d) => d.is_usb).length;
+  const crumbs = S.view.v === "library-source" ? ["Library", librarySourceName(S.view.id)] : CRUMB[v];
   return html`<div class="app">
     <header class="topbar">
-      <button class="btn link brand" data-act="home" aria-label="BoothReady home"><span class="brand-mark">BR</span><span style="color:var(--text)">BoothReady</span></button>
+      <button class="btn link brand" data-act="home" aria-label="BoothReady home"><span class="brand-mark">BR</span><span class="brand-name">BoothReady</span></button>
+      <nav class="tabs" aria-label="Sections">
+        ${tab("usb", "home", "USB")}
+        ${tab("library", "open-library", "Library")}
+        ${tab("testlab", "open-test-lab", "Test lab")}
+        ${devEnabled() ? tab("devtools", "open-devtools", "Dev tools") : ""}
+      </nav>
       <span class="spacer"></span>
       ${info?.demo ? html`<span class="pill accent">Demo mode: simulated USB drives</span>` : ""}
-      <button class="btn link small" data-act="open-library">Library</button>
-      <button class="btn link small" data-act="open-test-lab">Test lab</button>
-      ${devEnabled() ? html`<button class="btn link small" data-act="open-devtools">Dev tools</button>` : ""}
       ${S.done.length ? html`<button class="btn" data-act="to-ready">Gig kit (${S.done.length})</button>` : ""}
     </header>
+    <div class="pathbar" aria-hidden="true">
+      <span class="crumbs">${crumbs.map((c, i) => html`${i ? html`<i>▸</i>` : ""}<span>${c}</span>`)}</span>
+      <span class="spacer"></span>
+      <span class="lamp ${usbs ? "on" : ""}"></span><span>${usbs ? `${plural(usbs, "USB drive")} connected` : "No USB connected"}</span>
+    </div>
     <main id="main" tabindex="-1">
       ${S.alert ? html`<div class="banner ${S.alert.kind}" role="alert" style="margin-bottom:18px"><div style="flex:1">${S.alert.text}</div><button class="btn link" data-act="dismiss-alert">Dismiss</button></div>` : ""}
       ${content}
@@ -977,6 +1013,7 @@ function homeView(): Raw {
   const others = S.devices.filter((d) => !d.is_usb);
   return html`
     <section class="hero">
+      <div class="wave">${raw(waveArt())}</div>
       <div class="plug-art">${raw(usbArt("stick-slider", "#ff7a1a", 150, "A USB drive"))}</div>
       <h1>Plug in a USB</h1>
       <p class="muted" style="max-width:520px">We'll identify it, check what's on it and tell you where it will work.</p>

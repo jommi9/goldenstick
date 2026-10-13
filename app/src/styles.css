@@ -1,49 +1,38 @@
+/* The look follows a club player's screen: a black display, condensed
+   lettering, rectangular touch buttons and lamps that light in cue orange,
+   play green and browse blue. There is one theme, as on the hardware. */
 :root {
   color-scheme: dark;
-  --bg: #0c0d10;
-  --bg-2: #14161b;
-  --bg-3: #1c1f26;
-  --line: #2a2e37;
-  --text: #eef0f4;
-  --muted: #9aa1ad;
-  --faint: #6b7280;
-  --accent: #ff7a1a;
-  --accent-ink: #1a0d02;
-  --ok: #34d399;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --unk: #a5b4fc;
+  --bg: #000000;
+  --bg-2: #0c0d0f;
+  --bg-3: #191b1f;
+  --line: #2a2d33;
+  --line-2: #3a3e46;
+  --text: #f3f5f8;
+  --muted: #a4abb6;
+  --faint: #6d7480;
+  /* Cue orange: the one action colour. */
+  --accent: #ff8a00;
+  --accent-ink: #140a00;
+  /* Browse blue: selection and focus, as on a player's track list. */
+  --sel: #2f9bff;
+  --sel-deep: #14498a;
+  --ok: #2fe36b;
+  --warn: #ffc21a;
+  --bad: #ff4a4a;
+  --unk: #5cc1ff;
+  --wave-lo: #1f6dff;
+  --wave-hi: #e6f1ff;
   --metal: #c9ced6;
   --hw-body: #2b2f37;
   --hw-face: #0f1115;
-  --radius: 14px;
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --radius: 4px;
+  --shadow: none;
+  --display: "DIN Alternate", "Bahnschrift", "Barlow Semi Condensed", "Roboto Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --condensed: "DIN Condensed", "Bahnschrift Condensed", "Barlow Condensed", "Roboto Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
   font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.45;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --bg: #f5f6f8;
-    --bg-2: #ffffff;
-    --bg-3: #eceef2;
-    --line: #d9dde4;
-    --text: #12151b;
-    --muted: #525a67;
-    --faint: #7b8391;
-    --accent: #e8630a;
-    --accent-ink: #ffffff;
-    --ok: #059669;
-    --warn: #b45309;
-    --bad: #dc2626;
-    --unk: #4f46e5;
-    --metal: #9aa1ad;
-    --hw-body: #3a3f48;
-    --hw-face: #15181d;
-    --shadow: 0 8px 24px rgba(20, 24, 32, 0.08);
-  }
 }
 
 * {
@@ -1265,5 +1254,756 @@ p {
   }
   .source-actions {
     justify-content: flex-start;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Player look. Everything below restyles the components above.
+   ------------------------------------------------------------------ */
+
+:focus-visible {
+  outline: 2px solid var(--sel);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--sel-deep);
+  color: #fff;
+}
+
+/* Header: the strip along the top of a player's screen. */
+.topbar {
+  gap: 14px;
+  padding: 8px 16px;
+  background: linear-gradient(#17191d, #0b0c0e);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  gap: 10px;
+}
+
+/* The deck number box. */
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 3px;
+  background: #000;
+  border: 2px solid var(--text);
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 14px;
+  letter-spacing: 0.5px;
+}
+
+.brand-name {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 17px;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-left: 10px;
+}
+
+.tab {
+  appearance: none;
+  min-width: 92px;
+  padding: 8px 14px 7px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+  background: linear-gradient(#2a2d33, #16181c);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text);
+  border-color: #555b66;
+}
+
+.tab[aria-current="page"] {
+  color: #fff;
+  border-color: var(--sel);
+  background: linear-gradient(#2f7fd6, var(--sel-deep));
+  box-shadow: 0 0 14px rgba(47, 155, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* The browse path under the header, with the USB lamp on the right. */
+.pathbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 16px 4px;
+  background: #050506;
+  border-bottom: 1px solid var(--line);
+  color: var(--faint);
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+}
+
+.pathbar .spacer {
+  flex: 1;
+}
+
+.crumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crumbs i {
+  font-style: normal;
+  color: var(--line-2);
+}
+
+.crumbs span:last-child {
+  color: var(--text);
+}
+
+.lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #33373e;
+}
+
+.lamp.on {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+
+.app {
+  grid-template-rows: auto auto 1fr auto;
+}
+
+footer.foot {
+  padding: 8px 16px;
+  background: #050506;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}
+
+/* Lettering */
+h1,
+h2,
+h3 {
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+h1 {
+  font-size: 36px;
+}
+
+.eyebrow,
+.field-label,
+.matrix th,
+.tracks th {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Touch buttons */
+.btn {
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: linear-gradient(#2a2d33, #17191d);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  padding: 10px 16px 9px;
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.btn:hover {
+  background: linear-gradient(#343840, #1d2025);
+  border-color: #555b66;
+}
+
+/* The cue button: lit orange. */
+.btn.primary {
+  background: linear-gradient(#ffa630, #f07800);
+  border-color: #ffb655;
+  color: var(--accent-ink);
+  box-shadow: 0 0 16px rgba(255, 138, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.btn.primary:hover {
+  background: linear-gradient(#ffb550, #ff8a00);
+  border-color: #ffd08a;
+}
+
+.btn.danger {
+  background: linear-gradient(#ff6a6a, #d92b2b);
+  border-color: #ff8f8f;
+  color: #1b0606;
+  box-shadow: 0 0 16px rgba(255, 74, 74, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.btn.link {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: var(--sel);
+  letter-spacing: 0.8px;
+}
+
+.btn.link:hover {
+  background: none;
+  color: #8cc8ff;
+}
+
+.btn.small {
+  font-size: 12px;
+}
+
+.btn[disabled] {
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+/* Panels */
+.card,
+.role,
+.usb-block,
+.fix,
+.option,
+.hw,
+.copy-offer,
+.test-result,
+.demo-panel {
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+
+.card,
+.role,
+.usb-block,
+.fix {
+  background: var(--bg-2);
+}
+
+.option[aria-pressed="true"],
+.hw[aria-pressed="true"] {
+  border-color: var(--sel);
+  box-shadow: 0 0 0 1px var(--sel) inset, 0 0 14px rgba(47, 155, 255, 0.25);
+}
+
+.option[aria-pressed="true"] .radio {
+  border-color: var(--sel);
+  background: radial-gradient(circle, var(--sel) 45%, transparent 50%);
+}
+
+/* Badges are small plates, as on the display. */
+.pill {
+  border-radius: 3px;
+  padding: 2px 8px 1px;
+  background: #000;
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+}
+
+.pill.accent {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.banner,
+.search,
+.dev-json,
+.dev-log {
+  border-radius: var(--radius);
+}
+
+.search,
+.select {
+  background: #000;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.search:focus-visible,
+.select:focus-visible {
+  outline: none;
+  border-color: var(--sel);
+  box-shadow: 0 0 0 1px var(--sel);
+}
+
+/* Lists: rows joined like a browse screen, lit blue under the pointer. */
+.devlist {
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.devrow {
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg-2);
+  padding: 12px 14px;
+}
+
+.devrow:first-child {
+  border-top: none;
+}
+
+.devrow:nth-child(even) {
+  background: #111316;
+}
+
+.devrow:hover,
+.devrow:focus-visible {
+  background: linear-gradient(#2f7fd6, var(--sel-deep));
+  color: #fff;
+}
+
+.devrow:hover .muted,
+.devrow:focus-visible .muted {
+  color: #d6e8ff;
+}
+
+/* Home: the idle screen, with a waveform strip above the prompt. */
+.hero {
+  position: relative;
+  padding: 0 20px 30px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: radial-gradient(ellipse at 50% 0%, #10141c, #000 70%);
+  overflow: hidden;
+}
+
+.hero .wave {
+  justify-self: stretch;
+  width: calc(100% + 40px);
+  margin: 0 -20px 26px;
+  height: 84px;
+  background: #020305;
+  border-bottom: 1px solid var(--line);
+}
+
+.hero .wave svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hero h1 {
+  font-size: 44px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.plug-art {
+  filter: drop-shadow(0 0 22px rgba(255, 138, 0, 0.3));
+}
+
+/* Readouts: big digits with a small label, like BPM and time. */
+.stat {
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.stat b {
+  font-family: var(--display);
+  font-size: 30px;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+
+.stat .small {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Progress, like the playback position bar. */
+.bar {
+  height: 10px;
+  border-radius: 2px;
+  background: #000;
+  border: 1px solid var(--line);
+}
+
+.bar > span {
+  background: linear-gradient(90deg, var(--wave-lo), var(--sel));
+  box-shadow: 2px 0 0 #fff;
+}
+
+.spinner {
+  border-color: var(--line-2);
+  border-top-color: var(--accent);
+}
+
+/* Report matrix */
+.matrix th {
+  border-bottom-color: var(--line-2);
+}
+
+.matrix tbody tr:nth-child(even) td {
+  background: #101215;
+}
+
+.matrix td b {
+  font-family: var(--display);
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+
+.cell {
+  border-radius: 3px;
+}
+
+.cell:hover,
+.cell[aria-pressed="true"] {
+  border-color: var(--sel);
+  background: var(--sel-deep);
+  color: #fff;
+}
+
+.verdict {
+  font-family: var(--display);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.explain {
+  border-left-color: var(--sel);
+}
+
+.toast {
+  border-radius: var(--radius);
+  border-color: var(--sel);
+  background: #05080d;
+  box-shadow: 0 0 18px rgba(47, 155, 255, 0.3);
+}
+
+.readiness h1 {
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Library */
+.library h2 {
+  font-size: 20px;
+}
+
+.source {
+  padding: 16px 18px;
+}
+
+.source-totals {
+  font-family: var(--display);
+  letter-spacing: 0.4px;
+}
+
+.pill.cloud {
+  border-color: var(--unk);
+}
+
+.pill.external {
+  border-color: var(--accent);
+}
+
+.pill.offline {
+  border-color: var(--warn);
+}
+
+/* The state bar reads like a track overview: square, with bar ticks. */
+.statebar {
+  height: 14px;
+  gap: 1px;
+  border-radius: 2px;
+  background: #000;
+  border: 1px solid var(--line);
+  position: relative;
+}
+
+.statebar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, transparent 0 3px, rgba(0, 0, 0, 0.45) 3px 4px);
+  pointer-events: none;
+}
+
+.statelegend {
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+
+.dot {
+  box-shadow: 0 0 6px currentColor;
+}
+
+.dot.ready {
+  color: var(--ok);
+}
+
+.dot.cloud_only {
+  color: var(--unk);
+}
+
+.dot.blocked {
+  color: var(--warn);
+}
+
+.dot.unreadable {
+  color: var(--bad);
+}
+
+.dot.unchecked {
+  color: transparent;
+}
+
+/* Browse: categories on the left, the track list on the right. */
+.browse {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+.browse .library-filters {
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.browse .chip {
+  justify-content: flex-start;
+  text-align: left;
+  white-space: nowrap;
+  width: 100%;
+  padding: 11px 12px 10px;
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--bg-2);
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.browse .chip:first-child {
+  border-top: none;
+}
+
+.browse .chip b {
+  margin-left: auto;
+  padding-left: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.browse .chip:hover {
+  color: var(--text);
+  background: #16181c;
+}
+
+.browse .chip.on {
+  color: #fff;
+  background: linear-gradient(#2f7fd6, var(--sel-deep));
+}
+
+.browse-main .search {
+  display: block;
+}
+
+.tracks-card {
+  margin-top: 10px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.tracks th {
+  padding: 9px 10px 7px;
+  background: #050506;
+  border-bottom: 1px solid var(--line-2);
+}
+
+.tracks td {
+  padding: 9px 10px;
+}
+
+.tracks tbody tr:nth-child(even) td {
+  background: #101215;
+}
+
+.tracks tbody tr:hover td {
+  background: var(--sel-deep);
+}
+
+.tracks tbody tr:hover .faint,
+.tracks tbody tr:hover .track-issues {
+  color: #d6e8ff;
+}
+
+.tracks td:last-child,
+.tracks th:last-child {
+  padding-right: 12px;
+}
+
+.tracks .idx {
+  width: 44px;
+  padding-left: 12px;
+  color: var(--faint);
+  font-family: var(--display);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+
+.tracks .art {
+  width: 44px;
+  padding-left: 0;
+  padding-right: 4px;
+}
+
+/* A format plate where a player shows artwork. No artwork is read. */
+.arttile {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 2px;
+  background: linear-gradient(135deg, #2b3038, #15171b);
+  border: 1px solid var(--line-2);
+  color: var(--muted);
+  font-family: var(--condensed);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.arttile.f-wav,
+.arttile.f-aiff {
+  background: linear-gradient(135deg, #1c4f9c, #0b2347);
+  border-color: #2f7fd6;
+  color: #d6e8ff;
+}
+
+.arttile.f-flac,
+.arttile.f-alac {
+  background: linear-gradient(135deg, #0f6b5a, #06302a);
+  border-color: #1fae93;
+  color: #c9f5ec;
+}
+
+.arttile.f-mp3,
+.arttile.f-aac {
+  background: linear-gradient(135deg, #7a4a12, #382006);
+  border-color: #c77a1c;
+  color: #ffe2bd;
+}
+
+.tracks td b {
+  font-weight: 600;
+}
+
+.tracks td:nth-child(4) {
+  white-space: nowrap;
+}
+
+.tracks .num {
+  font-family: var(--display);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.4px;
+}
+
+.trackstate {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.tracks-foot {
+  margin: 0;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  background: #050506;
+}
+
+.library-players .select {
+  border-radius: var(--radius);
+  background: #000;
+}
+
+@media (max-width: 760px) {
+  .tabs {
+    margin-left: 0;
+  }
+  .tab {
+    min-width: 0;
+    padding: 7px 9px 6px;
+    letter-spacing: 0.8px;
+  }
+  .brand-name {
+    display: none;
+  }
+  .browse {
+    grid-template-columns: 1fr;
+  }
+  .browse .library-filters {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .browse .chip {
+    width: auto;
+    flex: 1 1 auto;
+    border-top: none;
+    border-right: 1px solid var(--line);
+  }
+  .tracks .idx,
+  .tracks .art {
+    display: none;
   }
 }

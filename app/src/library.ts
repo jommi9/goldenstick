@@ -74,6 +74,11 @@ export function locationLabel(l: LibraryLocation): string {
 
 const source = (id: string) => L.sources.find((s) => s.id === id);
 
+/** The folder name of a source, for the path bar. */
+export function librarySourceName(id: string): string {
+  return source(id)?.name ?? "Source";
+}
+
 export function librarySummary(): { sources: number; tracks: number } {
   return { sources: L.sources.length, tracks: L.sources.reduce((n, s) => n + (s.totals?.tracks ?? 0), 0) };
 }
@@ -367,17 +372,20 @@ export function libraryView(): Raw {
   </div>`;
 }
 
-function trackRow(t: LibraryTrack): Raw {
+function trackRow(t: LibraryTrack, i: number): Raw {
   const shown = t.issues.slice(0, 3);
   const rest = t.issues.length - shown.length;
+  const kind = t.format.toLowerCase().replace(/[^a-z0-9]/g, "") || "other";
   return html`<tr class="${t.state}">
+    <td class="idx">${String(i + 1).padStart(3, "0")}</td>
+    <td class="art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
     <td><b>${t.name}</b>${t.folder ? html`<div class="small faint">${t.folder}</div>` : ""}
       ${shown.length ? html`<ul class="track-issues">${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul>` : ""}
       ${t.note ? html`<div class="small track-note">${t.note}</div>` : ""}
     </td>
     <td>${t.format}${t.detail ? html`<div class="small faint">${t.detail}</div>` : t.state === "cloud_only" ? html`<div class="small faint">not checked</div>` : ""}</td>
     <td class="num">${gb(t.size)}</td>
-    <td><span class="trackstate ${t.state}" title="${STATE_HELP[t.state]}">${STATE_LABEL[t.state]}</span></td>
+    <td><span class="trackstate ${t.state}" title="${STATE_HELP[t.state]}"><i class="dot ${t.state}"></i>${STATE_LABEL[t.state]}</span></td>
   </tr>`;
 }
 
@@ -385,7 +393,7 @@ function trackTable(): Raw {
   if (L.loadingTracks && !L.tracks.length) return html`<p class="muted">Loading tracks.</p>`;
   if (!L.tracks.length) return html`<p class="muted">${L.query || L.filter !== "all" ? "No tracks match." : "No audio files were found in this folder."}</p>`;
   return html`<table class="tracks">
-      <thead><tr><th>Track</th><th>Format</th><th class="num">Size</th><th>Status</th></tr></thead>
+      <thead><tr><th class="idx">#</th><th class="art"></th><th>Track</th><th>Format</th><th class="num">Size</th><th>Status</th></tr></thead>
       <tbody>${L.tracks.map(trackRow)}</tbody>
     </table>
     <div class="tracks-foot"><span class="small muted">Showing ${num(L.tracks.length)} of ${num(L.total)}</span>${L.tracks.length < L.total ? html`<button class="btn" data-act="library-more" ${L.loadingTracks ? "disabled" : ""}>Show more</button>` : ""}</div>`;
@@ -418,12 +426,12 @@ export function librarySourceView(id: string): Raw {
     </div>
     ${c ? stateBar(c) : ""}
     ${c
-      ? html`<div class="library-filters" role="group" aria-label="Filter tracks">
+      ? html`<div class="browse"><div class="library-filters" role="group" aria-label="Filter tracks">
             <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
             ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}
           </div>
-          <input id="library-search" class="search" type="search" placeholder="Search by track or folder name" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
-          <div id="library-tracks" class="card tracks-card">${trackTable()}</div>`
+          <div class="browse-main"><input id="library-search" class="search" type="search" placeholder="Search by track or folder name" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
+          <div id="library-tracks" class="card tracks-card">${trackTable()}</div></div></div>`
       : html`<p class="muted">${s.totals ? "The track list from the last scan isn't saved on this computer. Scan again to see it." : "Scan this folder to see its tracks."}</p>`}
   </div>`;
 }
