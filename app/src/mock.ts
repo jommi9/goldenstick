@@ -41,7 +41,7 @@ interface Snapshot {
   drives: Record<string, { initial: DriveState; prepared: DriveState; exported: DriveState }>;
   plan_unknown_club: KitPlan;
   /** The simulated music library, judged once per preset. */
-  library: Record<string, { sources: LibrarySource[]; tracks: Record<string, LibraryTrack[]> }>;
+  library: Record<string, { sources: LibrarySource[]; tracks: Record<string, LibraryTrack[]>; collected: { source: LibrarySource; tracks: LibraryTrack[] } }>;
 }
 
 type Stage = "initial" | "prepared" | "exported";
@@ -114,6 +114,45 @@ export async function createMockApi(): Promise<Api> {
   /** Folders added in this session: id, record, and the demo source whose tracks stand in for theirs. */
   const addedSources: { source: LibrarySource; scanned: boolean }[] = [];
   let libraryCancelled = false;
+  /** Collections made in this session: the tracks picked from a source, by path. */
+  const collections: { id: string; name: string; origin: string; paths: Set<string> }[] = [];
+  const collectionTracks = (c: { origin: string; paths: Set<string> }, targets: string[]): LibraryTrack[] => {
+    const lib = libraryFor(targets);
+    // The engine collected the whole cloud folder for the snapshot, so its
+    // tracks are shown as they really read once they are on the computer.
+    const pool = c.origin === "demo-cloud" ? lib.collected.tracks : tracksOf(c.origin, targets);
+    return pool.filter((t) => c.paths.has(t.path));
+  };
+  const pick = (id: string, targets: string[], filter: string, query: string): LibraryTrack[] => {
+    const q = query.trim().toLowerCase();
+    return tracksOf(id, targets).filter((t) => (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
+  };
+  const collectPlan = (id: string, targets: string[], filter: string, query: string, name: string) => {
+    const origin = listSources(targets).find((s) => s.id === id);
+    if (!origin) throw new Error("That music source was removed.");
+    const matching = pick(id, targets, filter, query);
+    const tracks = matching.filter((t) => t.state !== "unreadable");
+    const online = tracks.filter((t) => t.state === "cloud_only");
+    const sum = (list: LibraryTrack[]) => list.reduce((n, t) => n + t.size, 0);
+    const clean = (name.trim() || `${origin.name} 2026-09-21`).replace(/[^\p{L}\p{N} \-_().,&']/gu, "-").trim();
+    if (!clean) throw new Error("Give the collection a name.");
+    return {
+      plan: {
+        tracks: tracks.length,
+        bytes: sum(tracks),
+        cloud_only: online.length,
+        cloud_only_bytes: sum(online),
+        unreadable: matching.length - tracks.length,
+        name: clean,
+        destination: `/Users/dj/Music/BoothReady/${clean}`,
+        exists: collections.some((c) => c.name === clean),
+        needed_bytes: sum(tracks) + 4 * 1024 * 1024,
+        free_bytes: 212_000_000_000,
+      },
+      origin,
+      tracks,
+    };
+  };
   const countStates = (tracks: LibraryTrack[]): StateCounts => {
     const counts: StateCounts = { ready: 0, cloud_only: 0, blocked: 0, unchecked: 0, unreadable: 0 };
     for (const t of tracks) counts[t.state as TrackState] += 1;
@@ -122,6 +161,8 @@ export async function createMockApi(): Promise<Api> {
   const tracksOf = (id: string, targets: string[]): LibraryTrack[] => {
     const lib = libraryFor(targets);
     if (lib.tracks[id]) return lib.tracks[id];
+    const made = collections.find((c) => c.id === id);
+    if (made) return collectionTracks(made, targets);
     return addedSources.find((a) => a.source.id === id && a.scanned) ? lib.tracks["demo-computer"] : [];
   };
   const listSources = (targets: string[]): LibrarySource[] => {
@@ -132,7 +173,20 @@ export async function createMockApi(): Promise<Api> {
       const bytes = tracks.reduce((n, t) => n + t.size, 0);
       return { ...source, scanned_unix: Math.floor(Date.now() / 1000), totals: { tracks: tracks.length, bytes, cloud_only: 0, cloud_only_bytes: 0, unreadable: tracks.filter((t) => t.state === "unreadable").length }, states: countStates(tracks) };
     });
-    return [...lib.sources, ...added].filter((s) => !removedSources.has(s.id));
+    const made = collections.map((c): LibrarySource => {
+      const tracks = collectionTracks(c, targets);
+      const origin = [...lib.sources, ...added].find((s) => s.id === c.origin);
+      return {
+        ...lib.collected.source,
+        id: c.id,
+        name: c.name,
+        path: `/Users/dj/Music/BoothReady/${c.name}/files`,
+        collected_from: origin?.name ?? lib.collected.source.collected_from,
+        totals: { tracks: tracks.length, bytes: tracks.reduce((n, t) => n + t.size, 0), cloud_only: 0, cloud_only_bytes: 0, unreadable: 0 },
+        states: countStates(tracks),
+      };
+    });
+    return [...lib.sources, ...added, ...made].filter((s) => !removedSources.has(s.id));
   };
 
   return {
@@ -359,10 +413,34 @@ export async function createMockApi(): Promise<Api> {
           totals: null,
           states: null,
           skipped: 0,
+          collected_from: null,
         },
       });
       return id;
     },
+    libraryCollectPlan: async (id, targets, filter, query, name) => collectPlan(id, targets, filter, query, name).plan,
+    libraryCollect: async (id, targets, filter, query, name) => {
+      const { plan, origin, tracks } = collectPlan(id, targets, filter, query, name);
+      if (!origin.connected) throw new Error("The source folder can't be reached.");
+      if (!plan.tracks) throw new Error("There are no readable tracks to collect.");
+      if (plan.exists) throw new Error("The collection couldn't be made: source changed or destination belongs to another collection.");
+      libraryCancelled = false;
+      for (const phase of ["reading", "copying", "verifying"] as const) {
+        for (let done = 0; done <= plan.tracks; done += Math.max(1, Math.ceil(plan.tracks / 4))) {
+          if (libraryCancelled) throw new Error("Stopped. Start again with the same name to pick up where it left off.");
+          const files = Math.min(done, plan.tracks);
+          emit("library-collect-progress", { source_id: id, phase, files_done: files, files_total: plan.tracks, bytes_done: Math.round((plan.bytes * files) / plan.tracks), bytes_total: plan.bytes });
+          await sleep(110);
+        }
+      }
+      const made = { id: `collected-${collections.length + 1}`, name: plan.name, origin: id, paths: new Set(tracks.map((t) => t.path)) };
+      collections.push(made);
+      return made.id;
+    },
+    libraryCancelCollect: async () => {
+      libraryCancelled = true;
+    },
+    onLibraryCollectProgress: on("library-collect-progress"),
     libraryRemove: async (id) => {
       removedSources.add(id);
     },

@@ -407,6 +407,33 @@ export interface LibrarySource {
   /** Against the selected players. Null until a scan is saved on this computer. */
   states: StateCounts | null;
   skipped: number;
+  /** For a local collection: the folder name of the source its tracks came from. */
+  collected_from: string | null;
+}
+
+/** What collecting the shown tracks would copy, and where to. */
+export interface CollectPlan {
+  tracks: number;
+  bytes: number;
+  cloud_only: number;
+  cloud_only_bytes: number;
+  /** Matching tracks left out because they are damaged or not audio. */
+  unreadable: number;
+  name: string;
+  destination: string;
+  /** A folder with that name is already there. The same selection resumes it. */
+  exists: boolean;
+  needed_bytes: number;
+  free_bytes: number | null;
+}
+
+export interface LibraryCollectProgress {
+  source_id: string;
+  phase: "reading" | "copying" | "verifying";
+  files_done: number;
+  files_total: number;
+  bytes_done: number;
+  bytes_total: number;
 }
 
 export interface PlayerIssue {

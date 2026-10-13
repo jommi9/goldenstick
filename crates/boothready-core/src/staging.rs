@@ -28,6 +28,31 @@ pub struct Collection {
     pub revision: String,
     pub files: Vec<SourceFile>,
 }
+/// What staging is doing, for a progress display.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StagePhase {
+    /// Reading every selected file from the source. A cloud client downloads
+    /// its placeholders during this phase.
+    Reading,
+    Copying,
+    Verifying,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StageProgress {
+    pub phase: StagePhase,
+    pub files_done: u32,
+    /// Zero while a whole folder is still being listed.
+    pub files_total: u32,
+    pub bytes_done: u64,
+    pub current: String,
+}
+
+fn cancelled() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "staging cancelled; rerun to resume")
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
@@ -67,6 +92,12 @@ pub fn checked_path(path: &Path) -> io::Result<PathBuf> {
     Ok(result)
 }
 fn hash(path: &Path) -> io::Result<(u64, String)> {
+    hash_until(path, &AtomicBool::new(false))
+}
+
+/// Hash a file, giving up between blocks once `cancel` is set, so a large
+/// download can be stopped without waiting for the file to finish.
+fn hash_until(path: &Path, cancel: &AtomicBool) -> io::Result<(u64, String)> {
     checked_path(path)?;
     if !fs::symlink_metadata(path)?.is_file() {
         return Err(invalid("only regular files are supported"));
@@ -76,6 +107,9 @@ fn hash(path: &Path) -> io::Result<(u64, String)> {
     let mut bytes = 0;
     let mut buffer = [0; 65536];
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
         let n = input.read(&mut buffer)?;
         if n == 0 {
             break;
@@ -87,24 +121,65 @@ fn hash(path: &Path) -> io::Result<(u64, String)> {
 }
 /// Fully reads the selected directory, including cloud placeholders. Read errors abort.
 pub fn inventory(source: &Path, kind: SourceKind) -> io::Result<Collection> {
+    inventory_of(source, kind, None, &AtomicBool::new(false), &mut |_| {})
+}
+
+/// A relative path with named components only, so a selection can't point
+/// outside the source folder. The path is rebuilt from its components, which
+/// gives it this system's separators: the revision hashes the path as text,
+/// and a walk of the staged files reports native separators.
+fn selected_path(path: &Path) -> io::Result<PathBuf> {
+    if path.as_os_str().is_empty() || !path.components().all(|c| matches!(c, Component::Normal(_))) {
+        return Err(invalid("a selected file must be a relative path inside the source"));
+    }
+    Ok(path.components().collect())
+}
+
+/// Read and hash the source: the whole folder, or only the files in `only`,
+/// which are paths relative to it.
+fn inventory_of(
+    source: &Path,
+    kind: SourceKind,
+    only: Option<&[PathBuf]>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&StageProgress),
+) -> io::Result<Collection> {
     let source = checked_path(source)?.canonicalize()?;
     if !source.is_dir() {
         return Err(invalid("source must be a directory"));
     }
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(&source).follow_links(false) {
-        let entry = entry?;
-        if entry.file_type().is_dir() {
-            continue;
+    let mut paths: Vec<PathBuf> = match only {
+        Some(selection) => selection.iter().map(|p| selected_path(p)).collect::<io::Result<_>>()?,
+        None => {
+            let mut found = Vec::new();
+            for entry in walkdir::WalkDir::new(&source).follow_links(false) {
+                let entry = entry?;
+                if !entry.file_type().is_dir() {
+                    found.push(entry.path().strip_prefix(&source).map_err(io::Error::other)?.to_owned());
+                }
+            }
+            found
         }
-        let (bytes, blake3) = hash(entry.path())?;
-        files.push(SourceFile {
-            path: entry.path().strip_prefix(&source).map_err(io::Error::other)?.to_owned(),
-            bytes,
-            blake3,
-        });
+    };
+    paths.sort();
+    paths.dedup();
+    let mut state = StageProgress {
+        phase: StagePhase::Reading,
+        files_done: 0,
+        files_total: paths.len() as u32,
+        bytes_done: 0,
+        current: String::new(),
+    };
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        state.current = path.display().to_string();
+        progress(&state);
+        let (bytes, blake3) = hash_until(&source.join(&path), cancel)?;
+        state.files_done += 1;
+        state.bytes_done += bytes;
+        files.push(SourceFile { path, bytes, blake3 });
     }
-    files.sort_by(|a, b| a.path.cmp(&b.path));
+    progress(&state);
     let revision = blake3::hash(&serde_json::to_vec(&files)?).to_hex().to_string();
     Ok(Collection { version: 1, kind, source, revision, files })
 }
@@ -134,6 +209,23 @@ pub fn verify_collection(destination: &Path) -> io::Result<Collection> {
 /// are never overwritten. Interrupted temporary files remain in `.work`.
 /// Do not run concurrently with another writer or change directory mounts.
 pub fn stage(source: &Path, kind: SourceKind, destination: &Path, cancel: &AtomicBool) -> io::Result<Collection> {
+    stage_selected(source, kind, None, destination, cancel, &mut |_| {})
+}
+
+/// [`stage`] for a chosen set of files, with progress.
+///
+/// `only` lists paths relative to `source`. The collection then holds those
+/// files and nothing else, and a later run resumes only with the same
+/// selection. Every selected file is read in full before anything is copied,
+/// which is when a cloud client downloads the ones it has not fetched yet.
+pub fn stage_selected(
+    source: &Path,
+    kind: SourceKind,
+    only: Option<&[PathBuf]>,
+    destination: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&StageProgress),
+) -> io::Result<Collection> {
     let source = checked_path(source)?.canonicalize()?;
     let destination = checked_path(destination)?;
     let parent = destination.parent().ok_or_else(|| invalid("destination needs a parent"))?.canonicalize()?;
@@ -141,7 +233,15 @@ pub fn stage(source: &Path, kind: SourceKind, destination: &Path, cancel: &Atomi
     if source.starts_with(&destination) || destination.starts_with(&source) {
         return Err(invalid("source and destination overlap"));
     }
-    let plan = inventory(&source, kind)?;
+    let plan = inventory_of(&source, kind, only, cancel, progress)?;
+    let selection: Vec<PathBuf> = plan.files.iter().map(|f| f.path.clone()).collect();
+    let mut state = StageProgress {
+        phase: StagePhase::Copying,
+        files_done: 0,
+        files_total: plan.files.len() as u32,
+        bytes_done: 0,
+        current: String::new(),
+    };
     let plan_path = destination.join("collection.json");
     match fs::create_dir(&destination) {
         Ok(()) => write_new(&plan_path, &serde_json::to_vec_pretty(&plan)?)?,
@@ -178,8 +278,12 @@ pub fn stage(source: &Path, kind: SourceKind, destination: &Path, cancel: &Atomi
     }
     for file in &plan.files {
         if cancel.load(Ordering::Relaxed) {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "staging cancelled; rerun to resume"));
+            return Err(cancelled());
         }
+        state.current = file.path.display().to_string();
+        progress(&state);
+        state.files_done += 1;
+        state.bytes_done += file.bytes;
         let target = checked_path(&destination.join("files").join(&file.path))?;
         if target.try_exists()? {
             if !matches(&target, file)? {
@@ -195,7 +299,7 @@ pub fn stage(source: &Path, kind: SourceKind, destination: &Path, cancel: &Atomi
         let mut buffer = [0; 65536];
         loop {
             if cancel.load(Ordering::Relaxed) {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "staging cancelled; rerun to resume"));
+                return Err(cancelled());
             }
             let n = input.read(&mut buffer)?;
             if n == 0 {
@@ -211,14 +315,22 @@ pub fn stage(source: &Path, kind: SourceKind, destination: &Path, cancel: &Atomi
         fs::hard_link(&temp, &target)?;
         fs::remove_file(temp)?;
     }
-    if inventory(&source, kind)? != plan {
+    state =
+        StageProgress { phase: StagePhase::Verifying, files_done: 0, bytes_done: 0, current: String::new(), ..state };
+    progress(&state);
+    if inventory_of(&source, kind, Some(&selection), cancel, &mut |_| {})? != plan {
         return Err(invalid("source changed during staging"));
     }
     for file in &plan.files {
+        state.current = file.path.display().to_string();
+        progress(&state);
         if !matches(&destination.join("files").join(&file.path), file)? {
             return Err(invalid("staged collection changed"));
         }
+        state.files_done += 1;
+        state.bytes_done += file.bytes;
     }
+    progress(&state);
     let complete = checked_path(&destination.join("complete.json"))?;
     if complete.try_exists()? {
         let old: Collection = serde_json::from_reader(File::open(complete)?)?;
@@ -292,6 +404,61 @@ mod tests {
         stage(&src, SourceKind::Local, &other, &cancel).unwrap();
         fs::write(src.join("track.wav"), b"changed").unwrap();
         assert!(stage(&src, SourceKind::Local, &other, &cancel).is_err());
+    }
+    #[test]
+    fn a_selection_stages_only_the_chosen_files_and_reports_progress() {
+        let (_root, src, dest) = setup();
+        fs::create_dir(src.join("House")).unwrap();
+        fs::write(src.join("House/keep.aiff"), b"second synthetic fixture").unwrap();
+        fs::write(src.join("notes.txt"), b"left behind").unwrap();
+        let only = [PathBuf::from("House/keep.aiff"), PathBuf::from("track.wav")];
+        let mut seen = Vec::new();
+        let collection =
+            stage_selected(&src, SourceKind::Local, Some(&only), &dest, &AtomicBool::new(false), &mut |p| {
+                seen.push(p.clone())
+            })
+            .unwrap();
+        let staged: Vec<_> = collection.files.iter().map(|f| f.path.clone()).collect();
+        assert_eq!(staged, only);
+        assert!(dest.join("files/House/keep.aiff").exists());
+        assert!(!dest.join("files/notes.txt").exists());
+        assert_eq!(verify_collection(&dest).unwrap(), collection);
+
+        let phases: Vec<StagePhase> = seen.iter().map(|p| p.phase).collect();
+        assert_eq!(phases.first(), Some(&StagePhase::Reading));
+        assert!(phases.contains(&StagePhase::Copying));
+        let last = seen.last().unwrap();
+        assert_eq!((last.phase, last.files_done, last.files_total), (StagePhase::Verifying, 2, 2));
+        assert_eq!(last.bytes_done, collection.files.iter().map(|f| f.bytes).sum::<u64>());
+
+        // The same selection resumes; a different one is another collection.
+        stage_selected(&src, SourceKind::Local, Some(&only), &dest, &AtomicBool::new(false), &mut |_| {}).unwrap();
+        assert!(stage_selected(&src, SourceKind::Local, Some(&only[..1]), &dest, &AtomicBool::new(false), &mut |_| {})
+            .is_err());
+    }
+    #[test]
+    fn a_selection_cannot_reach_outside_the_source_or_name_a_missing_file() {
+        let (root, src, dest) = setup();
+        fs::write(root.path().join("outside.wav"), b"not yours").unwrap();
+        let stage_only = |only: &[PathBuf], dest: &Path| {
+            stage_selected(&src, SourceKind::Local, Some(only), dest, &AtomicBool::new(false), &mut |_| {})
+        };
+        assert!(stage_only(&[PathBuf::from("../outside.wav")], &dest).is_err());
+        assert!(stage_only(&[root.path().join("outside.wav")], &dest).is_err());
+        assert!(stage_only(&[PathBuf::from("gone.wav")], &dest).is_err());
+        assert!(!dest.exists(), "nothing is created for a refused selection");
+    }
+    #[test]
+    fn cancelling_during_the_first_read_leaves_no_collection() {
+        let (_root, src, dest) = setup();
+        let stop = AtomicBool::new(false);
+        let result = stage_selected(&src, SourceKind::Local, None, &dest, &stop, &mut |p| {
+            if p.phase == StagePhase::Reading {
+                stop.store(true, Ordering::Relaxed);
+            }
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert!(!dest.exists());
     }
     #[cfg(unix)]
     #[test]

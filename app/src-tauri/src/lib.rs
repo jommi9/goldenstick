@@ -945,8 +945,8 @@ fn library_remove(app: AppHandle, state: State<'_, AppState>, id: String) -> Res
 async fn library_scan(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<()> {
     let demo = state.demo_root().is_some();
     let record = state.with_library(&app, |library| {
-        if library.is_scanning() {
-            return Err("Another scan is still running.".to_string());
+        if library.is_busy() {
+            return Err("Another scan or collection is still running.".to_string());
         }
         let record = library.record(&id)?;
         library.set_scanning(&id, true);
@@ -1018,6 +1018,175 @@ fn library_tracks(app: AppHandle, state: State<'_, AppState>, request: TrackRequ
     state.with_library(&app, |library| {
         library.tracks(&request.id, &players, &request.filter, &request.query, request.offset as usize, limit)
     })?
+}
+
+/// Which tracks to collect: a source and the filter and search shown on it.
+#[derive(serde::Deserialize)]
+struct CollectRequest {
+    id: String,
+    targets: Vec<String>,
+    filter: String,
+    query: String,
+    /// The collection's name. Empty asks for the suggested one.
+    name: String,
+}
+
+#[derive(Serialize)]
+struct CollectPlan {
+    tracks: u32,
+    bytes: u64,
+    cloud_only: u32,
+    cloud_only_bytes: u64,
+    /// Matching tracks left out because they are damaged or not audio.
+    unreadable: u32,
+    name: String,
+    destination: String,
+    /// A folder with that name is already there. The same selection resumes it.
+    exists: bool,
+    needed_bytes: u64,
+    free_bytes: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+struct LibraryCollectEvent {
+    source_id: String,
+    phase: boothready_core::staging::StagePhase,
+    files_done: u32,
+    files_total: u32,
+    bytes_done: u64,
+    bytes_total: u64,
+}
+
+/// Where collections are kept: a visible folder in the user's Music folder,
+/// or inside the demo folder in demo mode.
+fn collections_root(app: &AppHandle, state: &AppState) -> Res<PathBuf> {
+    match state.demo_root() {
+        Some(root) => Ok(root.join("Collections")),
+        None => Ok(app.path().audio_dir().or_else(|_| app.path().home_dir()).map_err(e2s)?.join("BoothReady")),
+    }
+}
+
+/// The nearest folder above `path` that exists, for a free-space lookup.
+fn existing_ancestor(path: &Path) -> &Path {
+    let mut at = path;
+    while !at.exists() {
+        match at.parent() {
+            Some(parent) => at = parent,
+            None => break,
+        }
+    }
+    at
+}
+
+fn collect_plan(
+    app: &AppHandle,
+    state: &AppState,
+    request: &CollectRequest,
+) -> Res<(CollectPlan, library::Selection, PathBuf)> {
+    let players = state.rules.devices_by_id(&request.targets);
+    let selection = state
+        .with_library(app, |library| library.selection(&request.id, &players, &request.filter, &request.query))??;
+    let source_name =
+        selection.source.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Music".into());
+    let typed = if request.name.trim().is_empty() {
+        format!("{source_name} {}", library::date_of(now_unix()))
+    } else {
+        request.name.clone()
+    };
+    let name = library::collection_folder_name(&typed)?;
+    let destination = collections_root(app, state)?.join(&name);
+    let space = boothready_platform::space(existing_ancestor(&destination)).ok();
+    let needed_bytes = library::space_needed(
+        selection.bytes,
+        selection.paths.len() as u64,
+        space.map(|s| s.cluster_bytes).unwrap_or(4096),
+    );
+    let plan = CollectPlan {
+        tracks: selection.paths.len() as u32,
+        bytes: selection.bytes,
+        cloud_only: selection.cloud_only,
+        cloud_only_bytes: selection.cloud_only_bytes,
+        unreadable: selection.unreadable,
+        name,
+        destination: destination.display().to_string(),
+        exists: destination.exists(),
+        needed_bytes,
+        free_bytes: space.map(|s| s.free_bytes),
+    };
+    Ok((plan, selection, destination))
+}
+
+/// What collecting the shown tracks would copy, and where to.
+#[tauri::command]
+fn library_collect_plan(app: AppHandle, state: State<'_, AppState>, request: CollectRequest) -> Res<CollectPlan> {
+    collect_plan(&app, &state, &request).map(|(plan, _, _)| plan)
+}
+
+/// Copy the shown tracks into a new verified collection on this computer and
+/// add it to the library. Reading a cloud-only track makes the cloud client
+/// download it. Returns the new source's id.
+#[tauri::command]
+async fn library_collect(app: AppHandle, state: State<'_, AppState>, request: CollectRequest) -> Res<String> {
+    let (plan, selection, destination) = collect_plan(&app, &state, &request)?;
+    if plan.tracks == 0 {
+        return Err("There are no readable tracks to collect.".to_string());
+    }
+    if plan.free_bytes.is_some_and(|free| free < plan.needed_bytes) {
+        return Err("There isn't enough free space on this computer for these tracks.".to_string());
+    }
+    state.with_library(&app, |library| {
+        if library.is_busy() {
+            return Err("Another scan or collection is still running.".to_string());
+        }
+        library.set_collecting(true);
+        Ok(())
+    })??;
+    let demo = state.demo_root().is_some();
+    let cancel = state.cancel_library.clone();
+    cancel.store(false, Ordering::Relaxed);
+    let emitter = app.clone();
+    let source_id = request.id.clone();
+    let bytes_total = plan.bytes;
+    let job_selection = selection.clone();
+    let job_destination = destination.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut last = std::time::Instant::now();
+        let mut phase = None;
+        let mut progress = |p: &boothready_core::staging::StageProgress| {
+            if phase != Some(p.phase) || last.elapsed() >= Duration::from_millis(120) {
+                phase = Some(p.phase);
+                last = std::time::Instant::now();
+                let event = LibraryCollectEvent {
+                    source_id: source_id.clone(),
+                    phase: p.phase,
+                    files_done: p.files_done,
+                    files_total: p.files_total,
+                    bytes_done: p.bytes_done,
+                    bytes_total,
+                };
+                let _ = emitter.emit("library-collect-progress", event);
+            }
+        };
+        library::run_collect(&job_selection, &job_destination, &cancel, &mut progress).map(|(made, mut scan)| {
+            if demo {
+                library::demo_sizes(&mut scan);
+            }
+            (made, scan)
+        })
+    })
+    .await;
+    state.with_library(&app, |library| library.set_collecting(false))?;
+    let (made, scan) = outcome.map_err(e2s)??;
+    let origin =
+        selection.source.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Music".into());
+    let root = destination.canonicalize().unwrap_or(destination);
+    let reference = library::CollectionRef { name: plan.name, root, origin, revision: made.revision };
+    state.with_library(&app, |library| library.add_collection(reference, scan, library::Location::Computer, now_unix()))
+}
+
+#[tauri::command]
+fn library_cancel_collect(state: State<'_, AppState>) {
+    state.cancel_library.store(true, Ordering::Relaxed);
 }
 
 pub fn run() {
@@ -1097,6 +1266,9 @@ pub fn run() {
             library_scan,
             library_cancel_scan,
             library_tracks,
+            library_collect_plan,
+            library_collect,
+            library_cancel_collect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BoothReady");
@@ -1194,20 +1366,49 @@ pub fn mock_snapshot(root: &Path) -> Res<serde_json::Value> {
     );
     // The simulated library, once per preset, with the temporary folder
     // replaced by a home folder so the snapshot is the same on every run.
-    let mut library = LibraryState::demo(root)?;
-    let shown_root = root.display().to_string();
+    let library_root = root.canonicalize().map_err(e2s)?;
+    let mut library = LibraryState::demo(&library_root)?;
+    let shown_root = library_root.display().to_string();
+    // Collect the whole cloud folder with the real engine, so the mock can
+    // show what those tracks look like once they are on the computer.
+    let picked = library.selection("demo-cloud", &[], "all", "")?;
+    let collected_root = library_root.join("Collections").join("Promos 2026 2026-09-21");
+    let (made, mut collected_scan) =
+        library::run_collect(&picked, &collected_root, &AtomicBool::new(false), &mut |_| {})?;
+    library::demo_sizes(&mut collected_scan);
+    let collected_id = library.add_collection(
+        library::CollectionRef {
+            name: "Promos 2026 2026-09-21".into(),
+            root: collected_root,
+            origin: "Promos 2026".into(),
+            revision: made.revision,
+        },
+        collected_scan,
+        library::Location::Computer,
+        1_790_000_000,
+    );
     let mut library_by_preset = serde_json::Map::new();
     for p in &rules.presets {
         let players = rules.devices_by_id(&p.devices);
         let mut sources = library.list(&players);
         let mut tracks = serde_json::Map::new();
+        let mut collected = serde_json::Value::Null;
         for source in &mut sources {
-            source.path =
-                source.path.replace(&format!("{shown_root}/Volumes"), "/Volumes").replace(&shown_root, "/Users/dj");
+            source.path = source
+                .path
+                .replace(&format!("{shown_root}/Volumes"), "/Volumes")
+                .replace(&format!("{shown_root}/Collections"), "/Users/dj/Music/BoothReady")
+                .replace(&shown_root, "/Users/dj");
             let page = library.tracks(&source.id, &players, "all", "", 0, 500)?;
-            tracks.insert(source.id.clone(), serde_json::to_value(page.tracks).map_err(e2s)?);
+            if source.id == collected_id {
+                source.id = "demo-collected".into();
+                collected = json!({ "source": source, "tracks": page.tracks });
+            } else {
+                tracks.insert(source.id.clone(), serde_json::to_value(page.tracks).map_err(e2s)?);
+            }
         }
-        library_by_preset.insert(p.id.clone(), json!({ "sources": sources, "tracks": tracks }));
+        sources.retain(|s| s.id != "demo-collected");
+        library_by_preset.insert(p.id.clone(), json!({ "sources": sources, "tracks": tracks, "collected": collected }));
     }
     Ok(json!({
         "library": library_by_preset,

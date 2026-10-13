@@ -72,11 +72,15 @@ The app's **Library** screen holds the folders your music lives in. A folder can
 
 A file that the cloud client shows without having downloaded it is listed from its name and size and is never opened, so a scan downloads nothing. Its format stays unchecked until you make it available offline. The last scan of every source is kept in the app's data folder, which lets you browse an external drive that is unplugged.
 
+**Collect** on a source copies the tracks you are looking at into a verified folder on this computer, under `Music/BoothReady`. Reading a track that is still in the cloud makes your cloud app download it, and the finished collection appears in the library with every track's format checked.
+
+![Collecting a cloud folder](docs/screenshots/23-collect-plan.png)
+
 `boothready library scan <folder>` prints the same counts from the command line. [Library sources](docs/LIBRARY-SOURCES.md) describes what a scan reads.
 
 ## Local library staging
 
-`boothready library stage` reads a selected local or Google Drive desktop folder into a verified local collection. Rerunning resumes the same snapshot, while `boothready library verify` checks it with the source offline. [Library sources](docs/LIBRARY-SOURCES.md) documents the storage guard and privacy boundary. Live Drive hydration and DJ export are still unverified.
+`boothready library stage` reads a selected local or Google Drive desktop folder into a verified local collection. Rerunning resumes the same snapshot, while `boothready library verify` checks it with the source offline. [Library sources](docs/LIBRARY-SOURCES.md) documents the storage guard and privacy boundary. Exporting a collection to a DJ library is still unverified.
 
 ## Tests
 

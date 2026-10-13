@@ -1,7 +1,9 @@
 use anyhow::{bail, Context, Result};
 use boothready_core::rules::Ruleset;
 use boothready_core::sources::{cloud_provider, count_states, device_for_path, os_placeholder, scan_source};
-use boothready_core::staging::{checked_path, inventory, stage, verify_collection, Collection, SourceKind};
+use boothready_core::staging::{
+    checked_path, inventory, stage, stage_selected, verify_collection, Collection, SourceKind, StagePhase,
+};
 use boothready_model::{BusType, PhysicalDevice};
 use clap::{Subcommand, ValueEnum};
 use std::{
@@ -31,6 +33,10 @@ pub enum LibraryCmd {
         destination: PathBuf,
         #[arg(long, value_enum, default_value = "local")]
         kind: Kind,
+        /// Stage only this file, given relative to the source. Repeat for more.
+        /// Nothing else in the source is read.
+        #[arg(long, value_name = "RELATIVE_PATH")]
+        only: Vec<PathBuf>,
     },
 }
 fn guard_destination(path: &Path, devices: &[PhysicalDevice]) -> Result<()> {
@@ -130,17 +136,46 @@ pub fn run(command: &LibraryCmd, json: bool, rules: &Ruleset) -> Result<()> {
                 println!("Verified {} files. Collection revision: {}", collection.files.len(), collection.revision);
             }
         }
-        LibraryCmd::Stage { source, destination, kind } => {
+        LibraryCmd::Stage { source, destination, kind, only } => {
             let destination = checked_path(destination)?;
             guard_destination(&destination, &boothready_platform::native().list_devices()?)?;
             let kind = match kind {
                 Kind::Local => SourceKind::Local,
                 Kind::GoogleDriveDesktop => SourceKind::GoogleDriveDesktop,
             };
-            let plan = inventory(source, kind)?;
             let parent = destination.parent().context("destination needs a parent")?;
-            guard_capacity(&plan, boothready_platform::space(parent)?)?;
-            let collection = stage(source, kind, &destination, &AtomicBool::new(false))?;
+            let space = boothready_platform::space(parent)?;
+            let collection = if only.is_empty() {
+                let plan = inventory(source, kind)?;
+                guard_capacity(&plan, space)?;
+                stage(source, kind, &destination, &AtomicBool::new(false))?
+            } else {
+                // Sizes come from metadata, so the check downloads nothing.
+                let mut required = 4 * 1024 * 1024_u64;
+                for relative in only {
+                    let size = std::fs::metadata(source.join(relative))
+                        .with_context(|| format!("can't find {} in the source", relative.display()))?
+                        .len();
+                    required = required.saturating_add(size).saturating_add(space.cluster_bytes.max(1));
+                }
+                if required > space.free_bytes {
+                    bail!("insufficient local space: need {required} bytes, available {}", space.free_bytes);
+                }
+                let mut phase = None;
+                stage_selected(source, kind, Some(only), &destination, &AtomicBool::new(false), &mut |p| {
+                    if !json && phase != Some(p.phase) {
+                        phase = Some(p.phase);
+                        eprintln!(
+                            "{}",
+                            match p.phase {
+                                StagePhase::Reading => "Reading the selected files",
+                                StagePhase::Copying => "Copying",
+                                StagePhase::Verifying => "Checking every copy",
+                            }
+                        );
+                    }
+                })?
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&collection)?);
             } else {
