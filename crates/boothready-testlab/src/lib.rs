@@ -108,9 +108,19 @@ pub struct VirtualSuite {
     pub scenarios: Vec<VirtualResult>,
 }
 
+/// The prepare scenario formats a 31 GB image. NTFS allocates every byte of
+/// it because the file is not sparse there, so the run fails on a machine
+/// with less free space than that. The scenario is left out on Windows, like
+/// the CLI acceptance test.
+fn runs_here(scenario: &Scenario) -> bool {
+    !(cfg!(windows) && matches!(scenario.kind, ScenarioKind::PrepareFat32))
+}
+
+/// The scenarios that can run on this operating system.
 pub fn scenarios() -> Vec<ScenarioInfo> {
     SCENARIOS
         .iter()
+        .filter(|s| runs_here(s))
         .map(|s| ScenarioInfo { id: s.id.into(), title: s.title.into(), description: s.description.into() })
         .collect()
 }
@@ -125,9 +135,14 @@ pub fn run_virtual_suite(
     catalog: &UsbCatalog,
 ) -> Result<VirtualSuite> {
     let selected: Vec<&Scenario> = match selected {
-        None | Some("all") => SCENARIOS.iter().collect(),
+        None | Some("all") => SCENARIOS.iter().filter(|s| runs_here(s)).collect(),
         Some(id) => {
-            vec![SCENARIOS.iter().find(|s| s.id == id).with_context(|| format!("unknown virtual scenario '{id}'"))?]
+            let scenario =
+                SCENARIOS.iter().find(|s| s.id == id).with_context(|| format!("unknown virtual scenario '{id}'"))?;
+            if !runs_here(scenario) {
+                bail!("virtual scenario '{id}' formats a 31 GB image, which isn't sparse on NTFS, so it doesn't run on Windows");
+            }
+            vec![scenario]
         }
     };
     let root = match root {
@@ -487,7 +502,7 @@ mod tests {
         )
         .unwrap();
         assert!(suite.passed, "{suite:?}");
-        assert_eq!(suite.scenarios.len(), 5);
+        assert_eq!(suite.scenarios.len(), if cfg!(windows) { 4 } else { 5 });
         assert!(suite.scenarios.iter().all(|s| s.artifact.is_some()));
     }
 }

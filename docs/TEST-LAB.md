@@ -24,7 +24,7 @@ cargo run -p boothready-cli -- test virtual acceptance-main --keep
 cargo run -p boothready-cli -- --json test virtual
 ```
 
-The scenarios currently cover the PRD acceptance drive, an empty drive, a complete rekordbox export, helper formatting to MBR + FAT32 and a copy followed by full read-back verification. Reports are saved under `test-reports/virtual-<timestamp>/`. The default run removes fixture contents after saving each result; use `--keep` or `--root` when inspecting them. An explicit `--root` must name a new directory because existing folders are refused before any fixture writes. Automatic output folders are reserved separately for each run.
+The scenarios currently cover the PRD acceptance drive, an empty drive, a complete rekordbox export, helper formatting to MBR + FAT32 and a copy followed by full read-back verification. The helper formatting scenario is left out on Windows because it formats a 31 GB image, which NTFS allocates in full since the file is not sparse there. Reports are saved under `test-reports/virtual-<timestamp>/`. The default run removes fixture contents after saving each result; use `--keep` or `--root` when inspecting them. An explicit `--root` must name a new directory because existing folders are refused before any fixture writes. Automatic output folders are reserved separately for each run.
 
 Each scenario reports named checks. A failing scenario exits with status 1, so it can run in CI or a pre-push hook. Add a failing scenario check before changing engine code when a fixture exposes a regression.
 
