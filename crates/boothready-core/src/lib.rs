@@ -5,6 +5,8 @@
 //! device discovery lives in `boothready-platform`; privileged disk writes
 //! are executed by `boothready-helper`.
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 pub mod audio;
 pub mod copy;
 #[cfg(feature = "fixtures")]

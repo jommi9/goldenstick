@@ -88,7 +88,7 @@ fn u16_at(b: &[u8], o: usize) -> Option<u16> {
 }
 
 fn u32_at(b: &[u8], o: usize) -> Option<u32> {
-    b.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap()))
+    b.get(o..o + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
 /// Decode a DeviceSQL string at `o`. Returns `None` for malformed strings.
@@ -122,12 +122,12 @@ pub fn parse_pdb(data: &[u8]) -> Result<Pdb, PdbError> {
     if u32_at(data, 0) != Some(0) {
         return Err(PdbError::BadHeader);
     }
-    let page_size = u32_at(data, 4).unwrap();
+    let page_size = u32_at(data, 4).ok_or(PdbError::TooSmall)?;
     if !matches!(page_size, 512 | 1024 | 2048 | 4096 | 8192 | 16384) {
         return Err(PdbError::BadPageSize(page_size));
     }
-    let num_tables = u32_at(data, 8).unwrap();
-    let sequence = u32_at(data, 20).unwrap();
+    let num_tables = u32_at(data, 8).ok_or(PdbError::TooSmall)?;
+    let sequence = u32_at(data, 20).ok_or(PdbError::TooSmall)?;
     if num_tables == 0 || num_tables > 64 || 0x1C + num_tables as usize * 16 > page_size as usize {
         return Err(PdbError::BadHeader);
     }
@@ -135,9 +135,9 @@ pub fn parse_pdb(data: &[u8]) -> Result<Pdb, PdbError> {
     for i in 0..num_tables as usize {
         let o = 0x1C + i * 16;
         tables.push(TablePointer {
-            kind: u32_at(data, o).unwrap(),
-            first_page: u32_at(data, o + 8).unwrap(),
-            last_page: u32_at(data, o + 12).unwrap(),
+            kind: u32_at(data, o).ok_or(PdbError::TooSmall)?,
+            first_page: u32_at(data, o + 8).ok_or(PdbError::TooSmall)?,
+            last_page: u32_at(data, o + 12).ok_or(PdbError::TooSmall)?,
         });
     }
 
@@ -241,8 +241,11 @@ impl Reader<'_> {
                 break;
             };
             let page_start = index as usize * self.page_size;
-            let page_type = u32_at(page, 8).unwrap();
-            let next = u32_at(page, 12).unwrap();
+            // A page is always at least 512 bytes, so its header is present.
+            let (Some(page_type), Some(next)) = (u32_at(page, 8), u32_at(page, 12)) else {
+                warnings.push(format!("table {} has a truncated page (page {index})", t.kind));
+                break;
+            };
             let flags = page[0x1B];
             let is_data = flags & 0x40 == 0;
             if page_type == t.kind && is_data {
@@ -258,7 +261,7 @@ impl Reader<'_> {
 
     fn page_rows(&self, page: &[u8], page_start: usize, out: &mut Vec<usize>) {
         let small = page[0x18] as u16;
-        let large = u16_at(page, 0x22).unwrap();
+        let Some(large) = u16_at(page, 0x22) else { return };
         let num_rows = if large > small && large != 0x1FFF { large } else { small } as usize;
         if num_rows == 0 {
             return;
@@ -269,12 +272,13 @@ impl Reader<'_> {
         }
         for g in 0..groups {
             let base = self.page_size - g * ROW_GROUP_LEN;
-            let flags = u16_at(page, base - 4).unwrap();
+            let Some(flags) = u16_at(page, base - 4) else { return };
             for j in 0..16 {
                 if flags & (1 << j) == 0 {
                     continue;
                 }
-                let ofs = u16_at(page, base - 6 - 2 * j).unwrap() as usize;
+                let Some(ofs) = u16_at(page, base - 6 - 2 * j) else { continue };
+                let ofs = ofs as usize;
                 let row = PAGE_HEADER_LEN + ofs;
                 if row < self.page_size {
                     out.push(page_start + row);

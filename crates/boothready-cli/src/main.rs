@@ -1,5 +1,7 @@
 //! `boothready`: the command-line front end.
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 mod demo;
 mod render;
 
