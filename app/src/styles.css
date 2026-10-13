@@ -1,6 +1,11 @@
-/* The look follows a club player's screen: a black display, condensed
-   lettering, rectangular touch buttons and lamps that light in cue orange,
-   play green and browse blue. There is one theme, as on the hardware. */
+/* The look follows a club player's screen: a black display, wide round
+   lettering with light digits, rectangular touch buttons and lamps that
+   light in cue orange, play green and browse blue. There is one theme, as
+   on the hardware.
+
+   The typeface is M PLUS 1p (SIL Open Font License), the closest open font
+   to the lettering on a CDJ-3000X display. The player's own font is not
+   published and is not used here. */
 :root {
   color-scheme: dark;
   --bg: #000000;
@@ -28,9 +33,10 @@
   --hw-face: #0f1115;
   --radius: 4px;
   --shadow: none;
-  --display: "DIN Alternate", "Bahnschrift", "Barlow Semi Condensed", "Roboto Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
-  --condensed: "DIN Condensed", "Bahnschrift Condensed", "Barlow Condensed", "Roboto Condensed", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
-  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ui: "M PLUS 1p", "Hiragino Sans", "Yu Gothic UI", "Noto Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: var(--ui);
+  --condensed: var(--ui);
+  font-family: var(--ui);
   font-size: 15px;
   line-height: 1.45;
 }
@@ -2053,4 +2059,134 @@ h1 {
 .pill.collection {
   color: var(--ok);
   border-color: var(--ok);
+}
+
+/* ------------------------------------------------------------------
+   Lettering tuned for M PLUS 1p, which is wider and lighter than the
+   condensed faces the rules above were first written for.
+   ------------------------------------------------------------------ */
+body,
+button,
+input,
+select {
+  font-family: var(--ui);
+}
+
+h1 {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+h2,
+h3 {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.hero h1,
+.readiness h1 {
+  font-weight: 500;
+  letter-spacing: 2px;
+}
+
+.brand-mark {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.brand-name {
+  font-weight: 500;
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+
+.tab {
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.btn {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+
+.btn.small {
+  font-size: 11px;
+}
+
+.eyebrow,
+.field-label,
+.matrix th,
+.tracks th,
+.pathbar,
+.pill,
+.statelegend,
+.stat .small {
+  font-size: 11px;
+  letter-spacing: 1.1px;
+}
+
+/* Readouts are light and large, like the time and BPM on the player. */
+.stat b {
+  font-weight: 300;
+  font-size: 34px;
+  letter-spacing: 0;
+}
+
+.source-totals,
+.collect-progress,
+.tracks .num,
+.tracks .idx {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.matrix td b {
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+.verdict,
+.trackstate {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.8px;
+}
+
+.browse .chip {
+  font-size: 12px;
+  letter-spacing: 0.8px;
+}
+
+.arttile {
+  font-size: 10px;
+  letter-spacing: 0.2px;
+}
+
+.tracks td b {
+  font-weight: 500;
+}
+
+footer.foot {
+  letter-spacing: 0;
+}
+
+.library-players .select {
+  font-size: 14px;
+}
+
+.library-stats .stat .small {
+  font-size: 10px;
+  letter-spacing: 0.9px;
+}
+
+/* A verdict inside a heading keeps the heading's size. */
+h1 .verdict,
+h2 .verdict,
+h3 .verdict {
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: 0.5px;
 }

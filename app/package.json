@@ -24,6 +24,7 @@
     "dev:clean": "node scripts/dev.mjs clean"
   },
   "dependencies": {
+    "@fontsource/m-plus-1p": "^5.3.0",
     "@tauri-apps/api": "^2.11.1"
   },
   "devDependencies": {
