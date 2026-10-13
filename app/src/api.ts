@@ -20,7 +20,9 @@ import type {
   HardwareCard,
   Identification,
   KitPlan,
+  CollectPlan,
   KnownMedia,
+  LibraryCollectProgress,
   LibraryPage,
   LibraryScanProgress,
   LibrarySource,
@@ -81,6 +83,12 @@ export interface Api {
   libraryCancelScan(): Promise<void>;
   libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number): Promise<LibraryPage>;
   onLibraryScanProgress(cb: (p: LibraryScanProgress) => void): void;
+  /** What collecting the tracks shown for this filter and search would copy. An empty name asks for the suggested one. */
+  libraryCollectPlan(id: string, targets: string[], filter: string, query: string, name: string): Promise<CollectPlan>;
+  /** Copies those tracks into a verified local collection and returns the new source's id. */
+  libraryCollect(id: string, targets: string[], filter: string, query: string, name: string): Promise<string>;
+  libraryCancelCollect(): Promise<void>;
+  onLibraryCollectProgress(cb: (p: LibraryCollectProgress) => void): void;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
   onScanProgress(cb: (p: { device_id: string; files: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
@@ -145,6 +153,10 @@ async function tauriApi(): Promise<Api> {
     libraryCancelScan: () => invoke("library_cancel_scan"),
     libraryTracks: (id, targets, filter, query, offset, limit) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit } }),
     onLibraryScanProgress: on("library-scan-progress"),
+    libraryCollectPlan: (id, targets, filter, query, name) => invoke("library_collect_plan", { request: { id, targets, filter, query, name } }),
+    libraryCollect: (id, targets, filter, query, name) => invoke("library_collect", { request: { id, targets, filter, query, name } }),
+    libraryCancelCollect: () => invoke("library_cancel_collect"),
+    onLibraryCollectProgress: on("library-collect-progress"),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),

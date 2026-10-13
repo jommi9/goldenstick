@@ -2007,3 +2007,50 @@ h1 {
     display: none;
   }
 }
+
+/* Collecting tracks into a local copy */
+.collect {
+  margin-top: 16px;
+  border-color: var(--line-2);
+}
+
+.collect .banner {
+  margin: 12px 0 0;
+}
+
+.collect > .banner:first-child {
+  margin: 0;
+}
+
+.collect-facts {
+  margin: 14px 0 4px;
+}
+
+.collect-facts dd {
+  font-weight: 500;
+}
+
+.collect .search {
+  margin-top: 4px;
+}
+
+.collect .bar {
+  margin-top: 12px;
+  height: 14px;
+}
+
+.collect-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-family: var(--display);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.4px;
+}
+
+.pill.collection {
+  color: var(--ok);
+  border-color: var(--ok);
+}

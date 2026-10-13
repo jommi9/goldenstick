@@ -262,6 +262,46 @@ async function checkLibrary(page, text, at) {
       same(await page.locator(".tracks tbody tr").count(), n, `the ${state} filter on ${s.name} shows its ${n} tracks`);
     }
   }
+
+  // Collecting the cloud folder: the plan matches the scan, and the new
+  // collection shows what the engine read once the tracks were local.
+  const cloud = byId["demo-cloud"];
+  const made = lib.collected;
+  screen = "mock-data";
+  check(made.source.collected_from === cloud.name, "the engine's collection records the source it came from");
+  same(made.source.states.cloud_only, 0, "no collected track is still online");
+  same(made.tracks.length, lib.tracks["demo-cloud"].length, "the engine collected every track of the cloud folder");
+  check(made.tracks.some((t) => t.state === "blocked"), "a collected track is rejected by a player once its format can be read");
+
+  await page.locator('[data-act="library-filter"][data-id="all"]').click();
+  await page.locator('[data-act="library-collect-open"]').click();
+  await page.getByRole("heading", { name: /^Bring \d+ tracks? onto this computer$/ }).waitFor();
+  await at("library-collect plan");
+  const plan = (await text(".collect")) ?? "";
+  includes(plan, `Bring ${count(made.tracks.length, "track")} onto this computer`, "the plan counts the tracks to collect");
+  includes(plan, `From the cloud${cloud.states.cloud_only.toLocaleString("en-US")},`, "the plan counts the tracks that will be downloaded");
+  includes(plan, "Your cloud app downloads them as they are read.", "the plan says the cloud app does the downloading");
+  includes(plan, "/Music/BoothReady/", "the plan shows the folder the copy goes to");
+  await page.getByRole("button", { name: `Collect ${count(made.tracks.length, "track")}` }).click();
+  await page.getByText(`Collected and verified ${count(made.tracks.length, "track")}.`).waitFor({ timeout: 15000 });
+  await page.getByRole("button", { name: "Open the collection" }).click();
+  await page.getByRole("table").waitFor();
+  await at("library-collection");
+  const rows = page.locator(".tracks tbody tr");
+  same(await rows.count(), made.tracks.length, "the collection lists every collected track");
+  for (const [i, t] of made.tracks.entries()) {
+    const row = (await rows.nth(i).textContent()) ?? "";
+    includes(row, t.name, `collected row ${i + 1} is ${t.name}`);
+    includes(row, STATE_LABEL[t.state], `${t.name} shows the state the engine found after collecting`);
+    includes(row, t.detail, `${t.name} shows the format the engine read`);
+    check(!row.includes("not checked") && !row.includes(STATE_LABEL.cloud_only), `${t.name} is no longer shown as online`);
+    for (const issue of t.issues.slice(0, 3)) includes(row, issue.reason, `${t.name} gives the engine's reason for ${issue.model}`);
+  }
+  check((await page.locator('[data-act="library-collect-open"]').count()) === 0, "a collection doesn't offer to be collected again");
+  await page.locator('[data-act="open-library"]').first().click();
+  const card = (await page.locator(".source").last().textContent()) ?? "";
+  includes(card, "Local collection", "the library marks the new source as a local collection");
+  includes(card, `A verified copy of tracks from ${cloud.name}.`, "the collection card names its origin");
 }
 
 async function checkReport(page, text) {

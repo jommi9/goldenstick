@@ -3,7 +3,7 @@
 // State lives here; app.ts routes views and actions to this module.
 
 import type { Api } from "./api";
-import type { LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
+import type { CollectPlan, LibraryCollectProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
 import { gb, html, num, plural, raw, Raw, when } from "./ui";
 
 type Filter = "all" | TrackState;
@@ -39,7 +39,26 @@ const L = {
   total: 0,
   tracksFor: null as string | null,
   loadingTracks: false,
+  /** The collect panel for one source: its plan, the run and the result. */
+  collect: null as null | {
+    sourceId: string;
+    plan: CollectPlan | null;
+    name: string;
+    running: boolean;
+    progress: LibraryCollectProgress | null;
+    error: string | null;
+    done: { id: string; name: string; tracks: number } | null;
+  },
 };
+
+const PHASE_LABEL: Record<LibraryCollectProgress["phase"], string> = {
+  reading: "Reading the tracks",
+  copying: "Copying",
+  verifying: "Checking every copy",
+};
+
+/** Each phase reads all the bytes once, so the bar gives them equal thirds. */
+const PHASE_START: Record<LibraryCollectProgress["phase"], number> = { reading: 0, copying: 1 / 3, verifying: 2 / 3 };
 
 const STATE_ORDER: TrackState[] = ["ready", "cloud_only", "blocked", "unchecked", "unreadable"];
 
@@ -113,10 +132,47 @@ export async function initLibrary(host: Host) {
     L.progress = p;
     if (host.showing()) host.render();
   });
+  host.api.onLibraryCollectProgress((p) => {
+    if (!L.collect?.running || L.collect.sourceId !== p.source_id) return;
+    L.collect.progress = p;
+    if (host.showing()) host.render();
+  });
   await refreshLibrary();
 }
 
+async function planCollect(name: string) {
+  const c = L.collect;
+  if (!c) return;
+  try {
+    c.plan = await L.host.api.libraryCollectPlan(c.sourceId, L.host.targets(), L.filter, L.query, name);
+    c.name = c.plan.name;
+    c.error = null;
+  } catch (e) {
+    c.error = String(e);
+  }
+}
+
+async function runCollect() {
+  const c = L.collect;
+  if (!c || c.running) return;
+  c.running = true;
+  c.error = null;
+  c.progress = null;
+  L.host.render();
+  try {
+    const id = await L.host.api.libraryCollect(c.sourceId, L.host.targets(), L.filter, L.query, c.name);
+    c.done = { id, name: c.name, tracks: c.plan?.tracks ?? 0 };
+  } catch (e) {
+    c.error = String(e);
+  }
+  c.running = false;
+  c.progress = null;
+  await refreshLibrary();
+  L.host.render();
+}
+
 export async function openLibrarySource(id: string) {
+  L.collect = null;
   L.filter = "all";
   L.query = "";
   L.tracks = [];
@@ -224,6 +280,22 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
     case "library-filter":
       L.filter = id as Filter;
       if (L.tracksFor) await loadTracks(L.tracksFor);
+      if (L.collect && !L.collect.running && !L.collect.done) await planCollect(L.collect.name);
+      host.render();
+      return true;
+    case "library-collect-open":
+      L.collect = { sourceId: id, plan: null, name: "", running: false, progress: null, error: null, done: null };
+      await planCollect("");
+      host.render();
+      return true;
+    case "library-collect-start":
+      await runCollect();
+      return true;
+    case "library-collect-stop":
+      await host.api.libraryCancelCollect();
+      return true;
+    case "library-collect-close":
+      L.collect = null;
       host.render();
       return true;
     case "library-more":
@@ -246,6 +318,10 @@ export function libraryInput(t: HTMLInputElement): boolean {
     L.path = t.value;
     return true;
   }
+  if (t.id === "library-collect-name") {
+    if (L.collect) L.collect.name = t.value;
+    return true;
+  }
   if (t.id === "library-search") {
     L.query = t.value;
     clearTimeout(searchTimer);
@@ -260,6 +336,12 @@ export function libraryInput(t: HTMLInputElement): boolean {
 
 /** Handle a changed select. Returns false when it isn't a Library one. */
 export async function libraryChange(t: HTMLInputElement | HTMLSelectElement): Promise<boolean> {
+  if (t.id === "library-collect-name") {
+    // The name decides the folder, so the plan is fetched again for it.
+    await planCollect(t.value);
+    L.host.render();
+    return true;
+  }
   if (t.id !== "library-preset") return false;
   L.host.setPreset(t.value);
   await refreshLibrary();
@@ -301,7 +383,8 @@ function sourceCard(s: LibrarySource): Raw {
     <div class="source-head">
       <div class="grow">
         <h2>${s.name}</h2>
-        <div class="source-meta"><span class="pill ${s.location.kind}">${locationLabel(s.location)}</span>${s.connected ? "" : html`<span class="pill offline">Not connected</span>`}</div>
+        <div class="source-meta">${s.collected_from ? html`<span class="pill collection">Local collection</span>` : ""}<span class="pill ${s.location.kind}">${locationLabel(s.location)}</span>${s.connected ? "" : html`<span class="pill offline">Not connected</span>`}</div>
+        ${s.collected_from ? html`<div class="small muted">A verified copy of tracks from ${s.collected_from}.</div>` : ""}
         <div class="small faint source-path">${s.path}</div>
       </div>
       <div class="source-actions">
@@ -399,6 +482,49 @@ function trackTable(): Raw {
     <div class="tracks-foot"><span class="small muted">Showing ${num(L.tracks.length)} of ${num(L.total)}</span>${L.tracks.length < L.total ? html`<button class="btn" data-act="library-more" ${L.loadingTracks ? "disabled" : ""}>Show more</button>` : ""}</div>`;
 }
 
+function collectPanel(s: LibrarySource): Raw {
+  const c = L.collect;
+  if (!c || c.sourceId !== s.id) return html``;
+  const p = c.plan;
+  if (c.done) {
+    return html`<section class="card collect"><div class="banner ok"><div style="flex:1"><b>Collected and verified ${plural(c.done.tracks, "track")}.</b> They are on this computer as ${c.done.name}, checked against the selected players.</div><button class="btn primary" data-act="library-open" data-id="${c.done.id}">Open the collection</button><button class="btn link" data-act="library-collect-close">Close</button></div></section>`;
+  }
+  if (!p) return html`<section class="card collect">${c.error ? html`<div class="banner bad" role="alert"><div style="flex:1">${c.error}</div><button class="btn link" data-act="library-collect-close">Close</button></div>` : html`<p class="muted">Working out what to copy.</p>`}</section>`;
+  const short = p.free_bytes !== null && p.free_bytes < p.needed_bytes;
+  const blocked = short || p.exists || !p.tracks;
+  if (c.running) {
+    const g = c.progress;
+    const within = g && g.bytes_total ? Math.min(1, g.bytes_done / g.bytes_total) : 0;
+    const pct = g ? Math.round((PHASE_START[g.phase] + within / 3) * 100) : 0;
+    const label = g ? (g.phase === "reading" && p.cloud_only ? "Reading and downloading" : PHASE_LABEL[g.phase]) : "Starting";
+    return html`<section class="card collect" aria-live="polite">
+      <div class="eyebrow">Collecting into ${p.name}</div>
+      <h2>${label}</h2>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
+      <div class="collect-progress"><span>${g ? html`${num(g.files_done)} of ${plural(g.files_total, "track")} · ${gb(g.bytes_done)} of ${gb(g.bytes_total)}` : "Reading the folder."}</span><button class="btn" data-act="library-collect-stop">Stop</button></div>
+      ${p.cloud_only ? html`<p class="small muted">Your cloud app downloads ${plural(p.cloud_only, "track")} as they are read, so this step depends on your connection.</p>` : ""}
+    </section>`;
+  }
+  return html`<section class="card collect">
+    <div class="eyebrow">Collect</div>
+    <h2>Bring ${plural(p.tracks, "track")} onto this computer</h2>
+    <p class="small muted">BoothReady copies them into a folder of their own and checks every copy against the original. The source is left as it is.</p>
+    <dl class="facts collect-facts">
+      <dt>Tracks</dt><dd>${num(p.tracks)}, ${gb(p.bytes)}</dd>
+      ${p.cloud_only ? html`<dt>From the cloud</dt><dd>${num(p.cloud_only)}, ${gb(p.cloud_only_bytes)}. Your cloud app downloads them as they are read.</dd>` : ""}
+      ${p.unreadable ? html`<dt>Left out</dt><dd>${plural(p.unreadable, "unreadable file")}</dd>` : ""}
+      <dt>Folder</dt><dd class="source-path">${p.destination}</dd>
+      <dt>Free space</dt><dd>${p.free_bytes === null ? "unknown" : html`${gb(p.free_bytes)} free, ${gb(p.needed_bytes)} needed`}</dd>
+    </dl>
+    <label class="field-label" for="library-collect-name">Collection name</label>
+    <input id="library-collect-name" class="search" type="text" value="${c.name}" autocomplete="off" spellcheck="false">
+    ${c.error ? html`<div class="banner bad" role="alert"><div>${c.error}</div></div>` : ""}
+    ${short ? html`<div class="banner bad"><div>There isn't enough free space on this computer for these tracks.</div></div>` : ""}
+    ${p.exists ? html`<div class="banner warn"><div>A collection with this name already exists. Choose another name.</div></div>` : ""}
+    <div class="actions"><button class="btn primary" data-act="library-collect-start" ${blocked ? "disabled" : ""}>Collect ${plural(p.tracks, "track")}</button><button class="btn" data-act="library-collect-close">Cancel</button></div>
+  </section>`;
+}
+
 /** Re-render only the track list, so typing in the search box keeps focus. */
 function renderTracks() {
   const el = document.getElementById("library-tracks");
@@ -415,7 +541,7 @@ export function librarySourceView(id: string): Raw {
   return html`<div class="library">
     <div class="devtools-heading">
       <div><div class="eyebrow">${locationLabel(s.location)}${s.connected ? "" : " · not connected"}</div><h1>${s.name}</h1><div class="small faint source-path">${s.path}</div></div>
-      <div class="source-actions"><button class="btn" data-act="open-library">Back to your music</button>${scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`}</div>
+      <div class="source-actions"><button class="btn" data-act="open-library">Back to your music</button>${scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`}${c && !s.collected_from && !L.collect ? html`<button class="btn primary" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}</div>
     </div>
     ${errorBanner()}
     ${scanning ? html`<div class="banner"><span class="spinner" aria-hidden="true"></span><div>Scanning. ${L.progress?.files ? html`${plural(L.progress.files, "track")} found.` : ""}</div></div>` : ""}
@@ -425,6 +551,7 @@ export function librarySourceView(id: string): Raw {
       ${playersControl()}
     </div>
     ${c ? stateBar(c) : ""}
+    ${collectPanel(s)}
     ${c
       ? html`<div class="browse"><div class="library-filters" role="group" aria-label="Filter tracks">
             <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>

@@ -16,6 +16,22 @@ The app saves the source list and each source's last scan under `library/` in it
 
 A scan and staging are separate steps. Scanning reads headers and downloads nothing. Staging, described below, reads every byte, which makes a cloud client download the files.
 
+## Collecting tracks
+
+**Collect** on a source in the Library screen copies the tracks shown for the current filter and search into a new local collection. Unreadable files are left out. The panel shows the track count, how many of them the cloud client will download, the destination folder and the free space before anything starts.
+
+Collections go to `BoothReady` inside the user's Music folder, one folder per collection. The folder name comes from the name typed in the panel, with characters outside letters, digits, spaces and a few marks replaced by dashes. A name that is already in use is refused, because a collection folder holds one selection.
+
+The work is done by the staging engine with a list of selected files, so the copy passes through the same three reads: every selected file is read and hashed, copied and rehashed, and then the source and the copies are hashed once more. A stopped or failed run leaves what it finished, and running it again with the same name and selection resumes it.
+
+A finished collection is added to the library as a source of its own and scanned. Its tracks are on this computer, so tracks that were listed as still in the cloud now have a checked format.
+
+From the command line, `--only` stages chosen files and reads nothing else in the source:
+
+```sh
+boothready library stage /absolute/source-folder /absolute/existing-parent/collection --only "Label Promos/Low Tide.flac" --only "Edits/Opening Tool.mp3"
+```
+
 # Local library staging
 
 `boothready library stage` creates a verified local collection from a selected directory. The source can be a local folder or a Google Drive for desktop folder that the user already accesses through their operating system.
@@ -26,7 +42,7 @@ boothready library stage /absolute/drive-folder /absolute/existing-parent/collec
 boothready library verify /absolute/existing-parent/collection
 ```
 
-The source kind records provenance. BoothReady does not sign into Google Drive, discover accounts or call its API. Reading a cloud placeholder may cause the installed Drive client to download its contents. A failed read aborts staging. These commands have been tested with generated directories; live Drive hydration remains unverified.
+The source kind records provenance. BoothReady does not sign into Google Drive, discover accounts or call its API. Reading a cloud placeholder may cause the installed Drive client to download its contents. A failed read aborts staging. Staging one online-only audio file from a real Google Drive for desktop folder on macOS made the client download it, and the staged copy verified and scanned as a readable track. Larger selections, interrupted downloads and other cloud clients are untested.
 
 ## Storage boundary
 

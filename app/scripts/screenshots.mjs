@@ -128,6 +128,17 @@ async function run(scheme) {
   await page.locator('[data-act="library-open"][data-id="demo-cloud"]').click();
   await page.getByRole("table").waitFor();
   await shot("22-library-cloud-source", true);
+
+  // Collect the cloud folder into a local copy, then open the result.
+  await page.locator('[data-act="library-collect-open"]').click();
+  await page.getByRole("heading", { name: /onto this computer$/ }).waitFor();
+  await shot("23-collect-plan", true);
+  await page.getByRole("button", { name: /^Collect \d+ tracks?$/ }).click();
+  await page.getByText(/^(Reading|Copying|Checking)/).first().waitFor();
+  await shot("24-collecting", true);
+  await page.getByRole("button", { name: "Open the collection" }).click({ timeout: 15000 });
+  await page.getByRole("table").waitFor();
+  await shot("25-collection", true);
   await page.close();
 }
 

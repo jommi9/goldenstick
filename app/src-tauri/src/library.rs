@@ -9,9 +9,10 @@ use boothready_core::audio::{AudioInfo, Codec, Container};
 use boothready_core::rules::DeviceProfile;
 use boothready_core::scan::TrackProbe;
 use boothready_core::sources::{
-    cloud_provider, count_states, device_for_path, judge, PlayerIssue, SourceScan, SourceTotals, SourceTrack,
-    StateCounts, TrackState,
+    cloud_provider, count_states, device_for_path, judge, scan_source, Availability, PlayerIssue, SourceScan,
+    SourceTotals, SourceTrack, StateCounts, TrackState,
 };
+use boothready_core::staging::{stage_selected, Collection, SourceKind, StageProgress};
 use boothready_model::PhysicalDevice;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -39,6 +40,20 @@ pub struct SourceRecord {
     pub totals: Option<SourceTotals>,
     #[serde(default)]
     pub skipped: u32,
+    /// Set when this source is a local collection BoothReady made.
+    #[serde(default)]
+    pub collection: Option<CollectionRef>,
+}
+
+/// A verified local copy of tracks picked from another source. Its tracks
+/// are scanned from `files/` inside `root`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionRef {
+    pub name: String,
+    pub root: PathBuf,
+    /// The folder name of the source the tracks came from.
+    pub origin: String,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +71,20 @@ pub struct LibrarySource {
     pub states: Option<StateCounts>,
     /// Folders or files the last scan could not read.
     pub skipped: u32,
+    /// The source the tracks were collected from, for a local collection.
+    pub collected_from: Option<String>,
+}
+
+/// The tracks a collect request covers, taken from a source's last scan.
+#[derive(Debug, Clone)]
+pub struct Selection {
+    pub source: SourceRecord,
+    pub paths: Vec<PathBuf>,
+    pub bytes: u64,
+    pub cloud_only: u32,
+    pub cloud_only_bytes: u64,
+    /// Matching tracks left out because they are damaged or not audio.
+    pub unreadable: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +114,7 @@ pub struct LibraryState {
     sources: Vec<SourceRecord>,
     scans: HashMap<String, Arc<SourceScan>>,
     scanning: HashSet<String>,
+    collecting: bool,
 }
 
 fn name_of(path: &Path) -> String {
@@ -159,6 +189,7 @@ impl LibraryState {
                 scanned_unix: Some(DEMO_TIME),
                 totals: Some(scan.totals()),
                 skipped: 0,
+                collection: None,
             });
             state.scans.insert((*id).to_string(), Arc::new(scan));
         }
@@ -171,6 +202,7 @@ impl LibraryState {
             scanned_unix: Some(DEMO_TIME),
             totals: Some(archive.totals()),
             skipped: 0,
+            collection: None,
         });
         state.scans.insert("demo-archive".to_string(), Arc::new(archive));
         Ok(state)
@@ -233,9 +265,73 @@ impl LibraryState {
             scanned_unix: None,
             totals: None,
             skipped: 0,
+            collection: None,
         });
         self.save_sources();
         Ok(id)
+    }
+
+    /// Add a finished collection as a source of its own, with its scan.
+    pub fn add_collection(&mut self, made: CollectionRef, scan: SourceScan, location: Location, now: u64) -> String {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        self.sources.push(SourceRecord {
+            id: id.clone(),
+            path: made.root.join("files"),
+            added_unix: now,
+            location: location.clone(),
+            scanned_unix: None,
+            totals: None,
+            skipped: 0,
+            collection: Some(made),
+        });
+        self.store_scan(&id, scan, location, now);
+        id
+    }
+
+    /// The tracks a collect request covers. `filter` and `query` mean what
+    /// they mean in [`LibraryState::tracks`]. Unreadable files are left out,
+    /// because copying a damaged file helps nobody.
+    pub fn selection(
+        &mut self,
+        id: &str,
+        targets: &[&DeviceProfile],
+        filter: &str,
+        query: &str,
+    ) -> Result<Selection, String> {
+        let source = self.record(id)?;
+        let scan = self.scan(id).ok_or_else(|| "Scan this folder first.".to_string())?;
+        let query = query.trim().to_lowercase();
+        let mut picked =
+            Selection { source, paths: Vec::new(), bytes: 0, cloud_only: 0, cloud_only_bytes: 0, unreadable: 0 };
+        for track in &scan.tracks {
+            if !query.is_empty() && !track.path.to_lowercase().contains(&query) {
+                continue;
+            }
+            let state = judge(track, targets).0;
+            if filter != "all" && state_name(state) != filter {
+                continue;
+            }
+            if state == TrackState::Unreadable {
+                picked.unreadable += 1;
+                continue;
+            }
+            if track.availability == Availability::CloudOnly {
+                picked.cloud_only += 1;
+                picked.cloud_only_bytes += track.size;
+            }
+            picked.bytes += track.size;
+            picked.paths.push(track.path.split('/').collect());
+        }
+        Ok(picked)
+    }
+
+    /// A scan or a collect is running. Only one runs at a time.
+    pub fn is_busy(&self) -> bool {
+        self.collecting || !self.scanning.is_empty()
+    }
+
+    pub fn set_collecting(&mut self, on: bool) {
+        self.collecting = on;
     }
 
     /// Forget a source and its saved scan. The folder itself is not touched.
@@ -246,10 +342,6 @@ impl LibraryState {
             let _ = std::fs::remove_file(file);
         }
         self.save_sources();
-    }
-
-    pub fn is_scanning(&self) -> bool {
-        !self.scanning.is_empty()
     }
 
     pub fn set_scanning(&mut self, id: &str, on: bool) {
@@ -282,8 +374,10 @@ impl LibraryState {
             .into_iter()
             .map(|record| {
                 let states = self.scan(&record.id).map(|scan| count_states(&scan, targets));
+                let made = record.collection;
                 LibrarySource {
-                    name: name_of(&record.path),
+                    name: made.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| name_of(&record.path)),
+                    collected_from: made.map(|c| c.origin),
                     path: record.path.display().to_string(),
                     connected: record.path.is_dir(),
                     scanning: self.scanning.contains(&record.id),
@@ -394,6 +488,81 @@ fn demo_archive(seed: &SourceScan) -> SourceScan {
 
 fn is_lossless(info: &AudioInfo) -> bool {
     matches!(info.container, Container::Wav | Container::Aiff | Container::Flac) || info.codec == Codec::Alac
+}
+
+/// A folder name for a collection, made from what the user typed. Anything
+/// outside letters, digits, spaces and a few marks becomes a dash, so the
+/// name is valid on FAT, NTFS and APFS alike.
+pub fn collection_folder_name(typed: &str) -> Result<String, String> {
+    let cleaned: String = typed
+        .trim()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || " -_().,&'".contains(c) { c } else { '-' })
+        .take(80)
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches('.').to_string();
+    if cleaned.is_empty() || cleaned.chars().all(|c| c == '-' || c == '.') {
+        return Err("Give the collection a name.".to_string());
+    }
+    Ok(cleaned)
+}
+
+/// The calendar date of a Unix time, as YYYY-MM-DD in UTC.
+pub fn date_of(unix: u64) -> String {
+    // Civil-from-days, after Howard Hinnant's algorithm.
+    let days = (unix / 86_400) as i64 + 719_468;
+    let era = days.div_euclid(146_097);
+    let doe = days.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Bytes a collection needs on a volume with the given allocation unit. A
+/// file can waste up to one unit, so each is given a whole spare one, plus
+/// room for folders and the two manifests.
+pub fn space_needed(bytes: u64, files: u64, cluster_bytes: u64) -> u64 {
+    let per_file = cluster_bytes.max(1).saturating_add(512);
+    bytes.saturating_add(files.saturating_mul(per_file)).saturating_add(4 * 1024 * 1024)
+}
+
+/// Copy a selection into a new collection folder and scan the result.
+///
+/// The staging engine reads every selected file in full, which is when a
+/// cloud client downloads the ones it has not fetched, then copies and
+/// rehashes them. `destination` must not hold anything else.
+pub fn run_collect(
+    selection: &Selection,
+    destination: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut dyn FnMut(&StageProgress),
+) -> Result<(Collection, SourceScan), String> {
+    let kind = match &selection.source.location {
+        Location::Cloud { provider } if provider == "Google Drive" => SourceKind::GoogleDriveDesktop,
+        _ => SourceKind::Local,
+    };
+    let source = selection.source.path.canonicalize().map_err(|_| "The source folder can't be reached.".to_string())?;
+    let parent = destination.parent().ok_or("The collection needs a parent folder.")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("The collections folder couldn't be created: {e}"))?;
+    let parent = parent.canonicalize().map_err(|e| e.to_string())?;
+    let destination = parent.join(destination.file_name().ok_or("The collection needs a name.")?);
+    let made = stage_selected(&source, kind, Some(&selection.paths), &destination, cancel, progress).map_err(|e| {
+        match e.kind() {
+            std::io::ErrorKind::Interrupted => {
+                "Stopped. Start again with the same name to pick up where it left off.".to_string()
+            }
+            std::io::ErrorKind::InvalidInput => format!("The collection couldn't be made: {e}."),
+            _ => format!("A file couldn't be read or written: {e}. Start again with the same name to resume."),
+        }
+    })?;
+    let never = std::sync::atomic::AtomicBool::new(false);
+    let scan = scan_source(&destination.join("files"), &|_, _| false, &never, |_| {})
+        .map_err(|e| format!("The new collection couldn't be read back: {e}"))?;
+    Ok((made, scan))
 }
 
 pub fn state_name(state: TrackState) -> &'static str {
@@ -548,6 +717,77 @@ mod tests {
         reopened.remove(&id);
         assert!(LibraryState::load(data.path().join("library")).list(&[]).is_empty());
         assert!(folder.join("Warm-up/not-audio.mp3").exists(), "removing a source never touches its files");
+    }
+
+    #[test]
+    fn collecting_cloud_tracks_makes_a_checked_local_source() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let rules = Ruleset::builtin();
+        let targets = club(&rules);
+        let mut library = LibraryState::demo(&root).unwrap();
+
+        let picked = library.selection("demo-cloud", &targets, "cloud_only", "").unwrap();
+        assert_eq!((picked.paths.len(), picked.cloud_only, picked.unreadable), (4, 4, 0));
+        assert!(picked.bytes > 0 && picked.bytes == picked.cloud_only_bytes);
+
+        let destination = root.join("Collections").join("Promos");
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut phases = Vec::new();
+        let (made, scan) = run_collect(&picked, &destination, &cancel, &mut |p| phases.push(p.phase)).unwrap();
+        assert_eq!(made.files.len(), 4);
+        assert!(phases.contains(&boothready_core::staging::StagePhase::Verifying));
+        assert!(destination.join("complete.json").exists());
+
+        let id = library.add_collection(
+            CollectionRef {
+                name: "Promos".into(),
+                root: destination,
+                origin: "Promos 2026".into(),
+                revision: made.revision,
+            },
+            scan,
+            Location::Computer,
+            500,
+        );
+        let listed = library.list(&targets);
+        let source = listed.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(source.name, "Promos");
+        assert_eq!(source.collected_from.as_deref(), Some("Promos 2026"));
+        let states = source.states.unwrap();
+        assert_eq!(states.cloud_only, 0, "collected tracks are on this computer and have been checked");
+        assert_eq!(states.ready + states.blocked + states.unchecked, 4);
+        assert!(states.blocked > 0, "the 24-bit FLAC promo is rejected by the older players once it can be read");
+    }
+
+    #[test]
+    fn a_selection_leaves_out_unreadable_files_and_follows_the_search() {
+        let root = tempfile::tempdir().unwrap();
+        let rules = Ruleset::builtin();
+        let targets = club(&rules);
+        let mut library = LibraryState::demo(root.path()).unwrap();
+        let all = library.selection("demo-computer", &targets, "all", "").unwrap();
+        assert_eq!((all.paths.len(), all.unreadable), (12, 1));
+        let found = library.selection("demo-computer", &targets, "all", "subzero").unwrap();
+        assert!(
+            !found.paths.is_empty()
+                && found.paths.iter().all(|p| p.to_string_lossy().to_lowercase().contains("subzero"))
+        );
+        assert!(library.selection("demo-archive", &targets, "all", "").is_ok());
+        assert!(library.selection("missing", &targets, "all", "").is_err());
+    }
+
+    #[test]
+    fn collection_names_dates_and_space() {
+        assert_eq!(collection_folder_name("  Friday / Panorama: warm-up  ").unwrap(), "Friday - Panorama- warm-up");
+        assert_eq!(collection_folder_name("Promos 2026.").unwrap(), "Promos 2026");
+        assert!(collection_folder_name("   ").is_err());
+        assert!(collection_folder_name("..").is_err());
+        assert_eq!(date_of(0), "1970-01-01");
+        assert_eq!(date_of(1_790_000_000), "2026-09-21");
+        assert_eq!(date_of(951_782_400), "2000-02-29");
+        assert_eq!(space_needed(10_000, 3, 4096), 10_000 + 3 * (4096 + 512) + 4 * 1024 * 1024);
+        assert_eq!(space_needed(u64::MAX, 3, 4096), u64::MAX);
     }
 
     #[test]
