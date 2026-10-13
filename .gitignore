@@ -8,3 +8,15 @@ app/screenshots
 app/test-results
 app/src-tauri/binaries
 /research
+
+# Private field reports and local library working files
+/outputs/
+/test-reports/
+/local-data/
+/staging/
+boothready-diagnostics-*.json
+.env
+.env.*
+!.env.example
+!.env.sample
+__pycache__/

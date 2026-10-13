@@ -13,6 +13,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  privacy:
+    name: Repository privacy guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test the staged-file guard
+        run: python3 -m unittest discover -s scripts -p 'test_private_files.py'
+      - name: Check tracked files
+        run: python3 scripts/check-private-files.py --all
+
   engine:
     name: Engine, helper and CLI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
