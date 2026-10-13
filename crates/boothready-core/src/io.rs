@@ -274,29 +274,37 @@ impl<T: Read + Write + Seek> Seek for AlignedIo<T> {
     }
 }
 
+/// The `N` bytes at `off`, as an array. Like indexing, it panics when `b` is
+/// too short; callers check the length first.
+fn arr<const N: usize>(b: &[u8], off: usize) -> [u8; N] {
+    let mut a = [0u8; N];
+    a.copy_from_slice(&b[off..off + N]);
+    a
+}
+
 pub(crate) fn le_u16(b: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes([b[off], b[off + 1]])
+    u16::from_le_bytes(arr(b, off))
 }
 
 pub(crate) fn le_u32(b: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(b[off..off + 4].try_into().unwrap())
+    u32::from_le_bytes(arr(b, off))
 }
 
 pub(crate) fn le_u64(b: &[u8], off: usize) -> u64 {
-    u64::from_le_bytes(b[off..off + 8].try_into().unwrap())
+    u64::from_le_bytes(arr(b, off))
 }
 
 pub(crate) fn be_u16(b: &[u8], off: usize) -> u16 {
-    u16::from_be_bytes([b[off], b[off + 1]])
+    u16::from_be_bytes(arr(b, off))
 }
 
 pub(crate) fn be_u32(b: &[u8], off: usize) -> u32 {
-    u32::from_be_bytes(b[off..off + 4].try_into().unwrap())
+    u32::from_be_bytes(arr(b, off))
 }
 
 #[allow(dead_code)]
 pub(crate) fn be_u64(b: &[u8], off: usize) -> u64 {
-    u64::from_be_bytes(b[off..off + 8].try_into().unwrap())
+    u64::from_be_bytes(arr(b, off))
 }
 
 /// CRC-32 (IEEE 802.3), as used by GPT headers.

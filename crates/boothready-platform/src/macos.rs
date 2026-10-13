@@ -437,7 +437,9 @@ mod imp {
             let apfs = parse_apfs_containers(&output(&LIST_VIRTUAL)?).unwrap_or_default();
             let listing = (list, apfs);
             // diskutil info is slow; only re-query when a listing changed.
-            let mut cache = CACHE.lock().unwrap();
+            // The cache only memoises a listing; a thread that panicked while
+            // holding it leaves a value that is still safe to reuse.
+            let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some((prev, devs)) = cache.as_ref() {
                 if *prev == listing {
                     return Ok(devs.clone());

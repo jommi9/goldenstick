@@ -1,8 +1,34 @@
 name: Installers
 
-# Unsigned alpha installers for macOS (universal) and Windows (x64).
+# Alpha installers for macOS (universal) and Windows (x64).
 # Runs by hand, on version tags, and on pull requests that touch the
 # packaging, so a broken bundle shows up before anyone needs a build.
+#
+# Signing is ready but off until the repository secrets exist. Without them
+# the builds are unsigned, exactly as before; add the secrets under
+# Settings > Secrets and variables > Actions and the next run signs.
+#
+# macOS, signing and notarisation (read by `tauri build` from the env):
+#   APPLE_CERTIFICATE           Developer ID Application .p12, base64-encoded
+#   APPLE_CERTIFICATE_PASSWORD  password of that .p12
+#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID                    Apple ID that notarises
+#   APPLE_PASSWORD              an app-specific password for that Apple ID
+#   APPLE_TEAM_ID               the team's ID
+#
+# Windows, one of:
+#   - A certificate in the runner's store: add WINDOWS_CERTIFICATE (.pfx,
+#     base64-encoded) and WINDOWS_CERTIFICATE_PASSWORD, and set
+#     bundle.windows.certificateThumbprint, digestAlgorithm ("sha256") and
+#     timestampUrl in app/src-tauri/tauri.release.conf.json. The import
+#     step below puts the certificate where signtool finds it.
+#   - Azure Trusted Signing: add AZURE_TENANT_ID, AZURE_CLIENT_ID and
+#     AZURE_CLIENT_SECRET and set bundle.windows.signCommand in
+#     tauri.release.conf.json to a trusted-signing-cli invocation.
+#
+# Tauri reads the APPLE_* variables with var_os, so a variable that exists
+# but is empty would make it try to sign with nothing. The build step
+# therefore unsets every empty one before calling `tauri build`.
 on:
   workflow_dispatch:
   push:
@@ -59,11 +85,67 @@ jobs:
       - name: Privileged helper sidecar
         shell: bash
         run: scripts/build-helper-sidecar.sh ${{ matrix.target }}
+      - name: Import the Windows code-signing certificate
+        # The secrets context cannot be read in a step's `if`, so the secret comes in through env.
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP signing.pfx
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          "Imported certificate with thumbprint $($cert.Thumbprint)"
       - name: Build installer
         working-directory: app
+        shell: bash
+        env:
+          # Absent secrets arrive as empty strings; the script below unsets
+          # those so Tauri builds unsigned instead of failing.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: |
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+            if [ -z "${!v}" ]; then unset "$v"; fi
+          done
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}${APPLE_CERTIFICATE:-}" ]; then echo "macOS signing: on"; else echo "macOS signing: off (no APPLE_* secrets)"; fi
           npm ci
           npx tauri build --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
+      - name: Report whether the build is signed (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=$(ls -d target/${{ matrix.target }}/release/bundle/macos/*.app)
+          dmg=$(ls target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -n 1)
+          if codesign -dv --verbose=2 "$app" 2>&1; then
+            echo "::notice title=macOS signing::$(basename "$app") is signed"
+            spctl -a -vv -t exec "$app" 2>&1 || echo "Gatekeeper does not accept it yet (not notarised?)"
+            xcrun stapler validate "$dmg" 2>&1 || echo "No notarisation ticket stapled to $(basename "$dmg")"
+          else
+            echo "::notice title=macOS signing::$(basename "$app") is unsigned (add the APPLE_* secrets to sign and notarise)"
+          fi
+      - name: Report whether the build is signed (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem target/${{ matrix.target }}/release/bundle/msi/*.msi, target/${{ matrix.target }}/release/bundle/nsis/*.exe, target/${{ matrix.target }}/release/*.exe
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            $who = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "no signature" }
+            "$($f.Name): $($sig.Status) ($who)"
+          }
+          $unsigned = @($files | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }).Count
+          if ($unsigned -eq 0) { "::notice title=Windows signing::All $($files.Count) files carry a valid signature" }
+          else { "::notice title=Windows signing::$unsigned of $($files.Count) files are unsigned (configure bundle.windows in tauri.release.conf.json and add the secrets to sign)" }
       - name: Check the helper shipped next to the app (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -107,4 +189,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" --draft --prerelease \
             --title "BoothReady ${GITHUB_REF_NAME} (alpha)" \
-            --notes "Unsigned alpha build. See the README for how to open it on macOS and Windows."
+            --notes "Alpha build. If it is unsigned, see the README for how to open it on macOS and Windows."

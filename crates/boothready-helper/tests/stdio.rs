@@ -1,5 +1,7 @@
 //! Drive the real helper binary over its stdio protocol.
 
+#![allow(clippy::unwrap_used)]
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
