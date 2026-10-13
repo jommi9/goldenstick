@@ -125,12 +125,14 @@ pub fn inventory(source: &Path, kind: SourceKind) -> io::Result<Collection> {
 }
 
 /// A relative path with named components only, so a selection can't point
-/// outside the source folder.
-fn selected_path(path: &Path) -> io::Result<&Path> {
+/// outside the source folder. The path is rebuilt from its components, which
+/// gives it this system's separators: the revision hashes the path as text,
+/// and a walk of the staged files reports native separators.
+fn selected_path(path: &Path) -> io::Result<PathBuf> {
     if path.as_os_str().is_empty() || !path.components().all(|c| matches!(c, Component::Normal(_))) {
         return Err(invalid("a selected file must be a relative path inside the source"));
     }
-    Ok(path)
+    Ok(path.components().collect())
 }
 
 /// Read and hash the source: the whole folder, or only the files in `only`,
@@ -147,7 +149,7 @@ fn inventory_of(
         return Err(invalid("source must be a directory"));
     }
     let mut paths: Vec<PathBuf> = match only {
-        Some(selection) => selection.iter().map(|p| selected_path(p).map(Path::to_owned)).collect::<io::Result<_>>()?,
+        Some(selection) => selection.iter().map(|p| selected_path(p)).collect::<io::Result<_>>()?,
         None => {
             let mut found = Vec::new();
             for entry in walkdir::WalkDir::new(&source).follow_links(false) {
