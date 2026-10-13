@@ -25,6 +25,9 @@ import type {
   Role,
   VerifyProgress,
   VerifyReport,
+  RealTestResult,
+  TestScenario,
+  VirtualTestSuite,
 } from "./types";
 
 export interface Api {
@@ -59,6 +62,10 @@ export interface Api {
   demoSimulateExport(deviceId: string, legacySafe: boolean): Promise<void>;
   /** Writes a diagnostics report to the Downloads folder; returns its path. */
   saveDiagnostics(): Promise<string>;
+  testLabScenarios(): Promise<TestScenario[]>;
+  runVirtualTests(scenario?: string, keepFixtures?: boolean): Promise<VirtualTestSuite>;
+  saveTestLabDiagnostics(label?: string): Promise<string>;
+  runRealUsbTest(deviceId: string, targets: string[]): Promise<RealTestResult>;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
   onScanProgress(cb: (p: { device_id: string; files: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
@@ -111,6 +118,10 @@ async function tauriApi(): Promise<Api> {
     demoReset: () => invoke("demo_reset"),
     demoSimulateExport: (deviceId, legacySafe) => invoke("demo_simulate_export", { deviceId, legacySafe }),
     saveDiagnostics: () => invoke("save_diagnostics"),
+    testLabScenarios: () => invoke("test_lab_scenarios"),
+    runVirtualTests: (scenario, keepFixtures) => invoke("test_lab_virtual", { scenario: scenario ?? null, keepFixtures: keepFixtures ?? false }),
+    saveTestLabDiagnostics: (label) => invoke("test_lab_save_diagnostics", { label: label ?? null }),
+    runRealUsbTest: (deviceId, targets) => invoke("test_lab_real", { deviceId, targets }),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),

@@ -7,6 +7,8 @@
 //!   boothready-helper --request <file> --response <file>
 //!   boothready-helper --stdio          (one request per line, for development)
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use boothready_core::privileged::{HelperErrorCode, HelperEvent, HelperRequest};
 use boothready_helper::{handle, NativeBackend};
 use std::io::{BufRead, Write};

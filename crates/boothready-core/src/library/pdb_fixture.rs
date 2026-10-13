@@ -113,18 +113,20 @@ fn entry_row(index: u32, track: u32, playlist: u32) -> Vec<u8> {
 
 /// Pack rows into as many data pages as needed.
 fn pack_pages(rows: &[Vec<u8>]) -> Vec<Vec<Vec<u8>>> {
-    let mut pages: Vec<Vec<Vec<u8>>> = vec![vec![]];
+    let mut pages: Vec<Vec<Vec<u8>>> = Vec::new();
+    let mut current: Vec<Vec<u8>> = Vec::new();
     let mut used = 0usize;
     for row in rows {
         let len = row.len().div_ceil(4) * 4;
-        let n = pages.last().unwrap().len() + 1;
+        let n = current.len() + 1;
         if HEAP + used + len + n.div_ceil(16) * GROUP > PAGE {
-            pages.push(vec![]);
+            pages.push(std::mem::take(&mut current));
             used = 0;
         }
-        pages.last_mut().unwrap().push(row.clone());
+        current.push(row.clone());
         used += len;
     }
+    pages.push(current);
     pages
 }
 

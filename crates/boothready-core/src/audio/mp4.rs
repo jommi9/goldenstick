@@ -1,4 +1,4 @@
-use super::{be16, be32, be64, AudioInfo, Codec, Container, ProbeError, Source};
+use super::{arr, be16, be32, be64, AudioInfo, Codec, Container, ProbeError, Source};
 use std::io::{Read, Seek};
 
 const MAX_DEPTH: u32 = 10;
@@ -99,7 +99,7 @@ fn walk<R: Read + Seek>(
         }
         let h = src.read_exact_at(pos, 8)?;
         let mut size = be32(&h, 0) as u64;
-        let kind: [u8; 4] = h[4..8].try_into().unwrap();
+        let kind: [u8; 4] = arr(&h, 4);
         let mut header = 8u64;
         if size == 1 {
             let ext = src.read_exact_at(pos + 8, 8)?;
@@ -174,7 +174,7 @@ fn parse_stsd(b: &[u8], f: &mut Found) {
     }
     let e = &b[8..];
     let entry_size = (be32(e, 0) as usize).min(e.len());
-    let fmt: [u8; 4] = e[4..8].try_into().unwrap();
+    let fmt: [u8; 4] = arr(e, 4);
     f.format = Some(fmt);
     // SampleEntry: reserved(6) + data_reference_index(2); AudioSampleEntry
     // then has version(2) revision(2) vendor(4) channels(2) samplesize(2)
@@ -190,7 +190,7 @@ fn parse_stsd(b: &[u8], f: &mut Found) {
     };
     if version == 2 && e.len() >= 36 + 36 {
         // QuickTime v2 sound description stores rate as a float64.
-        let rate = f64::from_bits(u64::from_be_bytes(e[40..48].try_into().unwrap()));
+        let rate = f64::from_bits(be64(e, 40));
         if rate.is_finite() && rate > 0.0 && rate < 1e7 {
             f.sample_rate = Some(rate.round() as u32);
         }

@@ -4,7 +4,11 @@ description = "Command-line front end for BoothReady: inspect, check, plan and v
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "boothready"
@@ -14,6 +18,7 @@ path = "src/main.rs"
 boothready-model.workspace = true
 boothready-core = { workspace = true, features = ["sqlite", "fixtures"] }
 boothready-platform.workspace = true
+boothready-testlab.workspace = true
 boothready-helper = { path = "../boothready-helper" }
 serde.workspace = true
 serde_json.workspace = true

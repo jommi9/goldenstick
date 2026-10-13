@@ -46,7 +46,9 @@ pub(crate) fn parse(buf: &[u8]) -> Option<DriveLayout> {
             _ => false,
         };
         if efi {
-            efi_starts.push(u64::from_le_bytes(e[ENTRY_START..ENTRY_START + 8].try_into().unwrap()));
+            let mut start = [0u8; 8];
+            start.copy_from_slice(&e[ENTRY_START..ENTRY_START + 8]);
+            efi_starts.push(u64::from_le_bytes(start));
         }
     }
     Some(DriveLayout { scheme, efi_starts })
