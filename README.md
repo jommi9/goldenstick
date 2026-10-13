@@ -60,6 +60,10 @@ The release config ships `boothready-helper` next to the app's executable. A dev
 | `app/` | The Tauri 2 desktop app with a TypeScript UI. |
 | `docs/ARCHITECTURE.md` | How the pieces fit, the safety model and what still needs verifying. |
 
+## Local library staging
+
+`boothready library stage` reads a selected local or Google Drive desktop folder into a verified local collection. Rerunning resumes the same snapshot, while `boothready library verify` checks it with the source offline. [Library sources](docs/LIBRARY-SOURCES.md) documents the storage guard and privacy boundary. Live Drive hydration and DJ export are still unverified.
+
 ## Tests
 
 ```sh
