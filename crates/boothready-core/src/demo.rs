@@ -356,6 +356,41 @@ pub fn create_stick(root: &Path, s: &DemoStick) -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Simulated music folders for the Library screen: one on the computer and
+/// one that looks like a Google Drive for desktop folder, where some tracks
+/// are still online. Returns the two folders.
+pub fn create_music_sources(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let local = root.join("Music").join("DJ Library");
+    if !local.exists() {
+        for t in tracks(true) {
+            write(&local, t.path.trim_start_matches("Contents/"), &t.bytes)?;
+        }
+        write(&local, "Downloads/Unknown Track (1).mp3", b"<html>Access denied</html>")?;
+        write(&local, "Kolsch/Speicher/._Grey.mp3", &[0u8; 4096])?;
+    }
+    let cloud = root.join("Google Drive").join("My Drive").join("Promos 2026");
+    if !cloud.exists() {
+        let promos: [(&str, Vec<u8>, bool); 6] = [
+            ("Label Promos/Rave Signal (Original Mix).wav", audio::wav(44_100, 16, 2, 22_050, false), true),
+            ("Label Promos/Night Shift (Extended).aiff", audio::aiff(44_100, 16, 2, 22_050, false), true),
+            ("Label Promos/Night Shift (Dub).aiff", audio::aiff(44_100, 16, 2, 22_050, false), true),
+            ("Label Promos/Low Tide.flac", audio::flac(48_000, 24, 2, 48_000 * 380), true),
+            ("Edits/Opening Tool.mp3", audio::mp3_cbr(130), false),
+            ("Edits/Closing Tool.m4a", audio::m4a("aac-lc", 44_100, 300), false),
+        ];
+        let mut online = String::new();
+        for (path, bytes, cloud_only) in &promos {
+            write(&cloud, path, bytes)?;
+            if *cloud_only {
+                online.push_str(path);
+                online.push('\n');
+            }
+        }
+        write(&cloud, crate::sources::DEMO_CLOUD_LIST, online.as_bytes())?;
+    }
+    Ok(vec![local, cloud])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

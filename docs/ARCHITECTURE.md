@@ -10,6 +10,7 @@
  │ media      partition map + filesystem from raw sectors       │
  │ audio      header probes (WAV, AIFF, FLAC, MP3, MP4, Ogg)    │
  │ library    rekordbox PDB reader, OneLibrary, Engine, Serato  │
+ │ sources    music folders, cloud placeholders, track verdicts │
  │ rules      device profiles, evidence, assessment, "why"      │
  │ planner    Main / Legacy Rescue / Backup, capacity fitting   │
  │ format     MBR + FAT32 builder (mkfs.fat geometry)           │
@@ -34,6 +35,18 @@ The core has no OS dependencies. Everything that touches a real device goes thro
 4. `library::scan_libraries` finds rekordbox, Engine DJ and Serato data, resolving paths case-insensitively the way FAT and exFAT players do. It never writes to the drive, and Engine databases are opened with SQLite's `immutable=1`.
 5. `scan::scan_audio` probes every audio file and streams progress. The parsers bound every length against the real file size and are mutation-fuzzed.
 6. `rules::assess_drive` turns all of that into one result per device and layer.
+
+## Music sources
+
+`sources::scan_source` walks a folder the user added and returns one record per audio file: its path, size, whether its contents are on this computer, and a header probe. It follows no symlinks and writes nothing.
+
+Cloud clients show files they have not downloaded. Opening one makes the client fetch it, so the scan decides from metadata alone. On macOS a placeholder carries the `SF_DATALESS` flag. On Windows it carries one of the recall or offline attributes. A placeholder is listed with no probe, and `sources::judge` reports it as cloud-only instead of guessing its format from the file name.
+
+`judge` runs `rules::evaluate_audio` for each selected player and gives a track one state: ready, cloud-only, blocked by at least one player, unchecked because a player has no data for the format, or unreadable. The Library screen shows those states per source and per track, with the player and the reason for every blocked track.
+
+The app keeps the source list and the last scan of each source as JSON under `library/` in its data folder. A source on an unplugged drive is shown from that saved scan. Demo mode builds its own library in memory and never reads or changes the saved one.
+
+`sources::cloud_provider` recognises a cloud folder from the folder names the desktop clients create, and `sources::device_for_path` finds the storage device from the mounted volumes. On macOS the second lookup compares filesystem IDs, because a home folder reaches the data volume through a firmlink and shares no path prefix with its mount point.
 
 ## Compatibility rules
 
@@ -103,6 +116,7 @@ The test lab adds a shared Rust virtual matrix, browser state scenarios and a de
 ## What still needs verifying
 
 - **Rules.** The ruleset cites a document for every vendor and community claim, but the documents were read through web search excerpts because this project's build environment couldn't open AlphaTheta's, Denon's or Reddit's sites directly. The links should be opened and the claims re-read against the full pages, starting with the per-model audio details. Reddit hasn't been searched at all. [`RULES-REVIEW.md`](RULES-REVIEW.md) describes that pass, with a script that fetches every cited page and the relevant Reddit threads on a machine with open internet. The CDJ-900NXS, CDJ-2000NXS and XDJ-700 audio lists, the XDJ-XZ's ALAC support and the new CDJ-1500X and XDJ-AN audio specs are still inferred, and so is GPT behaviour on most players. No claim is lab verified.
+- **Cloud placeholders.** A scan of a real Google Drive for desktop folder on macOS listed its online-only audio files and left every one of them online. Dropbox, OneDrive and iCloud Drive folders, and every Windows cloud client, are untested. The Windows attribute check has only been compiled.
 - **Hardware.** The macOS and Windows backends parse sample `diskutil`, `ioreg` and IOCTL output in tests, and CI runs them against each runner's own disks, but they haven't enumerated, erased or ejected a real USB stick. [`FIELD-TEST.md`](FIELD-TEST.md) is the checklist for doing that. A diagnostics report (`boothready_platform::diagnostics`) records the raw `diskutil`/`ioreg` output on a Mac, and the IOCTL buffers, volume extents, USB instance IDs and PowerShell's disk view on Windows. A Mac report replays through the same code as the live backend on any OS, so a misread stick becomes a test fixture.
 - **APFS sticks on macOS.** The volumes of an APFS partition live on a synthesized container disk, which the backend maps back to the partition from `diskutil list -plist virtual`. That's tested against sample output and against the CI runner's startup disk, but not yet against an APFS-formatted USB stick.
 - **FAT32 output on players.** The layout matches mkfs.fat's and passes `fsck.fat`, but it has to be tried on CDJs from each generation.

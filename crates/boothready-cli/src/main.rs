@@ -207,7 +207,7 @@ fn main() -> Result<()> {
     let rules = Ruleset::builtin();
     let catalog = UsbCatalog::builtin();
     match &cli.cmd {
-        Cmd::Library(command) => staging::run(command, cli.json)?,
+        Cmd::Library(command) => staging::run(command, cli.json, &rules)?,
         Cmd::Diagnose { out } => {
             let b = backend(&cli);
             let report = boothready_platform::diagnostics::collect(b.platform(), env!("CARGO_PKG_VERSION"));

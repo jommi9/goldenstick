@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+use boothready_core::rules::Ruleset;
+use boothready_core::sources::{cloud_provider, count_states, device_for_path, os_placeholder, scan_source};
 use boothready_core::staging::{checked_path, inventory, stage, verify_collection, Collection, SourceKind};
 use boothready_model::{BusType, PhysicalDevice};
 use clap::{Subcommand, ValueEnum};
@@ -14,6 +16,13 @@ pub enum Kind {
 }
 #[derive(Subcommand)]
 pub enum LibraryCmd {
+    /// List the music in a folder and check it against the selected players.
+    /// Cloud-only files are counted from their metadata and never downloaded.
+    Scan {
+        source: PathBuf,
+        #[command(flatten)]
+        targets: crate::Targets,
+    },
     /// Rehash a staged collection while its source is offline.
     Verify { collection: PathBuf },
     /// Read a source folder into a verified local collection. Rerun to resume.
@@ -83,8 +92,36 @@ fn guard_capacity(collection: &Collection, space: boothready_platform::Space) ->
     Ok(())
 }
 
-pub fn run(command: &LibraryCmd, json: bool) -> Result<()> {
+pub fn run(command: &LibraryCmd, json: bool, rules: &Ruleset) -> Result<()> {
     match command {
+        LibraryCmd::Scan { source, targets } => {
+            let players = crate::resolve_targets(rules, targets)?;
+            let source = source.canonicalize().with_context(|| format!("can't open {}", source.display()))?;
+            let scan = scan_source(&source, &os_placeholder, &AtomicBool::new(false), |_| {})?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&scan)?);
+                return Ok(());
+            }
+            let devices = boothready_platform::native().list_devices().unwrap_or_default();
+            let location = match (cloud_provider(&source), device_for_path(&source, &devices)) {
+                (Some(provider), _) => format!("{provider} folder"),
+                (None, Some(device)) if device.is_system => "this computer".to_string(),
+                (None, Some(_)) => "an external drive".to_string(),
+                (None, None) => "unknown storage".to_string(),
+            };
+            let totals = scan.totals();
+            let counts = count_states(&scan, &players);
+            println!("{} tracks, {} bytes, on {location}", totals.tracks, totals.bytes);
+            println!("Checked against {} players:", players.len());
+            println!("  ready to export: {}", counts.ready);
+            println!("  still in the cloud, format unknown until downloaded: {}", counts.cloud_only);
+            println!("  won't play on at least one player: {}", counts.blocked);
+            println!("  no compatibility data on at least one player: {}", counts.unchecked);
+            println!("  damaged or not audio: {}", counts.unreadable);
+            if scan.skipped > 0 {
+                println!("  folders or files that could not be read: {}", scan.skipped);
+            }
+        }
         LibraryCmd::Verify { collection } => {
             let collection = verify_collection(collection)?;
             if json {

@@ -8,6 +8,7 @@
 
 mod dto;
 mod elevate;
+mod library;
 
 use boothready_core::copy::{plan_copy, run_copy, CopyPlan, CopyProblem, CopyReport, CopyTarget};
 use boothready_core::demo::DemoContent;
@@ -24,6 +25,7 @@ use boothready_helper::{Backend, DemoBackend, NativeBackend};
 use boothready_model::{DeviceEvent, FilesystemKind, PartitionScheme, PhysicalDevice};
 use boothready_platform::{Platform, PlatformError, Watcher};
 use dto::*;
+use library::{LibraryPage, LibrarySource, LibraryState};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -53,6 +55,10 @@ pub struct AppState {
     catalog: UsbCatalog,
     cancel_verify: Arc<AtomicBool>,
     cancel_copy: Arc<AtomicBool>,
+    /// Loaded on first use and dropped when the mode changes, so demo mode
+    /// never shows or alters the user's real library.
+    library: Mutex<Option<LibraryState>>,
+    cancel_library: Arc<AtomicBool>,
 }
 
 type Res<T> = Result<T, String>;
@@ -104,6 +110,20 @@ impl AppState {
         confirmed.unwrap_or_else(|| boothready_core::identify::identify(dev, &self.catalog)).display_name
     }
 
+    /// Run `f` on the library for the current mode, loading it if needed.
+    fn with_library<T>(&self, app: &AppHandle, f: impl FnOnce(&mut LibraryState) -> T) -> Res<T> {
+        let demo_root = self.demo_root();
+        let mut guard = self.library.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let library = match &mut *guard {
+            Some(library) => library,
+            empty => empty.insert(match demo_root {
+                Some(root) => LibraryState::demo(&root)?,
+                None => LibraryState::load(app.path().app_data_dir().map_err(e2s)?.join("library")),
+            }),
+        };
+        Ok(f(library))
+    }
+
     fn report(&self, id: &str) -> Res<DriveReport> {
         self.lock().reports.get(id).cloned().ok_or_else(|| "Scan the drive first.".to_string())
     }
@@ -132,6 +152,8 @@ fn set_mode(app: &AppHandle, state: &AppState, mode: Mode) -> Res<()> {
             Arc::new(boothready_platform::demo::DemoPlatform::new(root.join("usb")))
         }
     };
+    state.cancel_library.store(true, Ordering::Relaxed);
+    *state.library.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     let mut inner = state.lock();
     if let Some(w) = inner.watcher.take() {
         w.stop();
@@ -861,8 +883,146 @@ fn demo_simulate_export(state: State<'_, AppState>, device_id: String, legacy_sa
     boothready_core::demo::populate(&volume, content).map_err(e2s)
 }
 
+// ---------------------------------------------------------------- music library
+
+#[derive(Clone, Serialize)]
+struct LibraryScanEvent {
+    source_id: String,
+    files: u32,
+    bytes: u64,
+    cloud_only: u32,
+}
+
+#[tauri::command]
+fn library_sources(app: AppHandle, state: State<'_, AppState>, targets: Vec<String>) -> Res<Vec<LibrarySource>> {
+    let players = state.rules.devices_by_id(&targets);
+    state.with_library(&app, |library| library.list(&players))
+}
+
+/// Ask the user for a folder with the system's own dialog.
+#[tauri::command]
+async fn library_pick_folder(app: AppHandle) -> Res<Option<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().set_title("Choose a music folder").blocking_pick_folder()
+    })
+    .await
+    .map_err(e2s)?;
+    Ok(picked.and_then(|folder| folder.into_path().ok()).map(|path| path.display().to_string()))
+}
+
+/// Where a folder is stored. Demo folders sit in a temporary directory, so
+/// only their cloud-style path is meaningful there.
+fn locate_source(path: &Path, platform: &dyn Platform, demo: bool) -> library::Location {
+    if demo {
+        library::locate(path, &[]).or_computer()
+    } else {
+        library::locate(path, &platform.list_devices().unwrap_or_default())
+    }
+}
+
+#[tauri::command]
+async fn library_add(app: AppHandle, state: State<'_, AppState>, path: String) -> Res<String> {
+    let folder = library::resolve_folder(Path::new(path.trim()))?;
+    let demo = state.demo_root().is_some();
+    let platform = state.platform();
+    let probe = folder.clone();
+    let location = tauri::async_runtime::spawn_blocking(move || locate_source(&probe, platform.as_ref(), demo))
+        .await
+        .map_err(e2s)?;
+    state.with_library(&app, |library| library.add(folder, location, now_unix()))?
+}
+
+/// Forget a source. The folder and its files are left alone.
+#[tauri::command]
+fn library_remove(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<()> {
+    state.with_library(&app, |library| library.remove(&id))
+}
+
+/// Scan one source. Cloud-only files are listed from their metadata and
+/// never opened, so a scan downloads nothing.
+#[tauri::command]
+async fn library_scan(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<()> {
+    let demo = state.demo_root().is_some();
+    let record = state.with_library(&app, |library| {
+        if library.is_scanning() {
+            return Err("Another scan is still running.".to_string());
+        }
+        let record = library.record(&id)?;
+        library.set_scanning(&id, true);
+        Ok(record)
+    })??;
+    let cancel = state.cancel_library.clone();
+    cancel.store(false, Ordering::Relaxed);
+    let platform = state.platform();
+    let emitter = app.clone();
+    let source_id = id.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let location = locate_source(&record.path, platform.as_ref(), demo);
+        let mut last = std::time::Instant::now();
+        let progress = |p: &boothready_core::sources::SourceProgress| {
+            if p.files == 1 || last.elapsed() >= Duration::from_millis(120) {
+                last = std::time::Instant::now();
+                let event = LibraryScanEvent {
+                    source_id: source_id.clone(),
+                    files: p.files,
+                    bytes: p.bytes,
+                    cloud_only: p.cloud_only,
+                };
+                let _ = emitter.emit("library-scan-progress", event);
+            }
+        };
+        let scan = if demo {
+            let placeholder = boothready_core::sources::listed_placeholder(&record.path);
+            boothready_core::sources::scan_source(&record.path, &placeholder, &cancel, progress)
+        } else {
+            let placeholder = boothready_core::sources::os_placeholder;
+            boothready_core::sources::scan_source(&record.path, &placeholder, &cancel, progress)
+        };
+        scan.map(|mut scan| {
+            if demo {
+                library::demo_sizes(&mut scan);
+            }
+            (scan, location)
+        })
+    })
+    .await;
+    state.with_library(&app, |library| library.set_scanning(&id, false))?;
+    let (scan, location) = outcome.map_err(e2s)?.map_err(|e| format!("The folder couldn't be read: {e}"))?;
+    if scan.cancelled {
+        return Err("Scan stopped. The earlier results were kept.".to_string());
+    }
+    state.with_library(&app, |library| library.store_scan(&id, scan, location, now_unix()))
+}
+
+#[tauri::command]
+fn library_cancel_scan(state: State<'_, AppState>) {
+    state.cancel_library.store(true, Ordering::Relaxed);
+}
+
+/// One page of a source's tracks. `filter` is a track state or "all".
+#[derive(serde::Deserialize)]
+struct TrackRequest {
+    id: String,
+    targets: Vec<String>,
+    filter: String,
+    query: String,
+    offset: u32,
+    limit: u32,
+}
+
+#[tauri::command]
+fn library_tracks(app: AppHandle, state: State<'_, AppState>, request: TrackRequest) -> Res<LibraryPage> {
+    let players = state.rules.devices_by_id(&request.targets);
+    let limit = request.limit.clamp(1, 500) as usize;
+    state.with_library(&app, |library| {
+        library.tracks(&request.id, &players, &request.filter, &request.query, request.offset as usize, limit)
+    })?
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data)?;
@@ -886,6 +1046,8 @@ pub fn run() {
                 catalog: UsbCatalog::builtin(),
                 cancel_verify: Arc::new(AtomicBool::new(false)),
                 cancel_copy: Arc::new(AtomicBool::new(false)),
+                library: Mutex::new(None),
+                cancel_library: Arc::new(AtomicBool::new(false)),
             };
             app.manage(state);
             let handle = app.handle().clone();
@@ -928,6 +1090,13 @@ pub fn run() {
             test_lab_virtual,
             test_lab_save_diagnostics,
             test_lab_real,
+            library_sources,
+            library_pick_folder,
+            library_add,
+            library_remove,
+            library_scan,
+            library_cancel_scan,
+            library_tracks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BoothReady");
@@ -1023,7 +1192,25 @@ pub fn mock_snapshot(root: &Path) -> Res<serde_json::Value> {
         },
         &rules,
     );
+    // The simulated library, once per preset, with the temporary folder
+    // replaced by a home folder so the snapshot is the same on every run.
+    let mut library = LibraryState::demo(root)?;
+    let shown_root = root.display().to_string();
+    let mut library_by_preset = serde_json::Map::new();
+    for p in &rules.presets {
+        let players = rules.devices_by_id(&p.devices);
+        let mut sources = library.list(&players);
+        let mut tracks = serde_json::Map::new();
+        for source in &mut sources {
+            source.path =
+                source.path.replace(&format!("{shown_root}/Volumes"), "/Volumes").replace(&shown_root, "/Users/dj");
+            let page = library.tracks(&source.id, &players, "all", "", 0, 500)?;
+            tracks.insert(source.id.clone(), serde_json::to_value(page.tracks).map_err(e2s)?);
+        }
+        library_by_preset.insert(p.id.clone(), json!({ "sources": sources, "tracks": tracks }));
+    }
     Ok(json!({
+        "library": library_by_preset,
         "rules": { "version": rules.version, "review_status": rules.review_status, "review_note": rules.review_note },
         "presets": rules.presets,
         "hardware": rules.devices.iter().map(HardwareCard::from).collect::<Vec<_>>(),
