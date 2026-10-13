@@ -22,6 +22,7 @@ pub mod planner;
 pub mod privileged;
 pub mod rules;
 pub mod scan;
+pub mod staging;
 pub mod state;
 #[cfg(feature = "sqlite")]
 pub mod store;

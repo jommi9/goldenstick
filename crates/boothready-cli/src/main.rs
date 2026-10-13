@@ -4,6 +4,7 @@
 
 mod demo;
 mod render;
+mod staging;
 mod testlab;
 
 use anyhow::{bail, Context, Result};
@@ -49,6 +50,9 @@ struct Targets {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Stage local or Google Drive desktop files on this computer.
+    #[command(subcommand)]
+    Library(staging::LibraryCmd),
     /// List storage devices and whether BoothReady may prepare them.
     Devices,
     /// Identify, scan and assess a connected drive.
@@ -203,6 +207,7 @@ fn main() -> Result<()> {
     let rules = Ruleset::builtin();
     let catalog = UsbCatalog::builtin();
     match &cli.cmd {
+        Cmd::Library(command) => staging::run(command, cli.json)?,
         Cmd::Diagnose { out } => {
             let b = backend(&cli);
             let report = boothready_platform::diagnostics::collect(b.platform(), env!("CARGO_PKG_VERSION"));
