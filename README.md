@@ -64,6 +64,16 @@ The release config ships `boothready-helper` next to the app's executable. A dev
 | `app/` | The Tauri 2 desktop app with a TypeScript UI. |
 | `docs/ARCHITECTURE.md` | How the pieces fit, the safety model and what still needs verifying. |
 
+## Music library
+
+The app's **Library** screen holds the folders your music lives in. A folder can be on the computer, on an external drive or inside a synced cloud folder such as Google Drive for desktop. BoothReady scans each folder where it is and shows which tracks are ready for the players you selected, which ones a player is documented not to play, and which are damaged.
+
+![Music library](docs/screenshots/20-library.png)
+
+A file that the cloud client shows without having downloaded it is listed from its name and size and is never opened, so a scan downloads nothing. Its format stays unchecked until you make it available offline. The last scan of every source is kept in the app's data folder, which lets you browse an external drive that is unplugged.
+
+`boothready library scan <folder>` prints the same counts from the command line. [Library sources](docs/LIBRARY-SOURCES.md) describes what a scan reads.
+
 ## Local library staging
 
 `boothready library stage` reads a selected local or Google Drive desktop folder into a verified local collection. Rerunning resumes the same snapshot, while `boothready library verify` checks it with the source offline. [Library sources](docs/LIBRARY-SOURCES.md) documents the storage guard and privacy boundary. Live Drive hydration and DJ export are still unverified.

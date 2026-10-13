@@ -116,6 +116,19 @@ async function run(scheme) {
   await click("Continue");
   await page.getByText("You're booth-ready").waitFor();
   await shot("19-kit-complete", true);
+
+  // The music library: a folder on the computer, a cloud folder with tracks
+  // still online and an archive drive that isn't plugged in.
+  await click("Library");
+  await page.getByRole("heading", { name: "Your music" }).waitFor();
+  await shot("20-library", true);
+  await page.locator('[data-act="library-open"][data-id="demo-computer"]').click();
+  await page.getByRole("table").waitFor();
+  await shot("21-library-source", true);
+  await page.locator('[data-act="open-library"]').last().click();
+  await page.locator('[data-act="library-open"][data-id="demo-cloud"]').click();
+  await page.getByRole("table").waitFor();
+  await shot("22-library-cloud-source", true);
   await page.close();
 }
 

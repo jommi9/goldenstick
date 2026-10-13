@@ -193,7 +193,75 @@ async function walk() {
   await page.getByText(`Next: ${ROLE_LABEL[next.role]}`).waitFor();
   await at("next-usb");
   includes(await text("main#main"), `Preparing ${plan.roles.length} USBs`, "the next-USB screen counts the plan's roles");
+  await checkLibrary(page, text, at);
   await page.close();
+}
+
+// The music library: every source and every track shows what the engine's
+// scan and its per-player verdicts say, for the preset selected above.
+async function checkLibrary(page, text, at) {
+  const lib = data.library[PRESET];
+  const STATE_LABEL = { ready: "Ready", cloud_only: "In the cloud", blocked: "Won't play everywhere", unchecked: "No data", unreadable: "Unreadable" };
+  const count = (n, one) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
+
+  screen = "mock-data";
+  const byId = Object.fromEntries(lib.sources.map((s) => [s.id, s]));
+  check(byId["demo-computer"]?.location.kind === "computer", "the demo library has a folder on the computer");
+  check(byId["demo-cloud"]?.location.kind === "cloud" && byId["demo-cloud"].states.cloud_only > 0, "the demo cloud folder has tracks that are still online");
+  check(byId["demo-archive"]?.connected === false && byId["demo-archive"].states, "the unplugged archive drive keeps its last scan");
+  check(byId["demo-computer"]?.states.blocked > 0 && byId["demo-computer"].states.unreadable > 0, "the demo computer folder has blocked and unreadable tracks");
+  for (const t of lib.tracks["demo-cloud"].filter((t) => t.state === "cloud_only")) {
+    check(t.detail === "" && t.issues.length === 0, `the engine made no format claim about the online file ${t.name}`);
+  }
+
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.getByRole("heading", { name: "Your music" }).waitFor();
+  await at("library");
+  const cards = page.locator(".source");
+  same(await cards.count(), lib.sources.length, "a card per music source");
+  for (const s of lib.sources) {
+    const card = page.locator(`.source[data-source="${s.id}"]`);
+    const cardText = (await card.textContent()) ?? "";
+    includes(cardText, s.name, `source ${s.id} shows its folder name`);
+    includes(cardText, s.path, `source ${s.id} shows its path`);
+    includes(cardText, count(s.totals.tracks, "track"), `source ${s.name} shows the scanned track count`);
+    same((await card.locator(".pill.offline").count()) > 0, !s.connected, `source ${s.name} is marked not connected only when it isn't`);
+    for (const [state, n] of Object.entries(s.states)) {
+      if (n > 0) includes(cardText, `${STATE_LABEL[state]} ${n.toLocaleString("en-US")}`, `source ${s.name} counts its ${state} tracks`);
+      else check(!cardText.includes(STATE_LABEL[state]), `source ${s.name} shows no ${state} tracks`);
+    }
+    if (!s.connected) check(await card.locator('[data-act="library-scan"]').isDisabled(), `source ${s.name} can't be scanned while unplugged`);
+  }
+  const cloudTotal = lib.sources.reduce((n, s) => n + s.states.cloud_only, 0);
+  includes(await text("main#main"), `${count(cloudTotal, "track")} are still in the cloud`, "the library says how many tracks are still online");
+
+  for (const id of ["demo-computer", "demo-cloud"]) {
+    const s = byId[id];
+    const tracks = lib.tracks[id];
+    await page.locator('[data-act="open-library"]').first().click();
+    await page.locator(`[data-act="library-open"][data-id="${id}"]`).click();
+    await page.getByRole("table").waitFor();
+    await at(`library-source ${id}`);
+    const rows = page.locator(".tracks tbody tr");
+    same(await rows.count(), tracks.length, `${s.name} lists every scanned track`);
+    for (const [i, t] of tracks.entries()) {
+      const row = (await rows.nth(i).textContent()) ?? "";
+      includes(row, t.name, `row ${i + 1} of ${s.name} is ${t.name}`);
+      includes(row, STATE_LABEL[t.state], `${t.name} shows the engine's state`);
+      for (const issue of t.issues.slice(0, 3)) {
+        includes(row, issue.model, `${t.name} names the player that rejects it`);
+        includes(row, issue.reason, `${t.name} gives the engine's reason for ${issue.model}`);
+      }
+      if (t.note) includes(row, t.note, `${t.name} shows why it is unreadable`);
+      if (t.state === "cloud_only") includes(row, "not checked", `${t.name} is shown as not checked`);
+    }
+    for (const [state, n] of Object.entries(s.states)) {
+      if (!n) continue;
+      await page.locator(`[data-act="library-filter"][data-id="${state}"]`).click();
+      await page.waitForTimeout(120);
+      same(await page.locator(".tracks tbody tr").count(), n, `the ${state} filter on ${s.name} shows its ${n} tracks`);
+    }
+  }
 }
 
 async function checkReport(page, text) {

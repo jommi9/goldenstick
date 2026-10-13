@@ -12,7 +12,11 @@ import type {
   DriveSummary,
   HardwareCard,
   KitPlan,
+  LibrarySource,
+  LibraryTrack,
   Preset,
+  StateCounts,
+  TrackState,
   Role,
   VerifyProgress,
   VerifyReport,
@@ -36,6 +40,8 @@ interface Snapshot {
   demo_sticks: { name: string; title: string; size_gb: number; description: string }[];
   drives: Record<string, { initial: DriveState; prepared: DriveState; exported: DriveState }>;
   plan_unknown_club: KitPlan;
+  /** The simulated music library, judged once per preset. */
+  library: Record<string, { sources: LibrarySource[]; tracks: Record<string, LibraryTrack[]> }>;
 }
 
 type Stage = "initial" | "prepared" | "exported";
@@ -96,6 +102,38 @@ export async function createMockApi(): Promise<Api> {
   };
 
   const deviceEvent = (e: DeviceEvent) => emit("device-event", e);
+
+  // The library mock keeps its own list so adding, scanning and removing
+  // behave like the desktop app. `?library=empty` starts with no sources.
+  const libraryFor = (targets: string[]) => {
+    const key = [...targets].sort().join(",");
+    const preset = data.presets.find((p) => [...p.devices].sort().join(",") === key);
+    return data.library[preset?.id ?? "max_compat"];
+  };
+  const removedSources = new Set<string>(params.get("library") === "empty" ? data.library["unknown_club"].sources.map((s) => s.id) : []);
+  /** Folders added in this session: id, record, and the demo source whose tracks stand in for theirs. */
+  const addedSources: { source: LibrarySource; scanned: boolean }[] = [];
+  let libraryCancelled = false;
+  const countStates = (tracks: LibraryTrack[]): StateCounts => {
+    const counts: StateCounts = { ready: 0, cloud_only: 0, blocked: 0, unchecked: 0, unreadable: 0 };
+    for (const t of tracks) counts[t.state as TrackState] += 1;
+    return counts;
+  };
+  const tracksOf = (id: string, targets: string[]): LibraryTrack[] => {
+    const lib = libraryFor(targets);
+    if (lib.tracks[id]) return lib.tracks[id];
+    return addedSources.find((a) => a.source.id === id && a.scanned) ? lib.tracks["demo-computer"] : [];
+  };
+  const listSources = (targets: string[]): LibrarySource[] => {
+    const lib = libraryFor(targets);
+    const added = addedSources.map(({ source, scanned }) => {
+      if (!scanned) return { ...source };
+      const tracks = tracksOf(source.id, targets);
+      const bytes = tracks.reduce((n, t) => n + t.size, 0);
+      return { ...source, scanned_unix: Math.floor(Date.now() / 1000), totals: { tracks: tracks.length, bytes, cloud_only: 0, cloud_only_bytes: 0, unreadable: tracks.filter((t) => t.state === "unreadable").length }, states: countStates(tracks) };
+    });
+    return [...lib.sources, ...added].filter((s) => !removedSources.has(s.id));
+  };
 
   return {
     appInfo: async () => ({
@@ -300,6 +338,57 @@ export async function createMockApi(): Promise<Api> {
       await sleep(400);
       deviceEvent({ kind: "changed", device: state(id).card.device });
     },
+    librarySources: async (targets) => listSources(targets),
+    libraryPickFolder: async () => "/Volumes/Crate SSD/Sets 2026",
+    libraryAdd: async (path) => {
+      const folder = path.replace(/\/+$/, "");
+      if (listSources([]).some((s) => s.path === folder)) throw new Error("That folder is already in your library.");
+      const volume = /^\/Volumes\/([^/]+)/.exec(folder);
+      const cloud = /Google Drive|GoogleDrive|My Drive/.test(folder) ? "Google Drive" : /Dropbox/.test(folder) ? "Dropbox" : null;
+      const id = `added-${addedSources.length + 1}`;
+      addedSources.push({
+        scanned: false,
+        source: {
+          id,
+          name: folder.split("/").pop() || folder,
+          path: folder,
+          location: cloud ? { kind: "cloud", provider: cloud } : volume ? { kind: "external", name: volume[1] } : { kind: "computer" },
+          connected: true,
+          scanning: false,
+          scanned_unix: null,
+          totals: null,
+          states: null,
+          skipped: 0,
+        },
+      });
+      return id;
+    },
+    libraryRemove: async (id) => {
+      removedSources.add(id);
+    },
+    libraryScan: async (id) => {
+      const source = listSources([]).find((s) => s.id === id);
+      if (!source) throw new Error("That music source was removed.");
+      if (!source.connected) throw new Error("The folder couldn't be read: it isn't connected.");
+      libraryCancelled = false;
+      const total = tracksOf(id, []).length || data.library["unknown_club"].tracks["demo-computer"].length;
+      for (let files = 1; files <= total; files += 3) {
+        if (libraryCancelled) throw new Error("Scan stopped. The earlier results were kept.");
+        emit("library-scan-progress", { source_id: id, files, bytes: files * 9_000_000, cloud_only: 0 });
+        await sleep(120);
+      }
+      const added = addedSources.find((a) => a.source.id === id);
+      if (added) added.scanned = true;
+    },
+    libraryCancelScan: async () => {
+      libraryCancelled = true;
+    },
+    libraryTracks: async (id, targets, filter, query, offset, limit) => {
+      const q = query.trim().toLowerCase();
+      const matching = tracksOf(id, targets).filter((t) => (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
+      return { total: matching.length, tracks: matching.slice(offset, offset + limit) };
+    },
+    onLibraryScanProgress: on("library-scan-progress"),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),

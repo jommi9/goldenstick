@@ -373,3 +373,68 @@ export interface RealTestResult {
   diagnostics_after: string;
   report: string;
 }
+
+// ---- music library
+
+export type TrackState = "ready" | "cloud_only" | "blocked" | "unchecked" | "unreadable";
+
+export type LibraryLocation =
+  | { kind: "computer" }
+  | { kind: "external"; name: string }
+  | { kind: "cloud"; provider: string }
+  | { kind: "unknown" };
+
+export interface SourceTotals {
+  tracks: number;
+  bytes: number;
+  cloud_only: number;
+  cloud_only_bytes: number;
+  unreadable: number;
+}
+
+export type StateCounts = Record<TrackState, number>;
+
+export interface LibrarySource {
+  id: string;
+  name: string;
+  path: string;
+  location: LibraryLocation;
+  /** The folder can be read right now. */
+  connected: boolean;
+  scanning: boolean;
+  scanned_unix: number | null;
+  totals: SourceTotals | null;
+  /** Against the selected players. Null until a scan is saved on this computer. */
+  states: StateCounts | null;
+  skipped: number;
+}
+
+export interface PlayerIssue {
+  device: string;
+  model: string;
+  reason: string;
+}
+
+export interface LibraryTrack {
+  path: string;
+  name: string;
+  folder: string;
+  size: number;
+  format: string;
+  detail: string;
+  state: TrackState;
+  note: string | null;
+  issues: PlayerIssue[];
+}
+
+export interface LibraryPage {
+  total: number;
+  tracks: LibraryTrack[];
+}
+
+export interface LibraryScanProgress {
+  source_id: string;
+  files: number;
+  bytes: number;
+  cloud_only: number;
+}

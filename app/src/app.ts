@@ -5,6 +5,7 @@
 import { inTauri } from "./api";
 import type { Api } from "./api";
 import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus } from "./art";
+import { initLibrary, libraryAct, libraryChange, libraryHomeRow, libraryInput, librarySourceView, libraryView, refreshLibrary } from "./library";
 import type {
   AppInfo,
   Candidate,
@@ -66,7 +67,9 @@ type View =
   | { v: "ready" }
   | { v: "kit-next"; role: Role }
   | { v: "testlab" }
-  | { v: "devtools" };
+  | { v: "devtools" }
+  | { v: "library" }
+  | { v: "library-source"; id: string };
 
 interface Done {
   role: Role | null;
@@ -597,6 +600,7 @@ function nextRole(): RolePlan | undefined {
 async function act(el: HTMLElement) {
   const a = el.dataset.act!;
   const id = el.dataset.id ?? "";
+  if (await libraryAct(a, id)) return;
   const view = S.view;
   const vid = "id" in view ? view.id : "";
   switch (a) {
@@ -816,6 +820,7 @@ async function act(el: HTMLElement) {
       S.info = await S.api.appInfo();
       devLog("enabled demo mode");
       await refreshDevices();
+      await refreshLibrary();
       render();
       break;
     case "demo-off":
@@ -823,6 +828,7 @@ async function act(el: HTMLElement) {
       S.info = await S.api.appInfo();
       devLog("disabled demo mode");
       await refreshDevices();
+      await refreshLibrary();
       render();
       break;
     case "demo-insert":
@@ -843,6 +849,7 @@ async function act(el: HTMLElement) {
       clearInterval(S.exportTimer);
       S.exportTimer = 0;
       devLog("reset demo drives");
+      await refreshLibrary();
       S.done = [];
       S.summaries.clear();
       S.scanning.clear();
@@ -945,6 +952,7 @@ function shell(content: Raw): Raw {
       <button class="btn link brand" data-act="home" aria-label="BoothReady home"><span class="brand-mark">BR</span><span style="color:var(--text)">BoothReady</span></button>
       <span class="spacer"></span>
       ${info?.demo ? html`<span class="pill accent">Demo mode: simulated USB drives</span>` : ""}
+      <button class="btn link small" data-act="open-library">Library</button>
       <button class="btn link small" data-act="open-test-lab">Test lab</button>
       ${devEnabled() ? html`<button class="btn link small" data-act="open-devtools">Dev tools</button>` : ""}
       ${S.done.length ? html`<button class="btn" data-act="to-ready">Gig kit (${S.done.length})</button>` : ""}
@@ -976,6 +984,7 @@ function homeView(): Raw {
     </section>
     <div class="stack">
       ${usbs.length ? html`<section><div class="eyebrow">Connected</div><div class="devlist">${usbs.map(deviceRow)}</div></section>` : ""}
+      ${libraryHomeRow()}
       ${S.info?.demo ? demoPanel() : html`<p class="small faint" style="text-align:center">No USB handy? <button class="btn link" data-act="demo-on">Try it with simulated drives</button></p>`}
       ${S.profiles.length ? html`<section><div class="eyebrow">My gig kits</div><div class="devlist">${S.profiles.map((p) => html`<button class="devrow" data-act="load-profile" data-id="${p.id}"><div class="grow"><b>${p.name}</b><div class="small muted">${plural(p.targets.length, "player")}${p.redundancy ? ", with backup" : ""}</div></div><span class="pill">Use</span></button>`)}</div></section>` : ""}
       ${S.known.length ? html`<section><div class="eyebrow">Known USBs</div><div class="small muted">${S.known.map((k) => k.nickname ?? k.display_name).join(", ")}</div></section>` : ""}
@@ -1567,6 +1576,10 @@ function body(): Raw {
       return testLabView();
     case "devtools":
       return developerView();
+    case "library":
+      return libraryView();
+    case "library-source":
+      return librarySourceView(v.id);
   }
 }
 
@@ -1592,6 +1605,18 @@ export async function start(api: Api) {
   setPreset("unknown_club");
   [S.known, S.profiles] = await Promise.all([api.knownMedia(), api.profiles()]);
   await refreshDevices();
+  await initLibrary({
+    api,
+    render,
+    toast,
+    targets: () => S.targets,
+    presets: () => S.presets,
+    presetId: () => S.presetId,
+    setPreset,
+    showing: () => (S.view.v === "library" || S.view.v === "library-source" ? S.view : null),
+    openSource: (id) => go({ v: "library-source", id }),
+    openLibrary: () => go({ v: "library" }),
+  });
   api.onDeviceEvent((e) => void onDeviceEvent(e as never));
   api.onScanProgress((p) => {
     if (S.scanning.has(p.device_id)) {
@@ -1622,6 +1647,7 @@ export async function start(api: Api) {
   });
   root().addEventListener("input", (ev) => {
     const t = ev.target as HTMLInputElement;
+    if (libraryInput(t)) return;
     if (t.id === "hwsearch") {
       S.hwQuery = t.value;
       clearTimeout(searchTimer);
@@ -1633,7 +1659,9 @@ export async function start(api: Api) {
   });
   root().addEventListener("change", (ev) => {
     const t = ev.target as HTMLInputElement | HTMLSelectElement;
-    if (t.id === "testlab-scenario") {
+    if (t.id.startsWith("library-")) {
+      void libraryChange(t);
+    } else if (t.id === "testlab-scenario") {
       S.testLabScenario = t.value;
       render();
     } else if (t.id === "testlab-device") {

@@ -1,3 +1,21 @@
+# Library sources
+
+## Scanning a source
+
+The Library screen and `boothready library scan <folder>` list the audio in a folder without changing it.
+
+```sh
+boothready library scan /absolute/music-folder --preset unknown_club
+```
+
+A scan walks the folder, skips symlinks and operating system litter, and reads the header of each audio file that is on this computer. A file the cloud client has not downloaded is recognised from its metadata and is never opened. It is counted with its name and size, and its format stays unchecked. Listing a folder the cloud client has not expanded yet can make the client fetch that folder's file list.
+
+Each track gets one state for the selected players: ready, still in the cloud, blocked by at least one player, no data for at least one player, or unreadable. The text output prints counts only. `--json` prints every track, which includes private file names.
+
+The app saves the source list and each source's last scan under `library/` in its own data folder. Removing a source deletes those records and leaves the folder alone.
+
+A scan and staging are separate steps. Scanning reads headers and downloads nothing. Staging, described below, reads every byte, which makes a cloud client download the files.
+
 # Local library staging
 
 `boothready library stage` creates a verified local collection from a selected directory. The source can be a local folder or a Google Drive for desktop folder that the user already accesses through their operating system.

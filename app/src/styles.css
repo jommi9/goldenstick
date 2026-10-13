@@ -948,3 +948,322 @@ p {
     flex-direction: column;
   }
 }
+
+/* Music library */
+.library h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+}
+
+.library .banner {
+  margin-bottom: 14px;
+  align-items: center;
+}
+
+.banner.cloud {
+  border-color: color-mix(in srgb, var(--unk) 45%, transparent);
+  background: color-mix(in srgb, var(--unk) 10%, transparent);
+}
+
+.library-top {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.library-stats {
+  flex: 1 1 520px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 0;
+}
+
+.library-players {
+  flex: 0 1 380px;
+}
+
+.library-players .field-label {
+  margin-top: 0;
+}
+
+.library-players .select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.source-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.source-head .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.source-path {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.source-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.source-totals {
+  margin-top: 14px;
+  color: var(--muted);
+}
+
+.source-totals b {
+  color: var(--text);
+}
+
+.source-scan {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  color: var(--muted);
+}
+
+.pill.cloud {
+  color: var(--unk);
+  border-color: color-mix(in srgb, var(--unk) 45%, transparent);
+}
+
+.pill.external {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.pill.offline {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.statebar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin-top: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-3);
+}
+
+.statebar .seg {
+  flex-basis: 6px;
+  min-width: 6px;
+}
+
+.seg.ready,
+.dot.ready {
+  background: var(--ok);
+}
+
+.seg.cloud_only,
+.dot.cloud_only {
+  background: var(--unk);
+}
+
+.seg.blocked,
+.dot.blocked {
+  background: var(--warn);
+}
+
+.seg.unchecked,
+.dot.unchecked {
+  background: var(--faint);
+}
+
+.seg.unreadable,
+.dot.unreadable {
+  background: var(--bad);
+}
+
+.statelegend {
+  display: flex;
+  gap: 6px 18px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.statelegend b {
+  color: var(--text);
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+.library-add {
+  margin-top: 14px;
+}
+
+.library-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.library-add-row .search {
+  flex: 1 1 260px;
+  width: auto;
+}
+
+.library-empty {
+  margin-bottom: 0;
+}
+
+.library-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 18px 0 12px;
+}
+
+.chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chip b {
+  margin-left: 6px;
+  color: var(--text);
+}
+
+.chip.on {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+}
+
+.tracks-card {
+  margin-top: 12px;
+  padding: 6px 16px 12px;
+}
+
+.tracks {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tracks th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--faint);
+  padding: 10px 10px 8px 0;
+}
+
+.tracks td {
+  padding: 10px 10px 10px 0;
+  border-top: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.tracks .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tracks td:last-child,
+.tracks th:last-child {
+  padding-right: 0;
+  white-space: nowrap;
+}
+
+.trackstate {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.trackstate.ready {
+  color: var(--ok);
+}
+
+.trackstate.cloud_only {
+  color: var(--unk);
+}
+
+.trackstate.blocked {
+  color: var(--warn);
+}
+
+.trackstate.unchecked {
+  color: var(--muted);
+}
+
+.trackstate.unreadable {
+  color: var(--bad);
+}
+
+.track-issues {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.track-note {
+  margin-top: 4px;
+  color: var(--bad);
+}
+
+.tracks-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+@media (max-width: 760px) {
+  .library-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .source-head {
+    flex-direction: column;
+  }
+  .source-actions {
+    justify-content: flex-start;
+  }
+}

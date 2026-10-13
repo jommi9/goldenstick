@@ -21,6 +21,9 @@ import type {
   Identification,
   KitPlan,
   KnownMedia,
+  LibraryPage,
+  LibraryScanProgress,
+  LibrarySource,
   Preset,
   Role,
   VerifyProgress,
@@ -66,6 +69,18 @@ export interface Api {
   runVirtualTests(scenario?: string, keepFixtures?: boolean): Promise<VirtualTestSuite>;
   saveTestLabDiagnostics(label?: string): Promise<string>;
   runRealUsbTest(deviceId: string, targets: string[]): Promise<RealTestResult>;
+  /** The user's music sources, with track states for the given players. */
+  librarySources(targets: string[]): Promise<LibrarySource[]>;
+  /** Opens the system folder dialog; null when the user cancels. */
+  libraryPickFolder(): Promise<string | null>;
+  /** Adds a folder as a source and returns its id. Nothing is scanned yet. */
+  libraryAdd(path: string): Promise<string>;
+  /** Forgets a source. Its folder and files are left alone. */
+  libraryRemove(id: string): Promise<void>;
+  libraryScan(id: string): Promise<void>;
+  libraryCancelScan(): Promise<void>;
+  libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number): Promise<LibraryPage>;
+  onLibraryScanProgress(cb: (p: LibraryScanProgress) => void): void;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
   onScanProgress(cb: (p: { device_id: string; files: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
@@ -122,6 +137,14 @@ async function tauriApi(): Promise<Api> {
     runVirtualTests: (scenario, keepFixtures) => invoke("test_lab_virtual", { scenario: scenario ?? null, keepFixtures: keepFixtures ?? false }),
     saveTestLabDiagnostics: (label) => invoke("test_lab_save_diagnostics", { label: label ?? null }),
     runRealUsbTest: (deviceId, targets) => invoke("test_lab_real", { deviceId, targets }),
+    librarySources: (targets) => invoke("library_sources", { targets }),
+    libraryPickFolder: () => invoke("library_pick_folder"),
+    libraryAdd: (path) => invoke("library_add", { path }),
+    libraryRemove: (id) => invoke("library_remove", { id }),
+    libraryScan: (id) => invoke("library_scan", { id }),
+    libraryCancelScan: () => invoke("library_cancel_scan"),
+    libraryTracks: (id, targets, filter, query, offset, limit) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit } }),
+    onLibraryScanProgress: on("library-scan-progress"),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),
