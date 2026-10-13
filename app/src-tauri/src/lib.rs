@@ -620,8 +620,8 @@ fn export_status(state: State<'_, AppState>, device_id: String) -> Res<ExportSta
             .map(|d| d.as_secs())
     };
     Ok(ExportStatus {
-        device_library: mtime(&mut resolver, boothready_core::library::DEVICE_LIBRARY_FILE),
-        one_library: mtime(&mut resolver, boothready_core::library::ONE_LIBRARY_FILE),
+        device_library: boothready_core::library::device_library_written_unix(&mut resolver),
+        one_library: boothready_core::library::one_library_written_unix(&mut resolver),
         engine: mtime(&mut resolver, boothready_core::library::ENGINE_DB_FILE),
     })
 }

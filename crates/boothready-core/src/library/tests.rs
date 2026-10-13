@@ -218,6 +218,10 @@ fn missing_changed_and_case_mismatched_files() {
     assert_eq!(report.problems().len(), 2);
 }
 
+fn set_modified(path: &Path, when: SystemTime) {
+    fs::File::options().write(true).open(path).unwrap().set_modified(when).unwrap();
+}
+
 #[test]
 fn one_library_detection_and_staleness() {
     let vol = tempfile::tempdir().unwrap();
@@ -226,13 +230,42 @@ fn one_library_detection_and_staleness() {
     fs::write(&ol, (0..4096u32).map(|i| (i * 7 % 251) as u8).collect::<Vec<_>>()).unwrap();
     let report = scan_libraries(vol.path());
     assert!(report.has(LibraryFormat::RekordboxOneLibrary));
-    assert!(report.rekordbox.as_ref().unwrap().one_library.as_ref().unwrap().encrypted);
-    assert!(report.rekordbox.as_ref().unwrap().warnings.is_empty());
+    let rb = report.rekordbox.as_ref().unwrap();
+    assert!(rb.one_library.as_ref().unwrap().encrypted);
+    assert!(rb.warnings.is_empty());
+    assert_eq!(rb.lag, None);
 
-    let old = SystemTime::now() - Duration::from_secs(3 * 24 * 3600);
-    fs::File::options().write(true).open(&ol).unwrap().set_modified(old).unwrap();
+    let days = |n: u64| SystemTime::now() - Duration::from_secs(n * 24 * 3600);
+    set_modified(&ol, days(3));
     let report = scan_libraries(vol.path());
-    assert!(report.problems().iter().any(|p| p.contains("different times")), "{:?}", report.problems());
+    let lag = report.rekordbox.as_ref().unwrap().lag.unwrap();
+    assert_eq!((lag.older, lag.newer), (LibraryFormat::RekordboxOneLibrary, LibraryFormat::RekordboxDeviceLibrary));
+    assert!(report.problems().iter().any(|p| p.contains("about 3 days before")), "{:?}", report.problems());
+
+    // Changes still sitting in the SQLite WAL count as written.
+    fs::write(vol.path().join(ONE_LIBRARY_WAL_FILE), b"wal").unwrap();
+    assert_eq!(scan_libraries(vol.path()).rekordbox.unwrap().lag, None);
+
+    set_modified(&vol.path().join(DEVICE_LIBRARY_FILE), days(40));
+    let lag = scan_libraries(vol.path()).rekordbox.unwrap().lag.unwrap();
+    assert_eq!(lag.older, LibraryFormat::RekordboxDeviceLibrary);
+}
+
+/// A real rekordbox export carries a fixed date on export.pdb while
+/// exportExt.pdb, written by the same export, has the true one.
+#[test]
+fn placeholder_date_on_export_pdb_is_not_a_stale_library() {
+    let vol = tempfile::tempdir().unwrap();
+    build_rekordbox_volume(vol.path());
+    fs::write(vol.path().join(ONE_LIBRARY_FILE), [7u8; 4096]).unwrap();
+    fs::write(vol.path().join(DEVICE_LIBRARY_EXT_FILE), b"ext").unwrap();
+    let jan_2024 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_704_060_000);
+    set_modified(&vol.path().join(DEVICE_LIBRARY_FILE), jan_2024);
+
+    let report = scan_libraries(vol.path());
+    let rb = report.rekordbox.as_ref().unwrap();
+    assert_eq!(rb.lag, None, "{:?}", report.problems());
+    assert!(rb.device_library.as_ref().unwrap().modified_unix.unwrap() > 1_704_060_000 + 3600);
 }
 
 #[test]

@@ -54,6 +54,7 @@ pub const DEVICE_LIBRARY_EXT_FILE: &str = "PIONEER/rekordbox/exportExt.pdb";
 /// OneLibrary (formerly "Device Library Plus"). Confirm against a current
 /// rekordbox 7.2.x export before relying on the exact name in rules.
 pub const ONE_LIBRARY_FILE: &str = "PIONEER/rekordbox/exportLibrary.db";
+pub const ONE_LIBRARY_WAL_FILE: &str = "PIONEER/rekordbox/exportLibrary.db-wal";
 pub const ANALYSIS_DIR: &str = "PIONEER/USBANLZ";
 pub const ENGINE_DB_FILE: &str = "Engine Library/Database2/m.db";
 pub const ENGINE_LEGACY_DB_FILE: &str = "Engine Library/m.db";
@@ -104,10 +105,42 @@ pub struct OneLibraryReport {
     pub encrypted: bool,
 }
 
+/// One rekordbox database was last written well before the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryLag {
+    pub older: LibraryFormat,
+    pub newer: LibraryFormat,
+    pub seconds: u64,
+}
+
+impl LibraryLag {
+    pub fn describe(&self) -> String {
+        format!(
+            "The {} was last written {} before the {}, so it may be missing newer tracks and playlists.",
+            self.older.label(),
+            rough_span(self.seconds),
+            self.newer.label()
+        )
+    }
+}
+
+fn rough_span(seconds: u64) -> String {
+    let (n, unit) = match seconds {
+        s if s < 2 * 86_400 => (s / 3600, "hour"),
+        s if s < 60 * 86_400 => (s / 86_400, "day"),
+        s if s < 730 * 86_400 => (s / (30 * 86_400), "month"),
+        s => (s / (365 * 86_400), "year"),
+    };
+    format!("about {n} {unit}{}", if n == 1 { "" } else { "s" })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RekordboxReport {
     pub device_library: Option<DeviceLibraryReport>,
     pub one_library: Option<OneLibraryReport>,
+    /// Set when the two databases were written more than an hour apart.
+    #[serde(default)]
+    pub lag: Option<LibraryLag>,
     pub analysis_files: u32,
     pub has_settings: bool,
     pub warnings: Vec<String>,
@@ -158,9 +191,13 @@ impl LibraryReport {
                     p.push(format!("{} tracks in the rekordbox export are missing from the drive", dl.missing.len()));
                 }
                 if !dl.size_mismatch.is_empty() {
-                    p.push(format!("{} tracks changed on disk after the rekordbox export", dl.size_mismatch.len()));
+                    p.push(format!(
+                        "{} tracks don't match the file size recorded in the rekordbox export",
+                        dl.size_mismatch.len()
+                    ));
                 }
             }
+            p.extend(rb.lag.iter().map(LibraryLag::describe));
             p.extend(rb.warnings.iter().cloned());
         }
         if let Some(e) = &self.engine {
@@ -177,6 +214,22 @@ impl LibraryReport {
 
 fn modified_unix(meta: &fs::Metadata) -> Option<u64> {
     meta.modified().ok()?.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
+fn newest_modified(resolver: &mut PathResolver, files: &[&str]) -> Option<u64> {
+    files.iter().filter_map(|rel| existing(resolver, rel)).filter_map(|p| modified_unix(&fs::metadata(p).ok()?)).max()
+}
+
+/// When the Device Library was last written. rekordbox stamps export.pdb
+/// itself with a fixed date (1 January 2024 on a real 2026 export), so the
+/// time comes from whichever of it and exportExt.pdb is newer.
+pub fn device_library_written_unix(resolver: &mut PathResolver) -> Option<u64> {
+    newest_modified(resolver, &[DEVICE_LIBRARY_FILE, DEVICE_LIBRARY_EXT_FILE])
+}
+
+/// When OneLibrary was last written, counting changes still in its SQLite WAL.
+pub fn one_library_written_unix(resolver: &mut PathResolver) -> Option<u64> {
+    newest_modified(resolver, &[ONE_LIBRARY_FILE, ONE_LIBRARY_WAL_FILE])
 }
 
 /// Resolve a volume-relative path, tolerating case differences.
@@ -224,12 +277,13 @@ fn scan_rekordbox(resolver: &mut PathResolver) -> Option<RekordboxReport> {
     }
     let mut warnings = Vec::new();
     let device_library = existing(resolver, DEVICE_LIBRARY_FILE).map(|p| read_device_library(&p, resolver));
+    let one_library_written = one_library_written_unix(resolver);
     let one_library = existing(resolver, ONE_LIBRARY_FILE).and_then(|p| {
         let meta = fs::metadata(&p).ok()?;
         let mut head = [0u8; 16];
         let n = fs::File::open(&p).and_then(|mut f| std::io::Read::read(&mut f, &mut head)).unwrap_or(0);
         Some(OneLibraryReport {
-            modified_unix: modified_unix(&meta),
+            modified_unix: one_library_written,
             size_bytes: meta.len(),
             encrypted: n == 16 && &head != b"SQLite format 3\0",
         })
@@ -239,14 +293,18 @@ fn scan_rekordbox(resolver: &mut PathResolver) -> Option<RekordboxReport> {
             warnings.push("rekordbox OneLibrary database is empty (export interrupted?)".into());
         }
     }
+    let mut lag = None;
     if let (Some(dl), Some(ol)) = (&device_library, &one_library) {
         if let (Some(a), Some(b)) = (dl.modified_unix, ol.modified_unix) {
             // rekordbox writes both databases during one export. A large gap
-            // suggests one of them was left over from an earlier export.
+            // suggests the older one was left over from an earlier export.
             if a.abs_diff(b) > 3600 {
-                warnings.push(
-                    "The Device Library and OneLibrary databases were written at different times; one of them may be out of date".into(),
-                );
+                let (older, newer) = if a < b {
+                    (LibraryFormat::RekordboxDeviceLibrary, LibraryFormat::RekordboxOneLibrary)
+                } else {
+                    (LibraryFormat::RekordboxOneLibrary, LibraryFormat::RekordboxDeviceLibrary)
+                };
+                lag = Some(LibraryLag { older, newer, seconds: a.abs_diff(b) });
             }
         }
     }
@@ -264,13 +322,13 @@ fn scan_rekordbox(resolver: &mut PathResolver) -> Option<RekordboxReport> {
         })
         .unwrap_or(0);
     let has_settings = existing(resolver, "PIONEER/MYSETTING.DAT").is_some();
-    Some(RekordboxReport { device_library, one_library, analysis_files, has_settings, warnings })
+    Some(RekordboxReport { device_library, one_library, lag, analysis_files, has_settings, warnings })
 }
 
 fn read_device_library(path: &Path, resolver: &mut PathResolver) -> DeviceLibraryReport {
     let meta = fs::metadata(path).ok();
     let mut report = DeviceLibraryReport {
-        modified_unix: meta.as_ref().and_then(modified_unix),
+        modified_unix: device_library_written_unix(resolver),
         size_bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
         has_ext: existing(resolver, DEVICE_LIBRARY_EXT_FILE).is_some(),
         tracks: vec![],

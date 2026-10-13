@@ -1,7 +1,7 @@
 use super::bundle::{sign_bundle, verify_bundle, BundleError, TrustedKey};
 use super::*;
 use crate::audio::{AudioInfo, Codec, Container};
-use crate::library::LibraryFormat;
+use crate::library::{LibraryFormat, LibraryLag};
 use boothready_model::{FilesystemKind, PartitionScheme};
 
 fn rules() -> Ruleset {
@@ -33,6 +33,7 @@ fn facts(scheme: PartitionScheme, fs: FilesystemKind, libs: &[LibraryFormat], tr
         device_library_changed: 0,
         engine_missing: 0,
         library_warnings: vec![],
+        library_lag: None,
         tracks,
         apple_double: 0,
         usb_max_power_ma: Some(200),
@@ -217,6 +218,37 @@ fn well_prepared_drive() {
     assert!(a.checks.iter().all(|c| c.status != LayerStatus::Fail), "{:?}", a.checks);
     assert!(!a.fixes.iter().any(|f| f.destructive));
     assert_eq!(general_headline(&f, &r), "Good general-purpose DJ USB");
+}
+
+#[test]
+fn older_library_only_counts_against_players_that_read_it() {
+    let r = rules();
+    let targets = preset_devices(&r, "unknown_club");
+    let both = [LibraryFormat::RekordboxDeviceLibrary, LibraryFormat::RekordboxOneLibrary];
+    let mut f = facts(PartitionScheme::Mbr, FilesystemKind::Fat32, &both, standard_tracks());
+    f.library_lag = Some(LibraryLag {
+        older: LibraryFormat::RekordboxOneLibrary,
+        newer: LibraryFormat::RekordboxDeviceLibrary,
+        seconds: 330 * 86_400,
+    });
+    let a = assess_drive(&f, &targets, &r);
+    let dev = |id: &str| a.devices.iter().find(|d| d.device_id == id).unwrap();
+    let library = |id: &str| dev(id).layers.iter().find(|l| l.layer == Layer::Library).unwrap();
+    assert_eq!(library("cdj-3000").status, LayerStatus::Pass);
+    assert_eq!(dev("cdj-2000nxs2").verdict, Verdict::Ready);
+    assert_eq!(library("cdj-3000x").status, LayerStatus::Warn);
+    assert_eq!(library("cdj-3000x").headline, "rekordbox OneLibrary may be out of date");
+    assert!(library("cdj-3000x").detail.contains("about 11 months before"), "{}", library("cdj-3000x").detail);
+    assert_eq!(a.overall, Verdict::Partial);
+    assert!(a.headline.starts_with("Ready for "), "{}", a.headline);
+    assert!(a.headline.ends_with("players, the rest have warnings to review"), "{}", a.headline);
+
+    // A warning on every player still leaves the drive usable everywhere.
+    f.library_lag = None;
+    f.library_warnings = vec!["rekordbox OneLibrary database is empty (export interrupted?)".into()];
+    let a = assess_drive(&f, &targets, &r);
+    assert_eq!(a.overall, Verdict::Partial);
+    assert_eq!(a.headline, "Usable on all selected equipment, with warnings to review");
 }
 
 #[test]
