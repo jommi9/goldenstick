@@ -18,6 +18,7 @@ path = "src/main.rs"
 boothready-model.workspace = true
 boothready-core = { workspace = true, features = ["sqlite", "fixtures"] }
 boothready-platform.workspace = true
+boothready-testlab.workspace = true
 boothready-helper = { path = "../boothready-helper" }
 serde.workspace = true
 serde_json.workspace = true

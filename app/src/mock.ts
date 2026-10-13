@@ -16,6 +16,8 @@ import type {
   Role,
   VerifyProgress,
   VerifyReport,
+  TestScenario,
+  VirtualTestSuite,
 } from "./types";
 
 interface DriveState {
@@ -49,6 +51,25 @@ export async function createMockApi(): Promise<Api> {
   const labels = new Map<string, string>();
   const roles = new Map<string, Role | null>();
   let copyCancelled = false;
+
+  const testScenarios: TestScenario[] = [
+    { id: "acceptance-main", title: "PRD acceptance drive", description: "GPT + exFAT with a Device Library and intentionally problematic tracks" },
+    { id: "empty-drive", title: "Empty new drive", description: "A blank GPT + exFAT stick with no DJ library" },
+    { id: "dual-library-export", title: "Complete rekordbox export", description: "Device Library and OneLibrary with clean audio" },
+    { id: "prepare-fat32", title: "Safe fixture preparation", description: "Run the real helper request against an image-backed demo stick" },
+    { id: "copy-and-verify", title: "Backup copy and read-back", description: "Copy a complete export to another fixture and verify every file" },
+  ];
+
+  // URL parameters make a browser-only reproduction easy to share:
+  //   ?insert=sandisk-128&stage=sandisk-128:exported&verified=sandisk-128
+  // A bare stage applies to every inserted fixture.
+  const stageParam = params.get("stage") ?? "";
+  for (const item of stageParam.split(",").filter(Boolean)) {
+    const [name, value] = item.includes(":") ? item.split(":", 2) : ["*", item];
+    if (!["initial", "prepared", "exported"].includes(value)) continue;
+    for (const id of name === "*" ? inserted : [`demo:${name}`]) stage.set(id, value as Stage);
+  }
+  for (const name of (params.get("verified") ?? "").split(",").filter(Boolean)) verified.add(`demo:${name}`);
   const listeners: Record<string, ((p: any) => void)[]> = {};
   const emit = (name: string, payload: unknown) => (listeners[name] ?? []).forEach((cb) => cb(payload));
   const on = (name: string) => (cb: (p: any) => void) => {
@@ -226,6 +247,27 @@ export async function createMockApi(): Promise<Api> {
       copyCancelled = true;
     },
     saveDiagnostics: async () => "~/Downloads/boothready-diagnostics-demo.json",
+    testLabScenarios: async () => testScenarios,
+    runVirtualTests: async (scenario) => {
+      await sleep(280);
+      const selected = scenario && scenario !== "all" ? testScenarios.filter((s) => s.id === scenario) : testScenarios;
+      if (!selected.length) throw new Error(`Unknown virtual scenario: ${scenario}`);
+      const results = selected.map((s) => ({
+        id: s.id,
+        title: s.title,
+        description: s.description,
+        passed: true,
+        duration_ms: 8,
+        checks: [{ name: "browser-fixture", passed: true, detail: "UI mock only; run the desktop lab for engine coverage" }],
+        artifact: null,
+        error: null,
+      }));
+      return { kind: "virtual", passed: true, root: "browser-mock", scenarios: results } as VirtualTestSuite;
+    },
+    saveTestLabDiagnostics: async () => "~/Downloads/boothready-test-lab/diagnostics-browser-mock.json",
+    runRealUsbTest: async () => {
+      throw new Error("Real USB tests need the Tauri desktop backend.");
+    },
     eject: async (id) => {
       inserted.delete(id);
       setTimeout(() => deviceEvent({ kind: "disappeared", id }), 300);

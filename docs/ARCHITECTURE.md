@@ -28,7 +28,7 @@ The core has no OS dependencies. Everything that touches a real device goes thro
 
 ## Reading a drive
 
-1. The platform layer reports physical devices with USB identity (VID, PID, serial, bMaxPower) and volumes, keyed by physical device rather than drive letter or mount point.
+1. The platform layer reports physical devices with USB identity (VID, PID, serial, bMaxPower) and volumes, keyed by physical device rather than drive letter or mount point. A USB-C adapter or hub is transport around that device, so the app does not use the computer-side connector as part of drive identity. The reported USB speed is the negotiated link, not a claim about whether the stick or host uses USB-A or USB-C.
 2. `identify` maps descriptors to a catalog entry and reports Exact, Strong, Probable or Unknown. The picture shows a product family and is never used as proof of the controller inside.
 3. The partition layout comes from a raw read when the process may read the device. Otherwise it comes from what the OS reports, which lacks the dirty bit and the MBR type byte, and the UI says which source it used. Every backend marks EFI system partitions from their partition type, because macOS puts a FAT32 one in front of the data partition on every GPT drive and a layout built from the OS's volume list would otherwise judge an exFAT stick as FAT32.
 4. `library::scan_libraries` finds rekordbox, Engine DJ and Serato data, resolving paths case-insensitively the way FAT and exFAT players do. It never writes to the drive, and Engine databases are opened with SQLite's `immutable=1`.
@@ -97,6 +97,8 @@ Quick mode checks the layout and libraries and reads an even spread of 24 audio 
 ## The desktop app
 
 The Tauri commands in `app/src-tauri/src/lib.rs` are thin wrappers that run engine code on blocking threads and stream progress as events. The UI in `app/src` is plain TypeScript with no framework. In a browser without Tauri it loads `mock-data.json`, which `cargo run -p boothready-app --example mock_snapshot` generates by running the real engine over the demo drives, so the mock can't drift from the real DTOs. `npm run screenshots` walks the full two-USB flow in headless Chromium.
+
+The test lab adds a shared Rust virtual matrix, browser state scenarios and a desktop GUI. Virtual scenarios use the same engine and helper request handler against fixture folders and image files. The Test lab panel also saves a diagnostics baseline and exposes a read-only runner for one exact removable USB. Real-device reports include diagnostics before and after the read, while destructive commands retain the normal confirmation flow.
 
 ## What still needs verifying
 
