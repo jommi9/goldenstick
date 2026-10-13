@@ -8,7 +8,7 @@ use super::model::{Claim, DeviceKind, DeviceProfile, Evidence, Support};
 use super::recommend::{recommend_format, FormatRecommendation};
 use super::Ruleset;
 use crate::audio::AudioInfo;
-use crate::library::{LibraryFormat, LibraryReport};
+use crate::library::{LibraryFormat, LibraryLag, LibraryReport};
 use crate::media::MediaLayout;
 use crate::scan::{AudioScan, TrackProbe};
 use boothready_model::{FilesystemKind, PartitionScheme};
@@ -29,6 +29,9 @@ pub struct DriveFacts {
     pub device_library_changed: u32,
     pub engine_missing: u32,
     pub library_warnings: Vec<String>,
+    /// One rekordbox database written well before the other.
+    #[serde(default)]
+    pub library_lag: Option<LibraryLag>,
     pub tracks: Vec<TrackFacts>,
     pub apple_double: u32,
     pub usb_max_power_ma: Option<u32>,
@@ -88,6 +91,7 @@ impl DriveFacts {
             device_library_changed: dl_changed,
             engine_missing,
             library_warnings,
+            library_lag: libs.rekordbox.as_ref().and_then(|r| r.lag),
             tracks: audio
                 .tracks
                 .iter()
@@ -449,8 +453,10 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
             _ => 0,
         };
         let changed = if fmt == LibraryFormat::RekordboxDeviceLibrary { facts.device_library_changed } else { 0 };
-        let stale = fmt.label().starts_with("rekordbox") && !facts.library_warnings.is_empty();
-        if missing > 0 || changed > 0 || stale {
+        // Only the older of the two rekordbox databases is suspect.
+        let lag = facts.library_lag.filter(|l| l.older == fmt);
+        let warned = fmt.label().starts_with("rekordbox") && !facts.library_warnings.is_empty();
+        if missing > 0 || changed > 0 || lag.is_some() || warned {
             let mut detail = Vec::new();
             if missing > 0 {
                 detail.push(format!(
@@ -460,9 +466,10 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
             }
             if changed > 0 {
                 detail.push(format!(
-                    "{changed} tracks changed after the export, so cue points and beatgrids may be off."
+                    "{changed} tracks don't match the file size recorded in the export. If their audio changed, cue points and beatgrids may be off."
                 ));
             }
+            detail.extend(lag.iter().map(LibraryLag::describe));
             detail.extend(facts.library_warnings.iter().cloned());
             let fix = if fmt == LibraryFormat::EngineDatabase {
                 export_fix(vec![LibraryFormat::EngineDatabase])
@@ -470,7 +477,12 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
                 Fix {
                     kind: FixKind::ReexportRekordbox,
                     title: "Export this USB again from rekordbox".into(),
-                    detail: "The export on this drive no longer matches its files. A fresh export from rekordbox fixes that.".into(),
+                    detail: if missing > 0 || changed > 0 || warned {
+                        "The export on this drive no longer matches its files. A fresh export from rekordbox fixes that."
+                    } else {
+                        "One of the two rekordbox libraries on this drive is older than the other. A fresh export with both Device Library and OneLibrary brings them in line."
+                    }
+                    .into(),
                     destructive: false,
                 }
             };
@@ -480,7 +492,11 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
                     LayerStatus::Warn,
                     ev,
                     Verdict::Partial,
-                    format!("{} is out of date", fmt.label()),
+                    if missing > 0 || changed > 0 || warned {
+                        format!("{} is out of date", fmt.label())
+                    } else {
+                        format!("{} may be out of date", fmt.label())
+                    },
                     detail.join(" "),
                     src,
                 ),
@@ -897,8 +913,9 @@ fn headline(overall: Verdict, devices: &[DeviceAssessment], facts: &DriveFacts) 
         Verdict::Ready => "Ready for all selected equipment".into(),
         Verdict::ExpectedToWork => "Expected to work on all selected equipment".into(),
         _ if facts.tracks.is_empty() && facts.libraries.is_empty() => "Empty drive, ready to prepare".into(),
+        Verdict::Partial if ready == 0 => "Usable on all selected equipment, with warnings to review".into(),
         Verdict::Partial => {
-            format!("Works on {ready} of {} players, with some tracks needing attention", devices.len())
+            format!("Ready for {ready} of {} players, the rest have warnings to review", devices.len())
         }
         _ if ready > 0 => format!("Ready for {ready} of {} players", devices.len()),
         _ => "Needs attention before the gig".into(),
