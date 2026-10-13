@@ -28,27 +28,28 @@ export function usbArt(image: string, color: string, size = 160, label = "USB dr
       body = `${plug}<path d="M36 34 h48 l-6 96 h-36z" fill="${c}"/><rect x="48" y="48" width="24" height="54" rx="4" fill="${dark}" opacity=".5"/>`;
       break;
     case "stick-metal":
-      body = `${plug}<rect x="34" y="34" width="52" height="92" rx="10" fill="${c}"/><rect x="34" y="34" width="52" height="92" rx="10" fill="url(#sheen)" opacity=".5"/><circle cx="60" cy="110" r="5" fill="${dark}"/>`;
+      body = `${plug}<rect x="34" y="34" width="52" height="92" rx="10" fill="${c}"/><rect x="40" y="42" width="10" height="76" rx="5" fill="${shade(c, 45)}"/><circle cx="60" cy="110" r="5" fill="${dark}"/>`;
       break;
     case "stick-cap":
       body = `<rect x="38" y="4" width="44" height="42" rx="8" fill="${dark}"/>${""}<rect x="34" y="40" width="52" height="88" rx="10" fill="${c}"/><rect x="42" y="112" width="36" height="8" rx="4" fill="${dark}"/>`;
       break;
     case "ssd-portable":
-      return `<svg role="img" aria-label="${label}" width="${size}" height="${size}" viewBox="0 0 120 140"><defs><linearGradient id="sheen" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity=".4"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient></defs><rect x="22" y="20" width="76" height="104" rx="14" fill="${c}"/><rect x="22" y="20" width="76" height="104" rx="14" fill="url(#sheen)" opacity=".4"/><rect x="50" y="26" width="20" height="5" rx="2.5" fill="${dark}"/><text x="60" y="80" text-anchor="middle" font-size="12" font-weight="700" fill="${shade(c, 60)}">SSD</text></svg>`;
+      return `<svg role="img" aria-label="${label}" width="${size}" height="${size}" viewBox="0 0 120 140"><rect x="22" y="20" width="76" height="104" rx="14" fill="${c}"/><rect x="30" y="34" width="10" height="76" rx="5" fill="${shade(c, 45)}"/><rect x="50" y="26" width="20" height="5" rx="2.5" fill="${dark}"/><text x="60" y="80" text-anchor="middle" font-size="12" font-weight="700" fill="${shade(c, 60)}">SSD</text></svg>`;
     case "stick-slider":
       body = `${plug}<rect x="34" y="34" width="52" height="92" rx="10" fill="${c}"/><rect x="48" y="48" width="24" height="40" rx="6" fill="${dark}"/><rect x="52" y="54" width="16" height="12" rx="3" fill="${shade(c, 40)}"/>`;
       break;
     default:
       body = `${plug}<rect x="34" y="34" width="52" height="92" rx="10" fill="${c}"/><text x="60" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="${shade(c, 70)}">?</text>`;
   }
-  return `<svg role="img" aria-label="${label}" width="${size}" height="${size}" viewBox="0 0 120 140"><defs><linearGradient id="sheen" x1="0" x2="1"><stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient></defs><g transform="rotate(-18 60 70)">${body}</g></svg>`;
+  return `<svg role="img" aria-label="${label}" width="${size}" height="${size}" viewBox="0 0 120 140"><g transform="rotate(-18 60 70)">${body}</g></svg>`;
 }
 
 /** A front-facing silhouette of DJ hardware, recognisable by shape. */
 export function hardwareArt(h: HardwareCard, size = 120): string {
   const label = `${h.manufacturer} ${h.model}`;
   const engine = h.family === "engine";
-  const accent = engine ? "#e11d48" : h.legacy ? "#94a3b8" : "#ff7a1a";
+  // Greyscale, like the rest of the interface: hue is kept for states.
+  const accent = h.legacy ? "#7c7c85" : engine ? "#b4b4bc" : "#e9e9ec";
   const body = "var(--hw-body)";
   const face = "var(--hw-face)";
   if (h.kind === "software") {

@@ -1,36 +1,44 @@
-/* The look follows a club player's screen: a black display, wide round
-   lettering with light digits, rectangular touch buttons and lamps that
-   light in cue orange, play green and browse blue. There is one theme, as
-   on the hardware.
+/* The look follows a club player's screen: a dark display, wide round
+   lettering with light digits and rectangular touch buttons. There is one
+   theme, as on the hardware.
+
+   Colour is flat throughout: no gradients, glows or shadows. The interface
+   itself is greyscale, with white for the action and for whatever is
+   selected, so that a hue on screen always means a state: green ready,
+   amber warning, red failure, blue still in the cloud.
 
    The typeface is M PLUS 1p (SIL Open Font License), the closest open font
    to the lettering on a CDJ-3000X display. The player's own font is not
    published and is not used here. */
 :root {
   color-scheme: dark;
-  --bg: #000000;
-  --bg-2: #0c0d0f;
-  --bg-3: #191b1f;
-  --line: #2a2d33;
-  --line-2: #3a3e46;
-  --text: #f3f5f8;
-  --muted: #a4abb6;
-  --faint: #6d7480;
-  /* Cue orange: the one action colour. */
-  --accent: #ff8a00;
-  --accent-ink: #140a00;
-  /* Browse blue: selection and focus, as on a player's track list. */
-  --sel: #2f9bff;
-  --sel-deep: #14498a;
-  --ok: #2fe36b;
-  --warn: #ffc21a;
-  --bad: #ff4a4a;
-  --unk: #5cc1ff;
-  --wave-lo: #1f6dff;
-  --wave-hi: #e6f1ff;
-  --metal: #c9ced6;
-  --hw-body: #2b2f37;
-  --hw-face: #0f1115;
+  --bg: #0a0a0b;
+  --bg-2: #141416;
+  --bg-alt: #19191c;
+  --bg-3: #212125;
+  --line: #2d2d32;
+  --line-2: #48484f;
+  --text: #f5f5f6;
+  --muted: #a6a6ae;
+  --faint: #72727b;
+  /* The action colour and its text. */
+  --accent: #f5f5f6;
+  --accent-ink: #0a0a0b;
+  /* Selection: a white fill for the chosen tab or filter, and a raised
+     grey for the row under the pointer. */
+  --sel: #f5f5f6;
+  --sel-ink: #0a0a0b;
+  --sel-deep: #2c2c31;
+  /* States. These are the only hues in the interface. */
+  --ok: #3ddc84;
+  --warn: #ffcc33;
+  --bad: #ff5a5a;
+  --unk: #7aa7ff;
+  --wave-lo: #3a6dff;
+  --wave-hi: #f5f5f6;
+  --metal: #c9c9d0;
+  --hw-body: #2e2e33;
+  --hw-face: #101012;
   --radius: 4px;
   --shadow: none;
   --ui: "M PLUS 1p", "Hiragino Sans", "Yu Gothic UI", "Noto Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -234,7 +242,7 @@ p {
 .btn.danger {
   background: var(--bad);
   border-color: var(--bad);
-  color: #1b0606;
+  color: var(--accent-ink);
 }
 
 .btn.link {
@@ -353,7 +361,7 @@ p {
 .art-frame {
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at 50% 40%, var(--bg-3), var(--bg-2) 70%);
+  background: var(--bg-3);
   border-radius: 12px;
   padding: 12px;
 }
@@ -495,7 +503,8 @@ p {
 
 .option[aria-pressed="true"] .radio {
   border-color: var(--accent);
-  background: radial-gradient(circle, var(--accent) 45%, transparent 50%);
+  background: var(--sel);
+  box-shadow: inset 0 0 0 3px var(--bg-2);
 }
 
 .hwgrid {
@@ -1274,14 +1283,14 @@ p {
 
 ::selection {
   background: var(--sel-deep);
-  color: #fff;
+  color: var(--text);
 }
 
 /* Header: the strip along the top of a player's screen. */
 .topbar {
   gap: 14px;
   padding: 8px 16px;
-  background: linear-gradient(#17191d, #0b0c0e);
+  background: var(--bg-2);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1294,7 +1303,7 @@ p {
   width: 30px;
   height: 30px;
   border-radius: 3px;
-  background: #000;
+  background: var(--bg);
   border: 2px solid var(--text);
   color: var(--text);
   font-family: var(--display);
@@ -1322,8 +1331,7 @@ p {
   padding: 8px 14px 7px;
   border: 1px solid var(--line-2);
   border-radius: 3px;
-  background: linear-gradient(#2a2d33, #16181c);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  background: var(--bg-3);
   color: var(--muted);
   font-family: var(--display);
   font-size: 13px;
@@ -1335,14 +1343,13 @@ p {
 
 .tab:hover {
   color: var(--text);
-  border-color: #555b66;
+  border-color: var(--faint);
 }
 
 .tab[aria-current="page"] {
-  color: #fff;
+  color: var(--sel-ink);
   border-color: var(--sel);
-  background: linear-gradient(#2f7fd6, var(--sel-deep));
-  box-shadow: 0 0 14px rgba(47, 155, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  background: var(--sel);
 }
 
 /* The browse path under the header, with the USB lamp on the right. */
@@ -1351,7 +1358,7 @@ p {
   align-items: center;
   gap: 8px;
   padding: 5px 16px 4px;
-  background: #050506;
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
   color: var(--faint);
   font-family: var(--display);
@@ -1384,12 +1391,11 @@ p {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #33373e;
+  background: var(--line-2);
 }
 
 .lamp.on {
   background: var(--ok);
-  box-shadow: 0 0 8px var(--ok);
 }
 
 .app {
@@ -1398,7 +1404,7 @@ p {
 
 footer.foot {
   padding: 8px 16px;
-  background: #050506;
+  background: var(--bg);
   font-family: var(--display);
   font-size: 12px;
   letter-spacing: 0.3px;
@@ -1433,8 +1439,7 @@ h1 {
 .btn {
   border: 1px solid var(--line-2);
   border-radius: 4px;
-  background: linear-gradient(#2a2d33, #17191d);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  background: var(--bg-3);
   padding: 10px 16px 9px;
   font-family: var(--display);
   font-weight: 700;
@@ -1444,41 +1449,42 @@ h1 {
 }
 
 .btn:hover {
-  background: linear-gradient(#343840, #1d2025);
-  border-color: #555b66;
+  background: var(--sel-deep);
+  border-color: var(--faint);
 }
 
 /* The cue button: lit orange. */
 .btn.primary {
-  background: linear-gradient(#ffa630, #f07800);
-  border-color: #ffb655;
+  background: var(--accent);
+  border-color: var(--accent);
   color: var(--accent-ink);
-  box-shadow: 0 0 16px rgba(255, 138, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .btn.primary:hover {
-  background: linear-gradient(#ffb550, #ff8a00);
-  border-color: #ffd08a;
+  background: var(--muted);
+  border-color: var(--muted);
 }
 
 .btn.danger {
-  background: linear-gradient(#ff6a6a, #d92b2b);
-  border-color: #ff8f8f;
-  color: #1b0606;
-  box-shadow: 0 0 16px rgba(255, 74, 74, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--accent-ink);
 }
 
 .btn.link {
   background: none;
   border: none;
   box-shadow: none;
-  color: var(--sel);
+  color: var(--text);
   letter-spacing: 0.8px;
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 4px;
 }
 
 .btn.link:hover {
   background: none;
-  color: #8cc8ff;
+  color: var(--muted);
 }
 
 .btn.small {
@@ -1514,19 +1520,20 @@ h1 {
 .option[aria-pressed="true"],
 .hw[aria-pressed="true"] {
   border-color: var(--sel);
-  box-shadow: 0 0 0 1px var(--sel) inset, 0 0 14px rgba(47, 155, 255, 0.25);
+  box-shadow: 0 0 0 1px var(--sel) inset;
 }
 
 .option[aria-pressed="true"] .radio {
   border-color: var(--sel);
-  background: radial-gradient(circle, var(--sel) 45%, transparent 50%);
+  background: var(--sel);
+  box-shadow: inset 0 0 0 3px var(--bg-2);
 }
 
 /* Badges are small plates, as on the display. */
 .pill {
   border-radius: 3px;
   padding: 2px 8px 1px;
-  background: #000;
+  background: var(--bg);
   font-family: var(--display);
   font-size: 11px;
   font-weight: 700;
@@ -1548,7 +1555,7 @@ h1 {
 
 .search,
 .select {
-  background: #000;
+  background: var(--bg);
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
   color: var(--text);
@@ -1582,18 +1589,18 @@ h1 {
 }
 
 .devrow:nth-child(even) {
-  background: #111316;
+  background: var(--bg-alt);
 }
 
 .devrow:hover,
 .devrow:focus-visible {
-  background: linear-gradient(#2f7fd6, var(--sel-deep));
-  color: #fff;
+  background: var(--sel-deep);
+  color: var(--text);
 }
 
 .devrow:hover .muted,
 .devrow:focus-visible .muted {
-  color: #d6e8ff;
+  color: var(--text);
 }
 
 /* Home: the idle screen, with a waveform strip above the prompt. */
@@ -1603,7 +1610,7 @@ h1 {
   margin-bottom: 22px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: radial-gradient(ellipse at 50% 0%, #10141c, #000 70%);
+  background: var(--bg);
   overflow: hidden;
 }
 
@@ -1612,7 +1619,7 @@ h1 {
   width: calc(100% + 40px);
   margin: 0 -20px 26px;
   height: 84px;
-  background: #020305;
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1629,12 +1636,12 @@ h1 {
 }
 
 .plug-art {
-  filter: drop-shadow(0 0 22px rgba(255, 138, 0, 0.3));
+  filter: none;
 }
 
 /* Readouts: big digits with a small label, like BPM and time. */
 .stat {
-  background: #000;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 10px 12px 8px;
@@ -1665,13 +1672,12 @@ h1 {
 .bar {
   height: 10px;
   border-radius: 2px;
-  background: #000;
+  background: var(--bg);
   border: 1px solid var(--line);
 }
 
 .bar > span {
-  background: linear-gradient(90deg, var(--wave-lo), var(--sel));
-  box-shadow: 2px 0 0 #fff;
+  background: var(--sel);
 }
 
 .spinner {
@@ -1685,7 +1691,7 @@ h1 {
 }
 
 .matrix tbody tr:nth-child(even) td {
-  background: #101215;
+  background: var(--bg-alt);
 }
 
 .matrix td b {
@@ -1702,7 +1708,7 @@ h1 {
 .cell[aria-pressed="true"] {
   border-color: var(--sel);
   background: var(--sel-deep);
-  color: #fff;
+  color: var(--text);
 }
 
 .verdict {
@@ -1718,8 +1724,8 @@ h1 {
 .toast {
   border-radius: var(--radius);
   border-color: var(--sel);
-  background: #05080d;
-  box-shadow: 0 0 18px rgba(47, 155, 255, 0.3);
+  background: var(--bg-2);
+  box-shadow: none;
 }
 
 .readiness h1 {
@@ -1758,17 +1764,9 @@ h1 {
   height: 14px;
   gap: 1px;
   border-radius: 2px;
-  background: #000;
+  background: var(--bg);
   border: 1px solid var(--line);
   position: relative;
-}
-
-.statebar::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(90deg, transparent 0 3px, rgba(0, 0, 0, 0.45) 3px 4px);
-  pointer-events: none;
 }
 
 .statelegend {
@@ -1780,7 +1778,7 @@ h1 {
 }
 
 .dot {
-  box-shadow: 0 0 6px currentColor;
+  box-shadow: none;
 }
 
 .dot.ready {
@@ -1850,12 +1848,12 @@ h1 {
 
 .browse .chip:hover {
   color: var(--text);
-  background: #16181c;
+  background: var(--bg-3);
 }
 
 .browse .chip.on {
-  color: #fff;
-  background: linear-gradient(#2f7fd6, var(--sel-deep));
+  color: var(--sel-ink);
+  background: var(--sel);
 }
 
 .browse-main .search {
@@ -1870,7 +1868,7 @@ h1 {
 
 .tracks th {
   padding: 9px 10px 7px;
-  background: #050506;
+  background: var(--bg);
   border-bottom: 1px solid var(--line-2);
 }
 
@@ -1879,7 +1877,7 @@ h1 {
 }
 
 .tracks tbody tr:nth-child(even) td {
-  background: #101215;
+  background: var(--bg-alt);
 }
 
 .tracks tbody tr:hover td {
@@ -1888,7 +1886,7 @@ h1 {
 
 .tracks tbody tr:hover .faint,
 .tracks tbody tr:hover .track-issues {
-  color: #d6e8ff;
+  color: var(--text);
 }
 
 .tracks td:last-child,
@@ -1918,34 +1916,13 @@ h1 {
   width: 38px;
   height: 38px;
   border-radius: 2px;
-  background: linear-gradient(135deg, #2b3038, #15171b);
+  background: var(--bg-3);
   border: 1px solid var(--line-2);
   color: var(--muted);
   font-family: var(--condensed);
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.4px;
-}
-
-.arttile.f-wav,
-.arttile.f-aiff {
-  background: linear-gradient(135deg, #1c4f9c, #0b2347);
-  border-color: #2f7fd6;
-  color: #d6e8ff;
-}
-
-.arttile.f-flac,
-.arttile.f-alac {
-  background: linear-gradient(135deg, #0f6b5a, #06302a);
-  border-color: #1fae93;
-  color: #c9f5ec;
-}
-
-.arttile.f-mp3,
-.arttile.f-aac {
-  background: linear-gradient(135deg, #7a4a12, #382006);
-  border-color: #c77a1c;
-  color: #ffe2bd;
 }
 
 .tracks td b {
@@ -1975,12 +1952,12 @@ h1 {
   margin: 0;
   padding: 9px 12px;
   border-top: 1px solid var(--line);
-  background: #050506;
+  background: var(--bg);
 }
 
 .library-players .select {
   border-radius: var(--radius);
-  background: #000;
+  background: var(--bg);
 }
 
 @media (max-width: 760px) {
@@ -2189,4 +2166,25 @@ h3 .verdict {
   font-size: inherit;
   font-weight: inherit;
   letter-spacing: 0.5px;
+}
+
+/* Flat theme details. */
+.btn.link.brand,
+.btn.link.brand:hover {
+  text-decoration: none;
+  color: var(--text);
+}
+
+.browse .chip.on b {
+  color: inherit;
+}
+
+.chip.on {
+  border-color: var(--sel);
+  background: var(--sel-deep);
+}
+
+.pill.external {
+  color: var(--text);
+  border-color: var(--line-2);
 }

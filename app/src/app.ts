@@ -1014,7 +1014,7 @@ function homeView(): Raw {
   return html`
     <section class="hero">
       <div class="wave">${raw(waveArt())}</div>
-      <div class="plug-art">${raw(usbArt("stick-slider", "#ff7a1a", 150, "A USB drive"))}</div>
+      <div class="plug-art">${raw(usbArt("stick-slider", "#d9d9de", 150, "A USB drive"))}</div>
       <h1>Plug in a USB</h1>
       <p class="muted" style="max-width:520px">We'll identify it, check what's on it and tell you where it will work.</p>
       <button class="btn link" data-act="buying">I don't have a USB yet</button>
@@ -1567,7 +1567,7 @@ function readyView(): Raw {
 function kitNextView(role: Role): Raw {
   const r = S.plan?.roles.find((x) => x.role === role);
   return html`<section class="hero">
-    <div class="plug-art">${raw(usbArt("stick-cap", "#94a3b8", 130, "A USB drive"))}</div>
+    <div class="plug-art">${raw(usbArt("stick-cap", "#8f8f98", 130, "A USB drive"))}</div>
     <div class="eyebrow">Preparing ${S.plan?.roles.length ?? 1} USBs</div>
     <h1>Next: ${ROLE_LABEL[role]}</h1>
     <p class="muted" style="max-width:560px">${r ? `Insert a USB of ${gb(r.ideal_capacity[0])}${r.ideal_capacity[1] !== r.ideal_capacity[0] ? ` to ${gb(r.ideal_capacity[1])}` : " or larger"}.` : "Insert the next USB."}</p>
