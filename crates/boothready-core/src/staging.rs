@@ -41,6 +41,12 @@ pub fn checked_path(path: &Path) -> io::Result<PathBuf> {
             return Err(invalid("parent path components are forbidden"));
         }
         result.push(component);
+        // A drive prefix or root on its own is not a file to inspect. Windows
+        // answers "Incorrect function" for a bare verbatim prefix such as
+        // `\\?\C:`, which is how every canonical path there begins.
+        if !matches!(component, Component::Normal(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&result) {
             Ok(m) if m.file_type().is_symlink() => return Err(invalid("symlinks are forbidden")),
             Ok(metadata) => {
