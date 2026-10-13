@@ -464,11 +464,17 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
                     fmt.label()
                 ));
             }
+            // The audio files on the drive are the ones counted, so a mismatch
+            // is always some share of them.
+            let total = facts.tracks.len();
             if changed > 0 {
                 detail.push(format!(
-                    "{changed} tracks don't match the file size recorded in the export. If their audio changed, cue points and beatgrids may be off."
+                    "{changed} of {total} tracks don't match the file size recorded in the export. If their audio changed, cue points and beatgrids may be off on those tracks. The rest match."
                 ));
             }
+            // Only a size difference: the stick still plays, and nothing is
+            // known to be missing or stale.
+            let only_sizes = changed > 0 && missing == 0 && !warned && lag.is_none();
             detail.extend(lag.iter().map(LibraryLag::describe));
             detail.extend(facts.library_warnings.iter().cloned());
             let fix = if fmt == LibraryFormat::EngineDatabase {
@@ -477,12 +483,17 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
                 Fix {
                     kind: FixKind::ReexportRekordbox,
                     title: "Export this USB again from rekordbox".into(),
-                    detail: if missing > 0 || changed > 0 || warned {
+                    detail: if only_sizes {
+                        format!(
+                            "{changed} of {total} tracks differ in size from what rekordbox recorded when it exported them. If you replaced or edited those files, export again so their cue points and beatgrids match. If you didn't, the USB plays as it is."
+                        )
+                    } else if missing > 0 || changed > 0 || warned {
                         "The export on this drive no longer matches its files. A fresh export from rekordbox fixes that."
+                            .to_string()
                     } else {
                         "One of the two rekordbox libraries on this drive is older than the other. A fresh export with both Device Library and OneLibrary brings them in line."
-                    }
-                    .into(),
+                            .to_string()
+                    },
                     destructive: false,
                 }
             };
@@ -492,7 +503,14 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
                     LayerStatus::Warn,
                     ev,
                     Verdict::Partial,
-                    if missing > 0 || changed > 0 || warned {
+                    if only_sizes {
+                        format!(
+                            "{} {} from the {}",
+                            tracks(changed),
+                            if changed == 1 { "differs" } else { "differ" },
+                            fmt.label()
+                        )
+                    } else if missing > 0 || changed > 0 || warned {
                         format!("{} is out of date", fmt.label())
                     } else {
                         format!("{} may be out of date", fmt.label())

@@ -139,6 +139,15 @@ async function run(scheme) {
   await page.getByRole("button", { name: "Open the collection" }).click({ timeout: 15000 });
   await page.getByRole("table").waitFor();
   await shot("25-collection", true);
+
+  // A drive that is already right: the report is the main action, and
+  // preparing, which erases, is the second.
+  await click("Dev tools");
+  await page.locator('[data-act="open-device"][data-id="demo:samsung-64"]').click();
+  await page.getByText("Scanned").waitFor({ timeout: 15000 });
+  await click("Yes, that's it");
+  await page.getByText("Preparing it would erase everything on it.").waitFor();
+  await shot("26-healthy-drive-check");
   await page.close();
 }
 

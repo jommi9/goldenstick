@@ -113,6 +113,8 @@ async function walk() {
   await page.goto(`http://127.0.0.1:${port}/`);
   await page.getByText("Plug in a USB").waitFor();
   await at("home");
+  includes(await text("main#main"), "BoothReady does two things.", "home says what the app is for");
+  includes(await text("main#main"), "Connect a USB drive and it appears here.", "home says where a connected USB will show up");
   for (const s of data.demo_sticks) {
     check(await page.locator(`[data-act="demo-insert"][data-id="${s.name}"]`).count(), `the demo panel offers ${s.title}`);
     includes(await text("main#main"), s.description, `the demo panel describes ${s.title}`);
@@ -298,6 +300,10 @@ async function checkLibrary(page, text, at) {
     for (const issue of t.issues.slice(0, 3)) includes(row, issue.reason, `${t.name} gives the engine's reason for ${issue.model}`);
   }
   check((await page.locator('[data-act="library-collect-open"]').count()) === 0, "a collection doesn't offer to be collected again");
+  const next = (await text(".nextstep")) ?? "";
+  includes(next, "Export this collection to your USB with rekordbox", "a collection says what to do next");
+  includes(next, "/Music/BoothReady/", "the next step names the folder to import");
+  check((await page.locator('.nextstep [data-act="open-rekordbox"]').count()) === 1, "the next step offers to open rekordbox");
   await page.locator('[data-act="open-library"]').first().click();
   const card = (await page.locator(".source").last().textContent()) ?? "";
   includes(card, "Local collection", "the library marks the new source as a local collection");

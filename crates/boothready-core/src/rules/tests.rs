@@ -252,6 +252,36 @@ fn older_library_only_counts_against_players_that_read_it() {
 }
 
 #[test]
+fn a_few_tracks_differing_in_size_is_a_note_about_those_tracks() {
+    let r = rules();
+    let targets = preset_devices(&r, "unknown_club");
+    let both = [LibraryFormat::RekordboxDeviceLibrary, LibraryFormat::RekordboxOneLibrary];
+    let mut f = facts(PartitionScheme::Mbr, FilesystemKind::Fat32, &both, standard_tracks());
+    f.device_library_changed = 1;
+    let total = f.tracks.len();
+    let a = assess_drive(&f, &targets, &r);
+    let library = |id: &str| {
+        a.devices.iter().find(|d| d.device_id == id).unwrap().layers.iter().find(|l| l.layer == Layer::Library)
+    };
+    let nxs2 = library("cdj-2000nxs2").unwrap();
+    assert_eq!(nxs2.status, LayerStatus::Warn);
+    assert_eq!(nxs2.headline, "1 track differs from the rekordbox Device Library");
+    assert!(nxs2.detail.contains(&format!("1 of {total} tracks")), "{}", nxs2.detail);
+    assert!(nxs2.detail.contains("The rest match."), "{}", nxs2.detail);
+    let fix = a.fixes.iter().find(|f| f.kind == FixKind::ReexportRekordbox).unwrap();
+    assert!(fix.detail.contains(&format!("1 of {total} tracks differ in size")), "{}", fix.detail);
+    assert!(fix.detail.contains("the USB plays as it is"), "{}", fix.detail);
+    assert!(!fix.destructive);
+
+    // A missing track is a different matter and keeps the stronger wording.
+    f.device_library_missing = 1;
+    let a = assess_drive(&f, &targets, &r);
+    let nxs2 = a.devices.iter().find(|d| d.device_id == "cdj-2000nxs2").unwrap();
+    let layer = nxs2.layers.iter().find(|l| l.layer == Layer::Library).unwrap();
+    assert_eq!(layer.headline, "rekordbox Device Library is out of date");
+}
+
+#[test]
 fn physical_and_filesystem_health() {
     let r = rules();
     let cdj2000 = r.device("cdj-2000").unwrap();

@@ -302,6 +302,16 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       if (L.tracksFor) await loadTracks(L.tracksFor, true);
       host.render();
       return true;
+    case "library-copy-path": {
+      const path = source(id)?.path ?? "";
+      try {
+        await navigator.clipboard.writeText(path);
+        host.toast("Folder path copied.");
+      } catch {
+        host.toast(path);
+      }
+      return true;
+    }
     case "library-dismiss-error":
       L.error = null;
       host.render();
@@ -487,7 +497,7 @@ function collectPanel(s: LibrarySource): Raw {
   if (!c || c.sourceId !== s.id) return html``;
   const p = c.plan;
   if (c.done) {
-    return html`<section class="card collect"><div class="banner ok"><div style="flex:1"><b>Collected and verified ${plural(c.done.tracks, "track")}.</b> They are on this computer as ${c.done.name}, checked against the selected players.</div><button class="btn primary" data-act="library-open" data-id="${c.done.id}">Open the collection</button><button class="btn link" data-act="library-collect-close">Close</button></div></section>`;
+    return html`<section class="card collect"><div class="banner ok"><div style="flex:1"><b>Collected and verified ${plural(c.done.tracks, "track")}.</b> They are on this computer as ${c.done.name}, checked against the selected players. Open the collection for the next step: exporting it to your USB.</div><button class="btn primary" data-act="library-open" data-id="${c.done.id}">Open the collection</button><button class="btn link" data-act="library-collect-close">Close</button></div></section>`;
   }
   if (!p) return html`<section class="card collect">${c.error ? html`<div class="banner bad" role="alert"><div style="flex:1">${c.error}</div><button class="btn link" data-act="library-collect-close">Close</button></div>` : html`<p class="muted">Working out what to copy.</p>`}</section>`;
   const short = p.free_bytes !== null && p.free_bytes < p.needed_bytes;
@@ -525,6 +535,23 @@ function collectPanel(s: LibrarySource): Raw {
   </section>`;
 }
 
+/**
+ * What to do with a finished collection. BoothReady does not write DJ
+ * libraries, so the export is done in rekordbox and checked back here.
+ */
+function nextStep(s: LibrarySource): Raw {
+  return html`<section class="card nextstep">
+    <div class="eyebrow">Next step</div>
+    <h2>Export this collection to your USB with rekordbox</h2>
+    <ol class="nextsteps">
+      <li>Open rekordbox and choose File, Import, Import Folder, then pick this folder:<div class="source-path">${s.path}</div></li>
+      <li>Connect your USB and export the tracks or playlists to it, with both Device Library and OneLibrary turned on.</li>
+      <li>Come back to the USB tab. BoothReady checks the drive and shows where it will play.</li>
+    </ol>
+    <div class="actions"><button class="btn primary" data-act="open-rekordbox">Open rekordbox</button><button class="btn" data-act="library-copy-path" data-id="${s.id}">Copy folder path</button><button class="btn" data-act="home">Go to the USB tab</button></div>
+  </section>`;
+}
+
 /** Re-render only the track list, so typing in the search box keeps focus. */
 function renderTracks() {
   const el = document.getElementById("library-tracks");
@@ -552,6 +579,7 @@ export function librarySourceView(id: string): Raw {
     </div>
     ${c ? stateBar(c) : ""}
     ${collectPanel(s)}
+    ${s.collected_from ? nextStep(s) : ""}
     ${c
       ? html`<div class="browse"><div class="library-filters" role="group" aria-label="Filter tracks">
             <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
@@ -566,7 +594,7 @@ export function librarySourceView(id: string): Raw {
 /** The Library entry on the home screen. */
 export function libraryHomeRow(): Raw {
   const { sources, tracks } = librarySummary();
-  return html`<section><div class="eyebrow">Your music</div><div class="devlist"><button class="devrow" data-act="open-library">
+  return html`<section><div class="eyebrow">2 · Build one from your music</div><div class="devlist"><button class="devrow" data-act="open-library">
     <div class="grow"><b>${sources ? "Music library" : "Set up your music library"}</b><div class="small muted">${sources ? `${plural(sources, "source")}, ${plural(tracks, "track")}` : "Add the folders your music lives in and see what will play where."}</div></div>
     <span class="pill">${raw(sources ? "Open" : "Add music")}</span>
   </button></div></section>`;

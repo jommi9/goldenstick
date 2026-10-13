@@ -63,6 +63,9 @@ pub struct DriveSummary {
     pub content: ContentStats,
     pub formats: Vec<LibraryFormat>,
     pub library_problems: Vec<String>,
+    /// Tracks whose size differs from the export's record, for the report
+    /// to name. Capped so a badly mismatched drive stays readable.
+    pub mismatched_tracks: Vec<String>,
     pub playlists: Vec<PlaylistDto>,
     pub library_tracks: usize,
     pub tracks_scanned: usize,
@@ -134,6 +137,7 @@ impl DriveSummary {
             content: r.content.clone(),
             formats: r.libraries.formats.clone(),
             library_problems: r.libraries.problems(),
+            mismatched_tracks: dl.map(|dl| dl.size_mismatch.iter().take(200).cloned().collect()).unwrap_or_default(),
             playlists,
             library_tracks: dl.map(|d| d.tracks.len()).unwrap_or(0),
             tracks_scanned: r.audio.tracks.len(),
