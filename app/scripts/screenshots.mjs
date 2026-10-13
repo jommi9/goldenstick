@@ -25,7 +25,6 @@ async function run(scheme) {
   await page.goto(url);
   await page.getByText("Plug in a USB").waitFor();
   await shot("01-home");
-  if (scheme === "light") return page.close();
 
   // USB A: the 128 GB SanDisk, GPT + exFAT with only a Device Library.
   await page.locator('[data-act="demo-insert"][data-id="sandisk-128"]').click();
@@ -138,7 +137,6 @@ try {
     if (pages[0]) await pages[0].screenshot({ path: `${out}/FAILED.png`, fullPage: true });
     throw e;
   });
-  await run("light");
 } finally {
   await browser.close();
   server.httpServer.close();

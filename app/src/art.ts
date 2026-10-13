@@ -109,3 +109,31 @@ export const VERDICT_LABEL: Record<Verdict, string> = {
   at_risk: "At risk",
   fix_needed: "Fix needed",
 };
+
+/**
+ * A player-style waveform strip. Decoration only: the bars come from a fixed
+ * formula, never from a track, so it is hidden from assistive technology and
+ * is not shown next to any real file.
+ */
+export function waveArt(bars = 220): string {
+  const w = bars * 4;
+  let low = "";
+  let high = "";
+  let seed = 7;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < bars; i++) {
+    const phrase = Math.floor(i / 28) % 4;
+    const beat = i % 7 === 0 ? 1 : 0.55 + 0.25 * Math.sin(i / 3);
+    const level = phrase === 2 ? 0.35 : phrase === 3 ? 1 : 0.75;
+    const h = Math.max(4, Math.round(44 * level * beat * (0.6 + 0.4 * next())));
+    const hi = Math.max(2, Math.round(h * (0.25 + 0.3 * next())));
+    low += `<rect x="${i * 4}" y="${48 - h}" width="3" height="${h * 2}"/>`;
+    high += `<rect x="${i * 4}" y="${48 - hi}" width="3" height="${hi * 2}"/>`;
+  }
+  const head = Math.round(w * 0.5);
+  const cue = Math.round(w * 0.18);
+  return `<svg aria-hidden="true" focusable="false" viewBox="0 0 ${w} 96" preserveAspectRatio="none"><g fill="var(--wave-lo)">${low}</g><g fill="var(--wave-hi)">${high}</g><path d="M${cue - 6} 0h12l-6 9z" fill="var(--accent)"/><rect x="${head - 1}" y="0" width="2" height="96" fill="var(--bad)"/></svg>`;
+}
