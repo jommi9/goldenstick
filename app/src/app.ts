@@ -1015,12 +1015,16 @@ function homeView(): Raw {
     <section class="hero">
       <div class="wave">${raw(waveArt())}</div>
       <div class="plug-art">${raw(usbArt("stick-slider", "#d9d9de", 150, "A USB drive"))}</div>
-      <h1>Plug in a USB</h1>
-      <p class="muted" style="max-width:520px">We'll identify it, check what's on it and tell you where it will work.</p>
-      <button class="btn link" data-act="buying">I don't have a USB yet</button>
+      ${usbs.length
+        ? html`<h1>${usbs.length === 1 ? "USB connected" : `${usbs.length} USBs connected`}</h1>
+            <p class="muted" style="max-width:520px">Pick it below to see what's on it and where it will work.</p>`
+        : html`<h1>Plug in a USB</h1>
+            <p class="muted" style="max-width:520px">We'll identify it, check what's on it and tell you where it will work.</p>
+            <button class="btn link" data-act="buying">I don't have a USB yet</button>`}
     </section>
     <div class="stack">
-      ${usbs.length ? html`<section><div class="eyebrow">Connected</div><div class="devlist">${usbs.map(deviceRow)}</div></section>` : ""}
+      <p class="home-intro">BoothReady does two things. It checks a USB you already have, and it helps you build one from your music.</p>
+      <section><div class="eyebrow">1 · Check a USB</div>${usbs.length ? html`<div class="devlist">${usbs.map(deviceRow)}</div>` : html`<div class="home-wait">Connect a USB drive and it appears here.</div>`}</section>
       ${libraryHomeRow()}
       ${S.info?.demo ? demoPanel() : html`<p class="small faint" style="text-align:center">No USB handy? <button class="btn link" data-act="demo-on">Try it with simulated drives</button></p>`}
       ${S.profiles.length ? html`<section><div class="eyebrow">My gig kits</div><div class="devlist">${S.profiles.map((p) => html`<button class="devrow" data-act="load-profile" data-id="${p.id}"><div class="grow"><b>${p.name}</b><div class="small muted">${plural(p.targets.length, "player")}${p.redundancy ? ", with backup" : ""}</div></div><span class="pill">Use</span></button>`)}</div></section>` : ""}
@@ -1218,6 +1222,9 @@ function assessmentView(id: string): Raw {
   if (!s) return html`<p><span class="spinner"></span> Scanning…</p>`;
   const a = S.assessments.get(id);
   const idn = s.identification;
+  // Preparing erases the drive, so it is only the main action when the
+  // engine says the drive has to be rebuilt.
+  const rebuild = !a || a.fixes.some((f) => f.kind === "reformat");
   return html`
     ${s.interrupted ? html`<div class="banner bad" style="margin-bottom:16px"><div style="flex:1"><b>We found an incomplete BoothReady preparation.</b> This USB may be missing files. Don't use it for a gig until it's finished.</div><button class="btn" data-act="go-export">Resume</button><button class="btn danger" data-act="go-confirm">Rebuild</button></div>` : ""}
     ${s.verified ? html`<div class="banner ok" style="margin-bottom:16px">${raw(statusIcon("pass"))}<div>Verified by BoothReady and unchanged since.</div></div>` : ""}
@@ -1231,19 +1238,26 @@ function assessmentView(id: string): Raw {
         </div>
       </div>
       <ul class="checks">${a?.checks.map((c) => html`<li>${raw(statusIcon(c.status))} <span>${c.label}</span></li>`)}
+        ${s.library_problems.map((p) => html`<li>${raw(statusIcon("warn"))} <span>${p}</span></li>`)}
         ${s.dirty ? html`<li>${raw(statusIcon("warn"))} <span>Not ejected safely last time</span></li>` : ""}
         ${s.apple_double ? html`<li>${raw(statusIcon("warn"))} <span>${plural(s.apple_double, "hidden macOS '._' file")} next to your music</span></li>` : ""}
       </ul>
       <div class="stats">
         <div class="stat"><b>${num(a?.tracks.scanned ?? s.tracks_scanned)}</b><span class="small muted">tracks scanned</span></div>
         <div class="stat"><b>${num(a?.tracks.compatible_everywhere ?? 0)}</b><span class="small muted">play on typical club gear</span></div>
-        <div class="stat"><b>${num(a?.tracks.need_attention ?? 0)}</b><span class="small muted">need attention</span></div>
+        <div class="stat"><b>${num(a?.tracks.need_attention ?? 0)}</b><span class="small muted">in a format some gear can't play</span></div>
       </div>
       <p class="small faint" style="margin-top:10px">${num(s.content.files)} files, ${gb(s.content.used_bytes)} used${s.content.last_modified_unix ? `, last changed ${when(s.content.last_modified_unix)}` : ""}. ${s.layout_source === "os" ? "Layout as reported by the operating system." : ""}</p>
-      <div class="actions">
-        <button class="btn primary" data-act="prepare-this">Prepare this USB</button>
-        <button class="btn" data-act="detailed-report">See detailed report</button>
-      </div>
+      ${rebuild
+        ? html`<div class="actions">
+            <button class="btn primary" data-act="prepare-this">Prepare this USB</button>
+            <button class="btn" data-act="detailed-report">See detailed report</button>
+          </div>`
+        : html`<div class="actions">
+            <button class="btn primary" data-act="detailed-report">See detailed report</button>
+            <button class="btn" data-act="prepare-this">Prepare this USB</button>
+          </div>
+          <p class="small faint" style="margin:10px 0 0">This drive is already formatted the way the selected players need. Preparing it would erase everything on it.</p>`}
     </section>`;
 }
 
@@ -1360,6 +1374,7 @@ function reportView(id: string): Raw {
       ? html`<h2 style="margin-top:26px">What to do</h2><div class="fixes">${a.fixes.map(
           (f) => html`<div class="fix"><div class="grow"><b>${f.title}</b>${f.destructive ? html` <span class="pill">Erases this USB</span>` : ""}<p class="small muted" style="margin:4px 0 0">${f.detail}</p>
             ${f.kind === "reformat" ? html`<button class="btn link small" data-act="why">${S.showWhy ? "Hide" : "Why?"}</button>${S.showWhy ? html`<p class="small explain">${rec.why}</p>` : ""}` : ""}
+            ${f.kind === "reexport_rekordbox" && s.mismatched_tracks.length ? html`<details class="small" style="margin-top:6px"><summary>Show the ${plural(s.mismatched_tracks.length, "track")} that ${s.mismatched_tracks.length === 1 ? "differs" : "differ"}</summary><ul class="issue-list">${s.mismatched_tracks.map((p) => html`<li>${p}</li>`)}</ul></details>` : ""}
             ${f.kind === "review_tracks" && S.showTracks ? html`<ul class="issue-list">${[...uniq.entries()].map(([p, rs]) => html`<li><b>${p}</b><br><span class="muted">${rs.join("; ")}</span></li>`)}</ul>` : ""}
             </div>${fixButton(f)}</div>`,
         )}</div>`

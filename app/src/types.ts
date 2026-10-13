@@ -118,6 +118,8 @@ export interface DriveSummary {
   content: { files: number; used_bytes: number; last_modified_unix: number | null };
   formats: LibraryFormat[];
   library_problems: string[];
+  /** Tracks whose size differs from the export's record (at most 200). */
+  mismatched_tracks: string[];
   playlists: PlaylistDto[];
   library_tracks: number;
   tracks_scanned: number;
