@@ -140,14 +140,8 @@ pub fn verify_volume(
             passed: ok_scheme && ok_fs,
             detail: format!("{} + {}", layout.scheme.label(), fs.map(|f| f.label()).unwrap_or("no filesystem")),
         });
-        let dirty = layout.primary().and_then(|p| p.filesystem.as_ref()).and_then(|f| f.dirty) == Some(true);
-        if dirty {
-            checks.push(VerifyCheck {
-                name: "Clean unmount".into(),
-                passed: false,
-                detail: "The drive was not ejected safely last time.".into(),
-            });
-        }
+        // The layout's dirty flag is not checked here: `root` is mounted, and
+        // mounting sets that flag on disk until the volume is ejected.
     }
 
     // Databases.

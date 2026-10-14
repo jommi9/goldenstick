@@ -129,7 +129,7 @@ impl DriveSummary {
             fs_label: primary_fs
                 .and_then(|f| f.label.clone())
                 .or_else(|| r.device.primary_volume().and_then(|v| v.label.clone())),
-            dirty: primary_fs.and_then(|f| f.dirty),
+            dirty: r.facts.fs_dirty,
             layout_source: r.layout_source,
             layout_warnings: r.layout.warnings.clone(),
             size_bytes: r.device.size_bytes,

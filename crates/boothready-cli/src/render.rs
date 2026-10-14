@@ -67,7 +67,7 @@ pub fn layout(l: &MediaLayout) {
             fs.map(|f| f.kind.label()).unwrap_or("none"),
             fs.and_then(|f| f.label.clone()).unwrap_or_default(),
             fs.and_then(|f| f.cluster_size).map(|c| format!("{} KB clusters", c / 1024)).unwrap_or_default(),
-            if fs.and_then(|f| f.dirty) == Some(true) { "  (not ejected safely)" } else { "" }
+            if fs.and_then(|f| f.dirty) == Some(true) { "  (dirty: mounted now, or not ejected safely)" } else { "" }
         );
     }
     for w in &l.warnings {
