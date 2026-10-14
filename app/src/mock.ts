@@ -64,6 +64,7 @@ export async function createMockApi(): Promise<Api> {
     { id: "dual-library-export", title: "Complete rekordbox export", description: "Device Library and OneLibrary with clean audio" },
     { id: "prepare-fat32", title: "Safe fixture preparation", description: "Run the real helper request against an image-backed demo stick" },
     { id: "copy-and-verify", title: "Backup copy and read-back", description: "Copy a complete export to another fixture and verify every file" },
+    { id: "mounted-dirty-flag", title: "Dirty flag while mounted", description: "A FAT32 image whose clean-shutdown bit is cleared, the way macOS leaves it while mounted, checked mounted and unmounted" },
   ];
 
   // URL parameters make a browser-only reproduction easy to share:
