@@ -21,6 +21,7 @@ import type {
   Identification,
   KitPlan,
   CollectPlan,
+  FolderNode,
   KnownMedia,
   LibraryCollectProgress,
   LibraryPage,
@@ -81,12 +82,14 @@ export interface Api {
   libraryRemove(id: string): Promise<void>;
   libraryScan(id: string): Promise<void>;
   libraryCancelScan(): Promise<void>;
-  libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number): Promise<LibraryPage>;
+  /** `id` may be "*" for every source at once. `folder` narrows to a folder inside the source. */
+  libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number, folder?: string): Promise<LibraryPage>;
+  libraryFolders(id: string): Promise<FolderNode[]>;
   onLibraryScanProgress(cb: (p: LibraryScanProgress) => void): void;
   /** What collecting the tracks shown for this filter and search would copy. An empty name asks for the suggested one. */
-  libraryCollectPlan(id: string, targets: string[], filter: string, query: string, name: string): Promise<CollectPlan>;
+  libraryCollectPlan(id: string, targets: string[], filter: string, query: string, name: string, folder?: string): Promise<CollectPlan>;
   /** Copies those tracks into a verified local collection and returns the new source's id. */
-  libraryCollect(id: string, targets: string[], filter: string, query: string, name: string): Promise<string>;
+  libraryCollect(id: string, targets: string[], filter: string, query: string, name: string, folder?: string): Promise<string>;
   libraryCancelCollect(): Promise<void>;
   onLibraryCollectProgress(cb: (p: LibraryCollectProgress) => void): void;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
@@ -151,10 +154,11 @@ async function tauriApi(): Promise<Api> {
     libraryRemove: (id) => invoke("library_remove", { id }),
     libraryScan: (id) => invoke("library_scan", { id }),
     libraryCancelScan: () => invoke("library_cancel_scan"),
-    libraryTracks: (id, targets, filter, query, offset, limit) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit } }),
+    libraryTracks: (id, targets, filter, query, offset, limit, folder) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit, folder: folder ?? "" } }),
+    libraryFolders: (id) => invoke("library_folders", { id }),
     onLibraryScanProgress: on("library-scan-progress"),
-    libraryCollectPlan: (id, targets, filter, query, name) => invoke("library_collect_plan", { request: { id, targets, filter, query, name } }),
-    libraryCollect: (id, targets, filter, query, name) => invoke("library_collect", { request: { id, targets, filter, query, name } }),
+    libraryCollectPlan: (id, targets, filter, query, name, folder) => invoke("library_collect_plan", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),
+    libraryCollect: (id, targets, filter, query, name, folder) => invoke("library_collect", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),
     libraryCancelCollect: () => invoke("library_cancel_collect"),
     onLibraryCollectProgress: on("library-collect-progress"),
     onDeviceEvent: on("device-event"),

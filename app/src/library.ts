@@ -3,7 +3,7 @@
 // State lives here; app.ts routes views and actions to this module.
 
 import type { Api } from "./api";
-import type { CollectPlan, LibraryCollectProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
+import type { CollectPlan, FolderNode, LibraryCollectProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
 import { gb, html, num, plural, raw, Raw, when } from "./ui";
 
 type Filter = "all" | TrackState;
@@ -39,6 +39,14 @@ const L = {
   total: 0,
   tracksFor: null as string | null,
   loadingTracks: false,
+  /** The folder selected in the browser's tree, relative to the source. */
+  folder: "",
+  /** State counts for the current folder and search, from the last page. */
+  states: null as StateCounts | null,
+  /** Folder trees, fetched when a source is opened in the tree. */
+  folders: new Map<string, FolderNode[]>(),
+  /** Expanded tree nodes: a source id, or "source id|folder path". */
+  open: new Set<string>(),
   /** The collect panel for one source: its plan, the run and the result. */
   collect: null as null | {
     sourceId: string;
@@ -95,7 +103,20 @@ const source = (id: string) => L.sources.find((s) => s.id === id);
 
 /** The folder name of a source, for the path bar. */
 export function librarySourceName(id: string): string {
+  if (id === ALL) return "Collection";
   return source(id)?.name ?? "Source";
+}
+
+/** The browser's id for every source at once. */
+const ALL = "*";
+
+async function loadFolders(id: string) {
+  if (id === ALL || L.folders.has(id)) return;
+  try {
+    L.folders.set(id, await L.host.api.libraryFolders(id));
+  } catch (e) {
+    L.error = String(e);
+  }
 }
 
 export function librarySummary(): { sources: number; tracks: number } {
@@ -115,9 +136,10 @@ async function loadTracks(id: string, more = false) {
   L.loadingTracks = true;
   try {
     const offset = more && L.tracksFor === id ? L.tracks.length : 0;
-    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE);
+    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE, L.folder);
     L.tracks = offset ? [...L.tracks, ...page.tracks] : page.tracks;
     L.total = page.total;
+    L.states = page.states;
     L.tracksFor = id;
   } catch (e) {
     L.error = String(e);
@@ -144,7 +166,7 @@ async function planCollect(name: string) {
   const c = L.collect;
   if (!c) return;
   try {
-    c.plan = await L.host.api.libraryCollectPlan(c.sourceId, L.host.targets(), L.filter, L.query, name);
+    c.plan = await L.host.api.libraryCollectPlan(c.sourceId, L.host.targets(), L.filter, L.query, name, L.folder);
     c.name = c.plan.name;
     c.error = null;
   } catch (e) {
@@ -160,7 +182,7 @@ async function runCollect() {
   c.progress = null;
   L.host.render();
   try {
-    const id = await L.host.api.libraryCollect(c.sourceId, L.host.targets(), L.filter, L.query, c.name);
+    const id = await L.host.api.libraryCollect(c.sourceId, L.host.targets(), L.filter, L.query, c.name, L.folder);
     c.done = { id, name: c.name, tracks: c.plan?.tracks ?? 0 };
   } catch (e) {
     c.error = String(e);
@@ -171,8 +193,11 @@ async function runCollect() {
   L.host.render();
 }
 
-export async function openLibrarySource(id: string) {
+export async function openLibrarySource(id: string, folder = "") {
   L.collect = null;
+  L.folder = folder;
+  L.open.add(id);
+  await loadFolders(id);
   L.filter = "all";
   L.query = "";
   L.tracks = [];
@@ -277,6 +302,23 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       host.render();
       return true;
     }
+    case "library-folder": {
+      // data-id is "source id|folder path"; an empty path is the whole source.
+      const [sourceId, path] = [id.slice(0, id.indexOf("|")), id.slice(id.indexOf("|") + 1)];
+      host.openSource(sourceId);
+      await openLibrarySource(sourceId, path);
+      if (path) L.open.add(`${sourceId}|${path}`);
+      host.render();
+      return true;
+    }
+    case "library-toggle":
+      if (L.open.has(id)) L.open.delete(id);
+      else {
+        L.open.add(id);
+        if (!id.includes("|")) await loadFolders(id);
+      }
+      host.render();
+      return true;
     case "library-filter":
       L.filter = id as Filter;
       if (L.tracksFor) await loadTracks(L.tracksFor);
@@ -432,7 +474,7 @@ export function libraryView(): Raw {
   return html`<div class="library">
     <div class="devtools-heading">
       <div><div class="eyebrow">Music library</div><h1>Your music</h1><p class="muted" style="max-width:640px">Add the folders your music lives in: on this computer, on an external drive or in a synced cloud folder. BoothReady reads them where they are. It never changes, moves or downloads anything.</p></div>
-      <button class="btn" data-act="home">Back</button>
+      <div class="source-actions">${L.sources.some((s) => s.states) ? html`<button class="btn primary" data-act="library-open" data-id="*">Browse the collection</button>` : ""}<button class="btn" data-act="home">Back</button></div>
     </div>
     ${errorBanner()}
     ${L.sources.length
@@ -473,7 +515,7 @@ function trackRow(t: LibraryTrack, i: number): Raw {
     <td class="idx">${String(i + 1).padStart(3, "0")}</td>
     <td class="art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
     <td><b>${t.name}</b>${t.folder ? html`<div class="small faint">${t.folder}</div>` : ""}
-      ${shown.length ? html`<ul class="track-issues">${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul>` : ""}
+      ${shown.length ? html`<details class="track-issues"><summary>${t.state === "blocked" ? "Won't play on" : "No data for"} ${t.issues.map((i) => i.model).join(", ")}</summary><ul>${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul></details>` : ""}
       ${t.note ? html`<div class="small track-note">${t.note}</div>` : ""}
     </td>
     <td>${t.format}${t.detail ? html`<div class="small faint">${t.detail}</div>` : t.state === "cloud_only" ? html`<div class="small faint">not checked</div>` : ""}</td>
@@ -559,35 +601,72 @@ function renderTracks() {
   else L.host.render();
 }
 
+/** The browser's tree: the whole collection, then each source and its folders. */
+function tree(selected: string): Raw {
+  const all = L.sources.reduce((n, s) => n + (s.totals?.tracks ?? 0), 0);
+  const node = (key: string, label: string, count: number, depth: number, hasChildren: boolean, act: string, on: boolean) => html`<div class="rb-node ${on ? "on" : ""}" style="--depth:${depth}">
+      ${hasChildren ? html`<button class="rb-caret" data-act="library-toggle" data-id="${key}" aria-label="${L.open.has(key) ? "Collapse" : "Expand"} ${label}" aria-expanded="${L.open.has(key) ? "true" : "false"}">${raw(`<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="${L.open.has(key) ? "M1 3h8L5 8z" : "M3 1v8l5-4z"}" fill="currentColor"/></svg>`)}</button>` : html`<span class="rb-caret"></span>`}
+      <button class="rb-label" data-act="${act}" data-id="${act === "library-open" ? key : `${key.includes("|") ? key : `${key}|`}`}"><span class="rb-name">${label}</span><b>${num(count)}</b></button>
+    </div>`;
+  const sourceNodes = L.sources.map((s) => {
+    const folders = L.folders.get(s.id) ?? [];
+    const visible = folders.filter((f) => {
+      // Shown when every ancestor folder is expanded.
+      const parts = f.path.split("/");
+      for (let end = 1; end < parts.length; end++) if (!L.open.has(`${s.id}|${parts.slice(0, end).join("/")}`)) return false;
+      return true;
+    });
+    const hasKids = (f: FolderNode) => folders.some((g) => g.path.startsWith(`${f.path}/`));
+    return html`${node(s.id, s.name, s.totals?.tracks ?? 0, 0, !!s.states && (folders.length > 0 || !L.folders.has(s.id)), "library-folder", selected === s.id && !L.folder)}
+      ${L.open.has(s.id) ? visible.map((f) => node(`${s.id}|${f.path}`, f.name, f.tracks, f.depth + 1, hasKids(f), "library-folder", selected === s.id && L.folder === f.path)) : ""}`;
+  });
+  return html`<nav class="rb-tree" aria-label="Library">
+    <div class="rb-section">Collection</div>
+    ${node(ALL, "All tracks", all, 0, false, "library-open", selected === ALL)}
+    <div class="rb-section">Sources</div>
+    ${sourceNodes}
+    <button class="btn link small rb-manage" data-act="open-library">Manage sources</button>
+  </nav>`;
+}
+
 export function librarySourceView(id: string): Raw {
-  const s = source(id);
-  if (!s) return html`<div class="library"><p class="muted">That music source was removed.</p><button class="btn" data-act="open-library">Back to your music</button></div>`;
-  const c = s.states;
+  const all = id === ALL;
+  const s = all ? undefined : source(id);
+  if (!all && !s) return html`<div class="library"><p class="muted">That music source was removed.</p><button class="btn" data-act="open-library">Back to your music</button></div>`;
+  const c = L.states ?? s?.states ?? null;
   const total = c ? STATE_ORDER.reduce((n, k) => n + c[k], 0) : 0;
-  const scanning = s.scanning || L.progress?.source_id === s.id;
-  return html`<div class="library">
+  const scanning = !!s && (s.scanning || L.progress?.source_id === s.id);
+  const title = L.folder ? L.folder.split("/").pop() ?? L.folder : all ? "All tracks" : s!.name;
+  const crumb = all ? "Collection" : [locationLabel(s!.location), s!.name, ...L.folder.split("/").filter(Boolean).slice(0, -1)].join(" · ");
+  const browsable = all || !!s?.states;
+  return html`<div class="library browser">
     <div class="devtools-heading">
-      <div><div class="eyebrow">${locationLabel(s.location)}${s.connected ? "" : " · not connected"}</div><h1>${s.name}</h1><div class="small faint source-path">${s.path}</div></div>
-      <div class="source-actions"><button class="btn" data-act="open-library">Back to your music</button>${scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`}${c && !s.collected_from && !L.collect ? html`<button class="btn primary" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}</div>
+      <div><div class="eyebrow">${crumb}${s && !s.connected ? " · not connected" : ""}</div><h1>${title}</h1>${s ? html`<div class="small faint source-path">${s.path}${L.folder ? `/${L.folder}` : ""}</div>` : html`<div class="small muted">Every track in ${plural(L.sources.length, "source")}.</div>`}</div>
+      <div class="source-actions"><button class="btn" data-act="open-library">Manage sources</button>${s ? (scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`) : ""}${s && s.states && !s.collected_from && !L.collect ? html`<button class="btn primary" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}</div>
     </div>
     ${errorBanner()}
     ${scanning ? html`<div class="banner"><span class="spinner" aria-hidden="true"></span><div>Scanning. ${L.progress?.files ? html`${plural(L.progress.files, "track")} found.` : ""}</div></div>` : ""}
-    ${s.connected ? "" : html`<div class="banner"><div>This drive isn't connected. You're looking at the scan from ${when(s.scanned_unix)}.</div></div>`}
-    <div class="library-top">
-      <div class="small muted">${s.totals ? html`<b>${plural(s.totals.tracks, "track")}</b> · ${gb(s.totals.bytes)} · scanned ${when(s.scanned_unix)}` : "Not scanned yet."}</div>
-      ${playersControl()}
+    ${s && !s.connected ? html`<div class="banner"><div>This drive isn't connected. You're looking at the scan from ${when(s.scanned_unix)}.</div></div>` : ""}
+    ${s ? collectPanel(s) : ""}
+    ${s?.collected_from ? nextStep(s) : ""}
+    <div class="rb">
+      ${tree(id)}
+      <div class="rb-main">
+        <div class="library-top">
+          <div class="small muted">${s?.totals ? html`<b>${plural(s.totals.tracks, "track")}</b> in this source · ${gb(s.totals.bytes)} · scanned ${when(s.scanned_unix)}` : all ? html`<b>${plural(total, "track")}</b> across your sources` : "Not scanned yet."}</div>
+          ${playersControl()}
+        </div>
+        ${c ? stateBar(c) : ""}
+        ${browsable && c
+          ? html`<div class="library-filters rb-filters" role="group" aria-label="Filter tracks">
+                <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
+                ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}
+              </div>
+              <input id="library-search" class="search" type="search" placeholder="Search by track or folder name" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
+              <div id="library-tracks" class="card tracks-card">${trackTable()}</div>`
+          : html`<p class="muted">${s?.totals ? "The track list from the last scan isn't saved on this computer. Scan again to see it." : "Scan this folder to see its tracks."}</p>`}
+      </div>
     </div>
-    ${c ? stateBar(c) : ""}
-    ${collectPanel(s)}
-    ${s.collected_from ? nextStep(s) : ""}
-    ${c
-      ? html`<div class="browse"><div class="library-filters" role="group" aria-label="Filter tracks">
-            <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
-            ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}
-          </div>
-          <div class="browse-main"><input id="library-search" class="search" type="search" placeholder="Search by track or folder name" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
-          <div id="library-tracks" class="card tracks-card">${trackTable()}</div></div></div>`
-      : html`<p class="muted">${s.totals ? "The track list from the last scan isn't saved on this computer. Scan again to see it." : "Scan this folder to see its tracks."}</p>`}
   </div>`;
 }
 

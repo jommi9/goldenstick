@@ -459,6 +459,16 @@ export interface LibraryTrack {
 export interface LibraryPage {
   total: number;
   tracks: LibraryTrack[];
+  /** States of every track in the folder and search, before the state filter. */
+  states: StateCounts;
+}
+
+/** A folder inside a source, listed parent first. */
+export interface FolderNode {
+  path: string;
+  name: string;
+  depth: number;
+  tracks: number;
 }
 
 export interface LibraryScanProgress {
