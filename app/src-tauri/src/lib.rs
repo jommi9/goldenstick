@@ -245,6 +245,7 @@ async fn analyze(app: AppHandle, state: State<'_, AppState>, device_id: String) 
                     ScanProgressEvent {
                         device_id: id2.clone(),
                         files: p.files_done,
+                        total: p.files_total,
                         bytes: p.bytes_done,
                         current: p.current.clone(),
                     },

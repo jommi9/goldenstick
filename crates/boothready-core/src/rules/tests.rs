@@ -31,6 +31,7 @@ fn facts(scheme: PartitionScheme, fs: FilesystemKind, libs: &[LibraryFormat], tr
         damaged_libraries: vec![],
         device_library_missing: 0,
         device_library_changed: 0,
+        device_library_retagged: 0,
         engine_missing: 0,
         library_warnings: vec![],
         library_lag: None,
@@ -269,8 +270,8 @@ fn a_few_tracks_differing_in_size_is_a_note_about_those_tracks() {
     assert!(nxs2.detail.contains(&format!("1 of {total} tracks")), "{}", nxs2.detail);
     assert!(nxs2.detail.contains("The rest match."), "{}", nxs2.detail);
     let fix = a.fixes.iter().find(|f| f.kind == FixKind::ReexportRekordbox).unwrap();
-    assert!(fix.detail.contains(&format!("1 of {total} tracks differ in size")), "{}", fix.detail);
-    assert!(fix.detail.contains("the USB plays as it is"), "{}", fix.detail);
+    assert!(fix.detail.contains(&format!("1 of {total} tracks differ from what rekordbox recorded")), "{}", fix.detail);
+    assert!(fix.detail.contains("The rest of the USB plays as it is."), "{}", fix.detail);
     assert!(!fix.destructive);
 
     // A missing track is a different matter and keeps the stronger wording.

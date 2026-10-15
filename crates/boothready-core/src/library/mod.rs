@@ -11,7 +11,7 @@ pub mod pdb;
 pub mod pdb_fixture;
 mod resolve;
 
-use crate::audio::is_audio_path;
+use crate::audio::{is_audio_path, AudioInfo};
 pub use engine::EngineReport;
 use pdb::{parse_pdb, MAX_PDB_BYTES};
 pub use resolve::PathResolver;
@@ -79,6 +79,77 @@ pub struct LibraryTrack {
     pub db_sample_rate: Option<u32>,
     pub db_bit_depth: Option<u16>,
     pub db_file_size: Option<u64>,
+    #[serde(default)]
+    pub db_duration_secs: Option<u16>,
+    #[serde(default)]
+    pub db_bitrate_kbps: Option<u32>,
+}
+
+/// What a size difference between a file and the export's record means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SizeChange {
+    /// The audio matches what rekordbox recorded, so only the tags changed.
+    /// Serato, for one, stores its cue points and beatgrid in the tags.
+    TagsOnly,
+    /// The length, bitrate or sample rate differs, or could not be compared,
+    /// so the file was probably replaced after the export.
+    Replaced,
+}
+
+/// Compare a mismatched file's audio with the export's record of it.
+///
+/// rekordbox stores each track's length, bitrate and sample rate. When the
+/// file on the drive still has the same length and sample rate, and the same
+/// bitrate where the bitrate is constant, its audio is the one rekordbox
+/// analysed and only the tags around it changed.
+pub fn classify_size_change(track: &LibraryTrack, info: Option<&AudioInfo>) -> SizeChange {
+    let (Some(info), Some(recorded)) = (info, track.db_duration_secs) else { return SizeChange::Replaced };
+    let Some(duration) = info.duration_secs else { return SizeChange::Replaced };
+    let same_length = (duration - f64::from(recorded)).abs() <= 1.5;
+    let same_rate = match (info.sample_rate, track.db_sample_rate) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    };
+    let same_bitrate = match (info.bitrate_kbps, track.db_bitrate_kbps) {
+        (Some(a), Some(b)) if !info.vbr => a.abs_diff(b) <= 2,
+        _ => true,
+    };
+    if same_length && same_rate && same_bitrate {
+        SizeChange::TagsOnly
+    } else {
+        SizeChange::Replaced
+    }
+}
+
+/// Every size mismatch on a drive, classified against the scanned audio.
+pub fn size_changes(dl: &DeviceLibraryReport, audio: &crate::scan::AudioScan) -> Vec<(String, SizeChange)> {
+    use std::collections::HashMap;
+    let probes: HashMap<&str, &AudioInfo> = audio
+        .tracks
+        .iter()
+        .filter_map(|t| match &t.probe {
+            crate::scan::TrackProbe::Ok(info) => Some((t.path.as_str(), info)),
+            crate::scan::TrackProbe::Unreadable(_) => None,
+        })
+        .collect();
+    let tracks: HashMap<&str, &LibraryTrack> = dl.tracks.iter().map(|t| (t.path.as_str(), t)).collect();
+    dl.size_mismatch
+        .iter()
+        .map(|path| {
+            let kind = match tracks.get(path.as_str()) {
+                Some(track) => {
+                    // The scan resolves case-insensitively; look up both spellings.
+                    let info = probes
+                        .get(path.as_str())
+                        .or_else(|| probes.iter().find(|(p, _)| p.eq_ignore_ascii_case(path)).map(|(_, i)| i));
+                    classify_size_change(track, info.copied())
+                }
+                None => SizeChange::Replaced,
+            };
+            (path.clone(), kind)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +163,9 @@ pub struct DeviceLibraryReport {
     pub missing: Vec<String>,
     /// Tracks whose file size differs from what the export recorded.
     pub size_mismatch: Vec<String>,
+    /// The mismatched files whose tags hold Serato data.
+    #[serde(default)]
+    pub serato_tagged: Vec<String>,
     pub parse_error: Option<String>,
     pub warnings: Vec<String>,
 }
@@ -190,12 +264,8 @@ impl LibraryReport {
                 if !dl.missing.is_empty() {
                     p.push(format!("{} tracks in the rekordbox export are missing from the drive", dl.missing.len()));
                 }
-                if !dl.size_mismatch.is_empty() {
-                    p.push(format!(
-                        "{} tracks don't match the file size recorded in the rekordbox export",
-                        dl.size_mismatch.len()
-                    ));
-                }
+                // Size differences are described by the drive summary, which
+                // can tell retagged files from replaced ones.
             }
             p.extend(rb.lag.iter().map(LibraryLag::describe));
             p.extend(rb.warnings.iter().cloned());
@@ -325,6 +395,21 @@ fn scan_rekordbox(resolver: &mut PathResolver) -> Option<RekordboxReport> {
     Some(RekordboxReport { device_library, one_library, lag, analysis_files, has_settings, warnings })
 }
 
+/// True when the leading ID3v2 tag of a file holds Serato data. Reads at
+/// most the tag, capped at 4 MiB.
+fn has_serato_tags(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = fs::File::open(path) else { return false };
+    let mut head = [0u8; 10];
+    if file.read_exact(&mut head).is_err() || &head[..3] != b"ID3" {
+        return false;
+    }
+    let size = head[6..10].iter().fold(0usize, |n, b| (n << 7) | usize::from(b & 0x7f));
+    let mut tag = vec![0u8; size.min(4 << 20)];
+    let n = file.read(&mut tag).unwrap_or(0);
+    tag[..n].windows(6).any(|w| w == b"Serato")
+}
+
 fn read_device_library(path: &Path, resolver: &mut PathResolver) -> DeviceLibraryReport {
     let meta = fs::metadata(path).ok();
     let mut report = DeviceLibraryReport {
@@ -335,6 +420,7 @@ fn read_device_library(path: &Path, resolver: &mut PathResolver) -> DeviceLibrar
         playlists: vec![],
         missing: vec![],
         size_mismatch: vec![],
+        serato_tagged: vec![],
         parse_error: None,
         warnings: vec![],
     };
@@ -364,6 +450,9 @@ fn read_device_library(path: &Path, resolver: &mut PathResolver) -> DeviceLibrar
             Some(m) => {
                 // export.pdb stores size as u32; compare modulo 2^32.
                 if t.file_size != 0 && (m.len() & 0xFFFF_FFFF) as u32 != t.file_size {
+                    if existing(resolver, &rel).is_some_and(|p| has_serato_tags(&p)) {
+                        report.serato_tagged.push(rel.clone());
+                    }
                     report.size_mismatch.push(rel.clone());
                 }
             }
@@ -376,6 +465,8 @@ fn read_device_library(path: &Path, resolver: &mut PathResolver) -> DeviceLibrar
             db_sample_rate: Some(t.sample_rate).filter(|&r| r > 0),
             db_bit_depth: Some(t.sample_depth).filter(|&d| d > 0),
             db_file_size: Some(t.file_size as u64).filter(|&s| s > 0),
+            db_duration_secs: Some(t.duration_secs).filter(|&d| d > 0),
+            db_bitrate_kbps: Some(t.bitrate).filter(|&b| b > 0),
         });
     }
     report.playlists = pdb
