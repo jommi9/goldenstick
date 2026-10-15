@@ -1131,6 +1131,16 @@ fn collect_plan(
     Ok((plan, selection, destination))
 }
 
+/// Allow the window to stream one track and return its file path, which
+/// the UI turns into an asset URL. Only audio files inside a source are
+/// allowed, one at a time as they are played.
+#[tauri::command]
+fn library_play(app: AppHandle, state: State<'_, AppState>, id: String, path: String) -> Res<String> {
+    let file = state.with_library(&app, |library| library.playable_path(&id, &path))??;
+    app.asset_protocol_scope().allow_file(&file).map_err(e2s)?;
+    Ok(file.display().to_string())
+}
+
 /// The folders inside a source, for the browser's tree.
 #[tauri::command]
 fn library_folders(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<Vec<library::FolderNode>> {
@@ -1288,6 +1298,7 @@ pub fn run() {
             library_cancel_scan,
             library_tracks,
             library_folders,
+            library_play,
             library_collect_plan,
             library_collect,
             library_cancel_collect,

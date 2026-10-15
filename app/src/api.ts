@@ -85,6 +85,8 @@ export interface Api {
   /** `id` may be "*" for every source at once. `folder` narrows to a folder inside the source. */
   libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number, folder?: string): Promise<LibraryPage>;
   libraryFolders(id: string): Promise<FolderNode[]>;
+  /** A URL the webview can play one track from. The path is relative to the source. */
+  libraryPlayUrl(id: string, path: string): Promise<string>;
   onLibraryScanProgress(cb: (p: LibraryScanProgress) => void): void;
   /** What collecting the tracks shown for this filter and search would copy. An empty name asks for the suggested one. */
   libraryCollectPlan(id: string, targets: string[], filter: string, query: string, name: string, folder?: string): Promise<CollectPlan>;
@@ -108,7 +110,7 @@ declare global {
 export const inTauri = typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 
 async function tauriApi(): Promise<Api> {
-  const { invoke } = await import("@tauri-apps/api/core");
+  const { convertFileSrc, invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
   const on = <T>(name: string) => (cb: (p: T) => void) => {
     void listen<T>(name, (e) => cb(e.payload));
@@ -156,6 +158,7 @@ async function tauriApi(): Promise<Api> {
     libraryCancelScan: () => invoke("library_cancel_scan"),
     libraryTracks: (id, targets, filter, query, offset, limit, folder) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit, folder: folder ?? "" } }),
     libraryFolders: (id) => invoke("library_folders", { id }),
+    libraryPlayUrl: async (id, path) => convertFileSrc(await invoke<string>("library_play", { id, path })),
     onLibraryScanProgress: on("library-scan-progress"),
     libraryCollectPlan: (id, targets, filter, query, name, folder) => invoke("library_collect_plan", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),
     libraryCollect: (id, targets, filter, query, name, folder) => invoke("library_collect", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),

@@ -89,6 +89,8 @@ pub struct Selection {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LibraryTrack {
+    /// The source the track belongs to, so the collection view can play it.
+    pub source: String,
     pub path: String,
     pub name: String,
     pub folder: String,
@@ -468,7 +470,7 @@ impl LibraryState {
                     continue;
                 }
                 if total as usize >= offset && tracks.len() < limit {
-                    let mut row = track_row(track, state, issues);
+                    let mut row = track_row(sid, track, state, issues);
                     if let Some(source) = &label {
                         row.folder =
                             if row.folder.is_empty() { source.clone() } else { format!("{source}/{}", row.folder) };
@@ -479,6 +481,25 @@ impl LibraryState {
             }
         }
         Ok(LibraryPage { total, tracks, states })
+    }
+
+    /// The file behind a track, for playing it. The path must name an audio
+    /// file inside the source folder: named components only, no symlink out.
+    pub fn playable_path(&mut self, id: &str, path: &str) -> Result<PathBuf, String> {
+        let record = self.record(id)?;
+        let relative = Path::new(path);
+        if path.is_empty() || !relative.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+            return Err("That isn't a track in this source.".to_string());
+        }
+        if !boothready_core::audio::is_audio_path(relative) {
+            return Err("That file isn't audio.".to_string());
+        }
+        let root = record.path.canonicalize().map_err(|_| "The source folder can't be reached.".to_string())?;
+        let file = root.join(relative).canonicalize().map_err(|_| "That track isn't there any more.".to_string())?;
+        if !file.starts_with(&root) || !file.is_file() {
+            return Err("That isn't a track in this source.".to_string());
+        }
+        Ok(file)
     }
 
     /// The folders inside a source with the number of tracks below each.
@@ -678,7 +699,7 @@ fn detail_label(info: &AudioInfo) -> String {
     parts.join(", ")
 }
 
-fn track_row(track: &SourceTrack, state: TrackState, issues: Vec<PlayerIssue>) -> LibraryTrack {
+fn track_row(source: &str, track: &SourceTrack, state: TrackState, issues: Vec<PlayerIssue>) -> LibraryTrack {
     let (folder, name) = match track.path.rsplit_once('/') {
         Some((folder, name)) => (folder.to_string(), name.to_string()),
         None => (String::new(), track.path.clone()),
@@ -689,7 +710,18 @@ fn track_row(track: &SourceTrack, state: TrackState, issues: Vec<PlayerIssue>) -
         Some(TrackProbe::Unreadable(reason)) => (extension, String::new(), Some(reason.clone())),
         None => (extension, String::new(), None),
     };
-    LibraryTrack { path: track.path.clone(), name, folder, size: track.size, format, detail, state, note, issues }
+    LibraryTrack {
+        source: source.to_string(),
+        path: track.path.clone(),
+        name,
+        folder,
+        size: track.size,
+        format,
+        detail,
+        state,
+        note,
+        issues,
+    }
 }
 
 #[cfg(test)]
@@ -900,6 +932,28 @@ mod tests {
 
         let picked = library.selection("demo-computer", &targets, "all", "", "Hi-Res").unwrap();
         assert_eq!(picked.paths.len(), 4);
+    }
+
+    #[test]
+    fn only_audio_inside_a_source_can_be_played() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let mut library = LibraryState::demo(&root).unwrap();
+        let file = library.playable_path("demo-computer", "Hi-Res/Ambient Intro.flac").unwrap();
+        assert!(file.ends_with("Hi-Res/Ambient Intro.flac") && file.is_file());
+        for bad in
+            ["../Google Drive/My Drive/Promos 2026/Edits/Opening Tool.mp3", "/etc/hosts", "", "Hi-Res/missing.flac"]
+        {
+            assert!(library.playable_path("demo-computer", bad).is_err(), "{bad}");
+        }
+        std::fs::write(root.join("Music/DJ Library/notes.txt"), b"x").unwrap();
+        assert!(library.playable_path("demo-computer", "notes.txt").is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("Google Drive"), root.join("Music/DJ Library/link.mp3")).unwrap();
+            assert!(library.playable_path("demo-computer", "link.mp3").is_err(), "a link out of the source");
+        }
+        assert!(library.playable_path("missing", "Hi-Res/Ambient Intro.flac").is_err());
     }
 
     #[test]
