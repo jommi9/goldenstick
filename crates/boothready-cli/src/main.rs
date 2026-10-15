@@ -2,6 +2,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod analyze;
 mod demo;
 mod render;
 mod staging;
@@ -131,6 +132,17 @@ enum Cmd {
         /// Where to write the report (default: boothready-diagnostics-<os>-<time>.json).
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Analyse one track: beat grid, key, phrases and waveforms, written as
+    /// the ANLZ files Pioneer players read. Only writes into --out.
+    Analyze {
+        audio: PathBuf,
+        /// Folder for ANLZ0000.DAT, .EXT and .2EX.
+        #[arg(long)]
+        out: PathBuf,
+        /// Beat grid: normal (steady tempo), dynamic (changing tempo) or auto.
+        #[arg(long, default_value = "normal")]
+        rhythm_mode: String,
     },
     /// Build an MBR + FAT32 disk image (never touches devices).
     MakeImage {
@@ -340,6 +352,13 @@ fn main() -> Result<()> {
                 Ok(()) => println!("Safe to remove {}.", dev.raw_display_name()),
                 Err(e) => bail!("{e}"),
             }
+        }
+        Cmd::Analyze { audio, out, rhythm_mode } => {
+            let report = analyze::analyze(audio, out, analyze::rhythm_mode(rhythm_mode)?)?;
+            if cli.json {
+                return print_json(&report);
+            }
+            println!("{}", analyze::describe(&report, out));
         }
         Cmd::MakeImage { path, size_gb, label } => {
             if path.exists() && !std::fs::metadata(path)?.is_file() {

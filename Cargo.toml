@@ -7,6 +7,7 @@ members = [
     "crates/boothready-helper",
     "crates/boothready-testlab",
     "crates/boothready-cli",
+    "crates/djbooth-analyzer",
     "app/src-tauri",
 ]
 default-members = [
@@ -16,6 +17,7 @@ default-members = [
     "crates/boothready-helper",
     "crates/boothready-testlab",
     "crates/boothready-cli",
+    "crates/djbooth-analyzer",
 ]
 
 [workspace.package]
@@ -32,6 +34,7 @@ boothready-model = { path = "crates/boothready-model" }
 boothready-core = { path = "crates/boothready-core", default-features = false }
 boothready-platform = { path = "crates/boothready-platform" }
 boothready-testlab = { path = "crates/boothready-testlab" }
+djbooth-analyzer = { path = "crates/djbooth-analyzer" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
