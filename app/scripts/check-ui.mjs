@@ -265,6 +265,27 @@ async function checkLibrary(page, text, at) {
     }
   }
 
+  // The browser: a folder in the tree narrows the list to that folder, and
+  // the collection holds every source's tracks.
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.locator('[data-act="library-open"][data-id="demo-computer"]').click();
+  await page.getByRole("table").waitFor();
+  check((await page.locator(".rb-tree").count()) === 1, "the source opens in the browser with its tree");
+  const hiRes = lib.tracks["demo-computer"].filter((t) => t.folder === "Hi-Res");
+  await page.locator('[data-act="library-folder"][data-id="demo-computer|Hi-Res"]').click();
+  await page.waitForTimeout(150);
+  await at("library-folder Hi-Res");
+  same(await page.locator(".tracks tbody tr").count(), hiRes.length, "a folder in the tree lists only its tracks");
+  includes(await text("main#main h1"), "Hi-Res", "the selected folder names the view");
+  await page.locator('[data-act="library-open"][data-id="*"]').click();
+  await page.getByRole("table").waitFor();
+  await page.waitForTimeout(150);
+  await at("library-collection-all");
+  const everything = lib.sources.reduce((n, s) => n + lib.tracks[s.id].length, 0);
+  includes(await text(".tracks-foot"), `of ${everything.toLocaleString("en-US")}`, "the collection holds every source's tracks");
+  await page.locator('[data-act="library-folder"][data-id="demo-cloud|"]').click();
+  await page.getByRole("table").waitFor();
+
   // Collecting the cloud folder: the plan matches the scan, and the new
   // collection shows what the engine read once the tracks were local.
   const cloud = byId["demo-cloud"];
