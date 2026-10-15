@@ -1,0 +1,33 @@
+[package]
+name = "djbooth-analyzer"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+# Upstream uses let-chains, so this crate needs Rust 1.88 even though the
+# rest of the workspace declares 1.85. CI builds with stable.
+rust-version = "1.88"
+publish = false
+description = "Clean-room audio DSP and Rekordbox-compatible DAT/EXT/2EX generation"
+homepage = "https://djbooth.ai"
+readme = "ANLZ_COMPATIBILITY.md"
+repository = "https://github.com/gakonst/djbooth"
+include = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "src/**",
+  "tests/**",
+  "ANLZ_COMPATIBILITY.md",
+  "THIRD_PARTY_LICENSES.md",
+]
+
+[dependencies]
+anyhow = "1"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+rustfft = "6"
+symphonia = { version = "0.6", default-features = false, features = ["all-codecs", "all-formats", "all-meta", "opt-simd"] }
+
+[dev-dependencies]
+tempfile = "3"

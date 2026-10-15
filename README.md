@@ -60,6 +60,7 @@ The release config ships `boothready-helper` next to the app's executable. A dev
 | `crates/boothready-platform` | Device discovery, watching and ejecting on Linux (sysfs), macOS (`diskutil`/`ioreg`) and Windows (storage IOCTLs, SetupAPI, CfgMgr32), plus the folder-backed demo platform. |
 | `crates/boothready-helper` | The elevated helper. It takes a closed set of JSON requests and refuses to erase unless the drive still matches what the user confirmed. |
 | `crates/boothready-testlab` | Virtual USB scenarios shared by the CLI and the desktop Test lab panel. |
+| `crates/djbooth-analyzer` | djbooth's clean-room track analyser (MIT): beat grid, tempo, key, phrases and waveforms, written as the ANLZ files Pioneer players read. See its `UPSTREAM.md`. |
 | `crates/boothready-cli` | The `boothready` command. |
 | `app/` | The Tauri 2 desktop app with a TypeScript UI. |
 | `docs/ARCHITECTURE.md` | How the pieces fit, the safety model and what still needs verifying. |
