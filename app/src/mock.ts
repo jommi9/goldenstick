@@ -49,6 +49,44 @@ type Stage = "initial" | "prepared" | "exported";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const tones = new Map<string, string>();
+
+/**
+ * A quiet 30-second stand-in for a demo track: a soft tone pulsing at 124
+ * BPM, pitched from the path so each track sounds different.
+ */
+function toneUrl(path: string): string {
+  const cached = tones.get(path);
+  if (cached) return cached;
+  let hash = 0;
+  for (const c of path) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+  const rate = 8000;
+  const samples = rate * 30;
+  const pitch = 110 * 2 ** ((hash % 12) / 12);
+  const beat = (60 / 124) * rate;
+  const wav = new DataView(new ArrayBuffer(44 + samples));
+  const text = (at: number, s: string) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  wav.setUint32(4, 36 + samples, true);
+  text(8, "WAVEfmt ");
+  wav.setUint32(16, 16, true);
+  wav.setUint16(20, 1, true);
+  wav.setUint16(22, 1, true);
+  wav.setUint32(24, rate, true);
+  wav.setUint32(28, rate, true);
+  wav.setUint16(32, 1, true);
+  wav.setUint16(34, 8, true);
+  text(36, "data");
+  wav.setUint32(40, samples, true);
+  for (let i = 0; i < samples; i++) {
+    const envelope = Math.exp(-((i % beat) / beat) * 5);
+    wav.setUint8(44 + i, 128 + Math.round(24 * envelope * Math.sin((2 * Math.PI * pitch * i) / rate)));
+  }
+  const url = URL.createObjectURL(new Blob([wav.buffer], { type: "audio/wav" }));
+  tones.set(path, url);
+  return url;
+}
+
 export async function createMockApi(): Promise<Api> {
   const data = (await import("./mock-data.json")).default as unknown as Snapshot;
   const params = new URLSearchParams(location.search);
@@ -131,7 +169,7 @@ export async function createMockApi(): Promise<Api> {
   };
   /** Every source's tracks, with the source's name in front of the folder, as the engine does for "*". */
   const allSourcesTracks = (targets: string[]): LibraryTrack[] =>
-    listSources(targets).flatMap((s) => tracksOf(s.id, targets).map((t) => ({ ...t, folder: t.folder ? `${s.name}/${t.folder}` : s.name })));
+    listSources(targets).flatMap((s) => tracksOf(s.id, targets).map((t) => ({ ...t, source: s.id, folder: t.folder ? `${s.name}/${t.folder}` : s.name })));
   const foldersOf = (id: string): FolderNode[] => {
     const counts = new Map<string, number>();
     for (const t of tracksOf(id, [])) {
@@ -182,10 +220,10 @@ export async function createMockApi(): Promise<Api> {
   };
   const tracksOf = (id: string, targets: string[]): LibraryTrack[] => {
     const lib = libraryFor(targets);
-    if (lib.tracks[id]) return lib.tracks[id];
     const made = collections.find((c) => c.id === id);
-    if (made) return collectionTracks(made, targets);
-    return addedSources.find((a) => a.source.id === id && a.scanned) ? lib.tracks["demo-computer"] : [];
+    const list = lib.tracks[id] ?? (made ? collectionTracks(made, targets) : addedSources.find((a) => a.source.id === id && a.scanned) ? lib.tracks["demo-computer"] : []);
+    // Stand-in tracks borrowed from another source still belong to this one.
+    return list.some((t) => t.source !== id) ? list.map((t) => ({ ...t, source: id })) : list;
   };
   const listSources = (targets: string[]): LibrarySource[] => {
     const lib = libraryFor(targets);
@@ -490,6 +528,12 @@ export async function createMockApi(): Promise<Api> {
       return { total: matching.length, tracks: matching.slice(offset, offset + limit), states: countStates(scoped) };
     },
     libraryFolders: async (id) => foldersOf(id),
+    libraryPlayUrl: async (id, path) => {
+      const t = tracksOf(id, []).find((x) => x.path === path);
+      if (!t || t.state === "unreadable") throw new Error("That isn't a track in this source.");
+      if (params.get("player") === "unsupported") return "data:audio/x-aiff;base64,AAAA";
+      return toneUrl(path);
+    },
     onLibraryScanProgress: on("library-scan-progress"),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),

@@ -445,6 +445,8 @@ export interface PlayerIssue {
 }
 
 export interface LibraryTrack {
+  /** The id of the source the track is in. */
+  source: string;
   path: string;
   name: string;
   folder: string;
