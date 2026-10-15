@@ -90,7 +90,7 @@ export interface Api {
   libraryCancelCollect(): Promise<void>;
   onLibraryCollectProgress(cb: (p: LibraryCollectProgress) => void): void;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
-  onScanProgress(cb: (p: { device_id: string; files: number; bytes: number; current: string }) => void): void;
+  onScanProgress(cb: (p: { device_id: string; files: number; total: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
   onVerifyProgress(cb: (p: { device_id: string; progress: VerifyProgress }) => void): void;
   onCopyProgress(cb: (p: { device_id: string; progress: VerifyProgress }) => void): void;

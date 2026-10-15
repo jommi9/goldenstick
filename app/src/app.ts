@@ -90,7 +90,7 @@ const S = {
   view: { v: "home" } as View,
   devices: [] as DeviceCard[],
   summaries: new Map<string, DriveSummary>(),
-  scanning: new Map<string, { files: number; bytes: number }>(),
+  scanning: new Map<string, { files: number; total?: number; bytes: number }>(),
   scanErrors: new Map<string, string>(),
   confirmedId: new Set<string>(),
   advanceWhenScanned: new Set<string>(),
@@ -1188,7 +1188,7 @@ function identifyView(id: string): Raw {
         <dt>Current volume</dt><dd>${vol?.label ?? s?.fs_label ?? "No name"}</dd>
         <dt>Filesystem</dt><dd>${s?.filesystem ?? (vol?.filesystem ? FS_LABEL[vol.filesystem] : "Unknown")}</dd>
         <dt>Partition layout</dt><dd>${s?.scheme ?? c?.device.partition_scheme?.toUpperCase() ?? "Unknown"}</dd>
-        <dt>Status</dt><dd>${err ? html`<span style="color:var(--bad)">${err}</span>` : scanning ? html`<span class="spinner" aria-hidden="true"></span> Scanning… ${scanning.files ? plural(scanning.files, "track") : ""}` : "Scanned"}</dd>
+        <dt>Status</dt><dd>${err ? html`<span style="color:var(--bad)">${err}</span>` : scanning ? html`<span class="spinner" aria-hidden="true"></span> Scanning… ${scanning.files ? (scanning.total ? `${num(scanning.files)} of ${plural(scanning.total, "track")}` : plural(scanning.files, "track")) : ""}` : "Scanned"}</dd>
       </dl>
       <p class="small faint" style="margin-bottom:0">This is the link BoothReady negotiated with the computer. A USB-C adapter or hub may be in between; BoothReady checks the storage device itself.</p>
     </section>
@@ -1217,6 +1217,23 @@ function looksDifferentView(): Raw {
     <div class="actions"><button class="btn" data-act="skip-candidate">None of these</button></div>`;
 }
 
+/** The DJ libraries on a drive and how many tracks or crates each holds. */
+function librarySizes(s: DriveSummary): string {
+  const parts: string[] = [];
+  if (s.library_tracks) parts.push(`rekordbox ${plural(s.library_tracks, "track")}`);
+  if (s.engine_tracks !== null) parts.push(`Engine DJ ${plural(s.engine_tracks, "track")}`);
+  if (s.serato_crates !== null) parts.push(`Serato ${plural(s.serato_crates, "crate")}`);
+  return parts.length > 1 || s.serato_crates !== null ? `Libraries on this USB: ${parts.join(", ")}.` : "";
+}
+
+/** Denon players read only the Engine library, so a smaller one shows them less music. */
+function engineGap(s: DriveSummary): string {
+  if (s.engine_tracks === null || !s.library_tracks) return "";
+  const gap = s.library_tracks - s.engine_tracks;
+  if (gap <= Math.max(2, s.library_tracks * 0.02)) return "";
+  return `The Engine DJ library lists ${plural(gap, "track")} fewer than the rekordbox export, so Denon players see less of your music.`;
+}
+
 function assessmentView(id: string): Raw {
   const s = summary(id);
   if (!s) return html`<p><span class="spinner"></span> Scanning…</p>`;
@@ -1239,6 +1256,8 @@ function assessmentView(id: string): Raw {
       </div>
       <ul class="checks">${a?.checks.map((c) => html`<li>${raw(statusIcon(c.status))} <span>${c.label}</span></li>`)}
         ${s.library_problems.map((p) => html`<li>${raw(statusIcon("warn"))} <span>${p}</span></li>`)}
+        ${s.library_notes.map((p) => html`<li>${raw(statusIcon("info"))} <span>${p}</span></li>`)}
+        ${engineGap(s) ? html`<li>${raw(statusIcon("warn"))} <span>${engineGap(s)}</span></li>` : ""}
         ${s.dirty ? html`<li>${raw(statusIcon("warn"))} <span>Not ejected safely last time</span></li>` : ""}
         ${s.apple_double ? html`<li>${raw(statusIcon("warn"))} <span>${plural(s.apple_double, "hidden macOS '._' file")} next to your music</span></li>` : ""}
       </ul>
@@ -1247,6 +1266,7 @@ function assessmentView(id: string): Raw {
         <div class="stat"><b>${num(a?.tracks.compatible_everywhere ?? 0)}</b><span class="small muted">play on typical club gear</span></div>
         <div class="stat"><b>${num(a?.tracks.need_attention ?? 0)}</b><span class="small muted">in a format some gear can't play</span></div>
       </div>
+      ${librarySizes(s) ? html`<p class="small muted" style="margin:10px 0 0">${librarySizes(s)}</p>` : ""}
       <p class="small faint" style="margin-top:10px">${num(s.content.files)} files, ${gb(s.content.used_bytes)} used${s.content.last_modified_unix ? `, last changed ${when(s.content.last_modified_unix)}` : ""}. ${s.layout_source === "os" ? "Layout as reported by the operating system." : ""}</p>
       ${rebuild
         ? html`<div class="actions">
@@ -1672,7 +1692,7 @@ export async function start(api: Api) {
   api.onDeviceEvent((e) => void onDeviceEvent(e as never));
   api.onScanProgress((p) => {
     if (S.scanning.has(p.device_id)) {
-      S.scanning.set(p.device_id, { files: p.files, bytes: p.bytes });
+      S.scanning.set(p.device_id, { files: p.files, total: p.total, bytes: p.bytes });
       if (S.view.v === "identify") render();
     }
   });
