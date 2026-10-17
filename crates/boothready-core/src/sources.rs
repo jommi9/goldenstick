@@ -9,6 +9,7 @@
 //!
 //! Scan results hold private file names and belong outside version control.
 
+use crate::audio::tags::TrackTags;
 use crate::audio::{is_audio_path, probe_file, ProbeError};
 use crate::library::{is_ignored_dir, relative};
 use crate::rules::{evaluate_audio, DeviceProfile, TrackVerdict};
@@ -39,6 +40,10 @@ pub struct SourceTrack {
     pub availability: Availability,
     /// Header probe. `None` for a cloud-only file, which is never opened.
     pub probe: Option<TrackProbe>,
+    /// Artist, title, BPM and key from the file's tags. `None` for a
+    /// cloud-only file, an untagged file, or a scan made before tags were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<TrackTags>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -48,6 +53,10 @@ pub struct SourceScan {
     pub skipped: u32,
     /// The scan was stopped early, so the track list is incomplete.
     pub cancelled: bool,
+    /// The scan read the local files' tags. Scans saved by older versions
+    /// didn't, so their tracks have no artist or BPM until scanned again.
+    #[serde(default)]
+    pub tags_read: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,7 +131,7 @@ pub fn scan_source(
     if !fs::metadata(root)?.is_dir() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "the music source must be a folder"));
     }
-    let mut scan = SourceScan::default();
+    let mut scan = SourceScan { tags_read: cfg!(feature = "tags"), ..SourceScan::default() };
     let mut p = SourceProgress::default();
     let walk = walkdir::WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| !is_ignored_dir(e));
     for entry in walk {
@@ -160,12 +169,22 @@ pub fn scan_source(
                 Err(e) => TrackProbe::Unreadable(e.to_string()),
             })
         };
+        // Tags are read only from a file that is already on this computer
+        // and probed as audio, so reading them never downloads anything.
+        #[cfg(feature = "tags")]
+        let tags = match &probe {
+            Some(TrackProbe::Ok(_)) => crate::audio::tags::read_tags(entry.path()),
+            _ => None,
+        };
+        #[cfg(not(feature = "tags"))]
+        let tags = None;
         let track = SourceTrack {
             path: relative(root, entry.path()),
             size: meta.len(),
             modified_unix: meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()),
             availability: if cloud_only { Availability::CloudOnly } else { Availability::Local },
             probe,
+            tags,
         };
         p.files += 1;
         p.bytes += track.size;
@@ -390,6 +409,71 @@ mod tests {
 
     fn scan(root: &Path) -> SourceScan {
         scan_source(root, &listed_placeholder(root), &AtomicBool::new(false), |_| {}).unwrap()
+    }
+
+    /// Writes a tag the way a DJ tagger would, in the format's own tag type.
+    #[cfg(feature = "tags")]
+    fn tag(path: &Path, tag_type: lofty::tag::TagType, bpm: &str, key: &str) {
+        use lofty::prelude::{Accessor, ItemKey, TagExt};
+        let mut tag = lofty::tag::Tag::new(tag_type);
+        tag.set_title("Night Drive".to_string());
+        tag.set_artist("Test Artist".to_string());
+        tag.set_album("Test EP".to_string());
+        tag.set_genre("Techno".to_string());
+        assert!(tag.insert_text(ItemKey::RecordingDate, "2019-03-01".to_string()));
+        // ID3 keeps the tempo in TBPM and MP4 in "tmpo", which lofty calls
+        // the integer BPM; Vorbis comments have a free-text BPM field.
+        let key_for_bpm =
+            if tag_type == lofty::tag::TagType::VorbisComments { ItemKey::Bpm } else { ItemKey::IntegerBpm };
+        assert!(tag.insert_text(key_for_bpm, bpm.to_string()));
+        assert!(tag.insert_text(ItemKey::InitialKey, key.to_string()));
+        tag.save_to_path(path, lofty::config::WriteOptions::default()).unwrap();
+    }
+
+    #[cfg(feature = "tags")]
+    #[test]
+    fn scan_reads_tags_from_local_files_of_every_format() {
+        use lofty::tag::TagType;
+        let dir = fixture();
+        let root = dir.path();
+        write(root, "Tagged/Track.wav", &audio::wav(44_100, 16, 2, 22_050, false));
+        write(root, "Tagged/Track.m4a", &audio::m4a("aac-lc", 44_100, 30));
+        tag(&root.join("House/Grey.mp3"), TagType::Id3v2, "128", "Am");
+        tag(&root.join("House/Subzero.aiff"), TagType::Id3v2, "124.5", "8A");
+        tag(&root.join("Hi-Res/Ambient.flac"), TagType::VorbisComments, "90", "F#m");
+        tag(&root.join("Tagged/Track.wav"), TagType::Id3v2, "174", "1d");
+        tag(&root.join("Tagged/Track.m4a"), TagType::Mp4Ilst, "120", "Bbm");
+        // The cloud-only file has a tag too, which the scan must not open.
+        tag(&root.join("Promos/Online Only.wav"), TagType::Id3v2, "130", "C");
+        let scan = scan(root);
+        assert!(scan.tags_read);
+        let tags = |p: &str| scan.tracks.iter().find(|t| t.path == p).unwrap().tags.clone();
+        for (path, bpm, key) in [
+            ("House/Grey.mp3", 128.0, "Am"),
+            ("House/Subzero.aiff", 124.5, "Am"),
+            ("Hi-Res/Ambient.flac", 90.0, "F#m"),
+            ("Tagged/Track.wav", 174.0, "C"),
+            ("Tagged/Track.m4a", 120.0, "Bbm"),
+        ] {
+            let t = tags(path).unwrap_or_else(|| panic!("{path} has no tags"));
+            assert_eq!(t.title.as_deref(), Some("Night Drive"), "{path}");
+            assert_eq!(t.artist.as_deref(), Some("Test Artist"), "{path}");
+            assert_eq!(t.album.as_deref(), Some("Test EP"), "{path}");
+            assert_eq!(t.genre.as_deref(), Some("Techno"), "{path}");
+            assert_eq!(t.year, Some(2019), "{path}");
+            assert_eq!(t.bpm, Some(bpm), "{path}");
+            assert_eq!(t.key.as_deref(), Some(key), "{path}");
+        }
+        assert_eq!(tags("Promos/Online Only.wav"), None, "a cloud-only file is never opened");
+        assert_eq!(tags("Downloads/Broken.mp3"), None);
+    }
+
+    #[test]
+    fn scans_saved_before_tags_still_load() {
+        let old = r#"{"tracks":[{"path":"a.mp3","size":1,"modified_unix":null,"availability":"local","probe":null}],"skipped":0,"cancelled":false}"#;
+        let scan: SourceScan = serde_json::from_str(old).unwrap();
+        assert!(!scan.tags_read);
+        assert_eq!(scan.tracks[0].tags, None);
     }
 
     #[test]

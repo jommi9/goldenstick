@@ -49,6 +49,54 @@ type Stage = "initial" | "prepared" | "exported";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Every search word must appear in the path or one of the tags, as in the engine. */
+function matchesSearch(t: LibraryTrack, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = [t.path, t.title, t.artist, t.album, t.genre].filter(Boolean).join("\n").toLowerCase();
+  return words.every((w) => haystack.includes(w));
+}
+
+const STATE_RANK: Record<string, number> = { ready: 0, cloud_only: 1, blocked: 2, unchecked: 3, unreadable: 4 };
+
+/** The engine's column order: missing values last either way, ties in folder order. */
+function compareTracks(sort: string, desc: boolean, a: LibraryTrack, b: LibraryTrack): number {
+  const stem = (t: LibraryTrack) => t.name.replace(/\.[^.]+$/, "");
+  const title = (t: LibraryTrack) => (t.title ?? stem(t)).toLowerCase();
+  const wheel = (t: LibraryTrack) => (t.camelot ? parseInt(t.camelot, 10) * 2 + (t.camelot.endsWith("B") ? 1 : 0) : null);
+  const value = (t: LibraryTrack): string | number | null => {
+    switch (sort) {
+      case "title":
+        return title(t);
+      case "artist":
+        return t.artist?.toLowerCase() ?? null;
+      case "album":
+        return t.album?.toLowerCase() ?? null;
+      case "bpm":
+        return t.bpm;
+      case "key":
+        return wheel(t);
+      case "time":
+        return t.duration;
+      case "size":
+        return t.size;
+      case "format":
+        return t.name.split(".").pop()?.toLowerCase() ?? "";
+      case "state":
+        return STATE_RANK[t.state];
+      default:
+        return null;
+    }
+  };
+  const x = value(a);
+  const y = value(b);
+  let order = 0;
+  if (x !== null && y !== null) order = (x < y ? -1 : x > y ? 1 : 0) * (desc ? -1 : 1);
+  else if (x !== null) order = -1;
+  else if (y !== null) order = 1;
+  if (!order && sort === "artist") order = title(a) < title(b) ? -1 : title(a) > title(b) ? 1 : 0;
+  return order || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+}
+
 const tones = new Map<string, string>();
 
 /**
@@ -164,8 +212,7 @@ export async function createMockApi(): Promise<Api> {
   };
   const inFolder = (path: string, folder: string) => !folder || path.startsWith(`${folder}/`);
   const pick = (id: string, targets: string[], filter: string, query: string, folder = ""): LibraryTrack[] => {
-    const q = query.trim().toLowerCase();
-    return tracksOf(id, targets).filter((t) => inFolder(t.path, folder) && (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
+    return tracksOf(id, targets).filter((t) => inFolder(t.path, folder) && (filter === "all" || t.state === filter) && matchesSearch(t, query));
   };
   /** Every source's tracks, with the source's name in front of the folder, as the engine does for "*". */
   const allSourcesTracks = (targets: string[]): LibraryTrack[] =>
@@ -242,6 +289,7 @@ export async function createMockApi(): Promise<Api> {
         name: c.name,
         path: `/Users/dj/Music/BoothReady/${c.name}/files`,
         collected_from: origin?.name ?? lib.collected.source.collected_from,
+        tags_read: true,
         totals: { tracks: tracks.length, bytes: tracks.reduce((n, t) => n + t.size, 0), cloud_only: 0, cloud_only_bytes: 0, unreadable: 0 },
         states: countStates(tracks),
       };
@@ -474,6 +522,7 @@ export async function createMockApi(): Promise<Api> {
           states: null,
           skipped: 0,
           collected_from: null,
+          tags_read: true,
         },
       });
       return id;
@@ -521,10 +570,10 @@ export async function createMockApi(): Promise<Api> {
     libraryCancelScan: async () => {
       libraryCancelled = true;
     },
-    libraryTracks: async (id, targets, filter, query, offset, limit, folder = "") => {
-      const q = query.trim().toLowerCase();
-      const scoped = (id === "*" ? allSourcesTracks(targets) : tracksOf(id, targets)).filter((t) => inFolder(t.path, folder) && (!q || t.path.toLowerCase().includes(q)));
+    libraryTracks: async (id, targets, filter, query, offset, limit, folder = "", sort = "", desc = false) => {
+      const scoped = (id === "*" ? allSourcesTracks(targets) : tracksOf(id, targets)).filter((t) => inFolder(t.path, folder) && matchesSearch(t, query));
       const matching = scoped.filter((t) => filter === "all" || t.state === filter);
+      if (sort) matching.sort((a, b) => compareTracks(sort, desc, a, b));
       return { total: matching.length, tracks: matching.slice(offset, offset + limit), states: countStates(scoped) };
     },
     libraryFolders: async (id) => foldersOf(id),

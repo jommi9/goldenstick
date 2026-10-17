@@ -2533,3 +2533,89 @@ details.track-issues ul {
   min-width: 0;
   accent-color: var(--sel);
 }
+
+/* Tag columns and sortable headings */
+.rb-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.rb-sort:hover,
+.rb-sort.on {
+  color: var(--text);
+}
+
+.track-head {
+  display: flex;
+  gap: 14px;
+}
+
+.tracks th.num .rb-sort {
+  justify-content: flex-end;
+}
+
+.tracks .bpm,
+.tracks .time {
+  width: 64px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tracks .key {
+  width: 56px;
+}
+
+.tracks td.key b {
+  font-weight: 500;
+}
+
+.track-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-artist {
+  color: var(--muted);
+}
+
+.player-artist {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.tracks-card {
+  overflow-x: auto;
+}
+
+@media (max-width: 1100px) {
+  .tracks .format,
+  .tracks .time {
+    display: none;
+  }
+}
+
+.tracks td.format {
+  white-space: nowrap;
+}
+
+/* The browser is a wide table, as in rekordbox, so it gets more of the
+   window than the other screens. */
+main:has(.library.browser) {
+  max-width: 1440px;
+}
+
+/* The track column takes whatever width is left and can shrink below its
+   longest line, so the player issues line cuts off instead of widening the
+   table. */
+.tracks td.track-cell {
+  width: 100%;
+  max-width: 0;
+}

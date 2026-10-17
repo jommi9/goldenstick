@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 boothready-model.workspace = true
-boothready-core = { workspace = true, features = ["sqlite", "fixtures"] }
+boothready-core = { workspace = true, features = ["sqlite", "fixtures", "tags"] }
 boothready-platform.workspace = true
 boothready-testlab.workspace = true
 boothready-helper = { path = "../boothready-helper" }

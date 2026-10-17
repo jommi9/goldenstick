@@ -35,6 +35,9 @@ const L = {
   removeAsk: null as string | null,
   filter: "all" as Filter,
   query: "",
+  /** The column the list is ordered by; empty keeps folder order. */
+  sort: "",
+  desc: false,
   tracks: [] as LibraryTrack[],
   total: 0,
   tracksFor: null as string | null,
@@ -240,6 +243,7 @@ export function libraryPlayerBar(): Raw {
   const duration = a && Number.isFinite(a.duration) ? a.duration : 0;
   // Rows in "All tracks" already start their folder with the source's name.
   const where = s && !t.folder.startsWith(s.name) ? [s.name, t.folder].filter(Boolean).join(" · ") : t.folder;
+  const facts = [t.bpm !== null ? `${bpmText(t.bpm)} BPM` : "", t.camelot ? `${t.camelot} (${t.key})` : "", t.detail ? `${t.format}, ${t.detail}` : t.format].filter(Boolean).join(" · ");
   return html`<section class="player" aria-label="Player">
     <div class="player-keys">
       <button class="player-key" data-act="library-prev" aria-label="Previous track, or the start of this one">${icon(ICON.prev)}</button>
@@ -247,8 +251,8 @@ export function libraryPlayerBar(): Raw {
       <button class="player-key" data-act="library-next" aria-label="Next track" ${at >= 0 && at < P.queue.length - 1 ? "" : "disabled"}>${icon(ICON.next)}</button>
     </div>
     <div class="player-track">
-      <b class="player-name">${t.name}</b>
-      <div class="small faint">${where}${t.detail ? ` · ${t.format}, ${t.detail}` : t.format ? ` · ${t.format}` : ""}</div>
+      <b class="player-name">${titleOf(t)}${t.artist ? html`<span class="player-artist"> · ${t.artist}</span>` : ""}</b>
+      <div class="small faint">${[where, facts].filter(Boolean).join(" · ")}</div>
       ${P.error
         ? html`<div class="small player-error" role="alert">${P.error}</div>`
         : P.loading && cloud
@@ -301,7 +305,7 @@ async function loadTracks(id: string, more = false) {
   L.loadingTracks = true;
   try {
     const offset = more && L.tracksFor === id ? L.tracks.length : 0;
-    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE, L.folder);
+    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE, L.folder, L.sort, L.desc);
     L.tracks = offset ? [...L.tracks, ...page.tracks] : page.tracks;
     L.total = page.total;
     L.states = page.states;
@@ -513,6 +517,14 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       L.collect = null;
       host.render();
       return true;
+    case "library-sort":
+      // The same column again flips the direction; "#" goes back to folder order.
+      if (!id) [L.sort, L.desc] = ["", false];
+      else if (L.sort === id) L.desc = !L.desc;
+      else [L.sort, L.desc] = [id, false];
+      if (L.tracksFor) await loadTracks(L.tracksFor);
+      renderTracks();
+      return true;
     case "library-more":
       if (L.tracksFor) await loadTracks(L.tracksFor, true);
       host.render();
@@ -709,6 +721,11 @@ export function libraryView(): Raw {
   </div>`;
 }
 
+const bpmText = (bpm: number) => String(Math.round(bpm * 100) / 100);
+
+/** A track's name as DJ software shows it: the title tag, or the file name. */
+const titleOf = (t: LibraryTrack) => t.title ?? t.name;
+
 function trackRow(t: LibraryTrack, i: number): Raw {
   const shown = t.issues.slice(0, 3);
   const rest = t.issues.length - shown.length;
@@ -716,26 +733,43 @@ function trackRow(t: LibraryTrack, i: number): Raw {
   const n = String(i + 1).padStart(3, "0");
   const loaded = !!P.now && trackKey(P.now) === trackKey(t);
   const playing = isPlaying(t);
+  // The artist goes under the title. An untagged file shows its folder
+  // there instead, and the full location is in the title's tooltip.
+  const where = [t.folder, t.name].filter(Boolean).join("/");
   return html`<tr class="${t.state} ${loaded ? "playing" : ""}">
     <td class="idx">${t.state === "unreadable"
       ? n
-      : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${t.name}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
+      : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${titleOf(t)}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
     <td class="art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
-    <td><b>${t.name}</b>${t.folder ? html`<div class="small faint">${t.folder}</div>` : ""}
+    <td class="track-cell"><b title="${where}">${titleOf(t)}</b>${t.artist ? html`<div class="small track-sub track-artist">${t.artist}</div>` : t.folder ? html`<div class="small faint track-sub">${t.folder}</div>` : ""}
       ${shown.length ? html`<details class="track-issues"><summary>${t.state === "blocked" ? "Won't play on" : "No data for"} ${t.issues.map((i) => i.model).join(", ")}</summary><ul>${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul></details>` : ""}
       ${t.note ? html`<div class="small track-note">${t.note}</div>` : ""}
     </td>
-    <td>${t.format}${t.detail ? html`<div class="small faint">${t.detail}</div>` : t.state === "cloud_only" ? html`<div class="small faint">not checked</div>` : ""}</td>
-    <td class="num">${gb(t.size)}</td>
+    <td class="num bpm">${t.bpm === null ? html`<span class="faint">·</span>` : bpmText(t.bpm)}</td>
+    <td class="key">${t.camelot ? html`<b>${t.camelot}</b><div class="small faint">${t.key}</div>` : html`<span class="faint">·</span>`}</td>
+    <td class="num time">${t.duration === null ? html`<span class="faint">·</span>` : clock(t.duration)}</td>
+    <td class="format">${t.format}${t.detail ? html`<div class="small faint">${t.detail}</div>` : t.state === "cloud_only" ? html`<div class="small faint">not checked</div>` : ""}</td>
     <td><span class="trackstate ${t.state}" title="${STATE_HELP[t.state]}"><i class="dot ${t.state}"></i>${STATE_LABEL[t.state]}</span></td>
   </tr>`;
+}
+
+/** A column heading that orders the list by that column. */
+function sortHead(column: string, label: string, cls = ""): Raw {
+  const on = L.sort === column;
+  const dir = on ? (L.desc ? "descending" : "ascending") : "none";
+  return html`<th class="${cls}" aria-sort="${dir}"><button class="rb-sort ${on ? "on" : ""}" data-act="library-sort" data-id="${column}" title="Sort by ${label.toLowerCase()}">${label}${on ? raw(`<svg viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="${L.desc ? "M1 3h8L5 8z" : "M1 7h8L5 2z"}" fill="currentColor"/></svg>`) : ""}</button></th>`;
 }
 
 function trackTable(): Raw {
   if (L.loadingTracks && !L.tracks.length) return html`<p class="muted">Loading tracks.</p>`;
   if (!L.tracks.length) return html`<p class="muted">${L.query || L.filter !== "all" ? "No tracks match." : "No audio files were found in this folder."}</p>`;
   return html`<table class="tracks">
-      <thead><tr><th class="idx">#</th><th class="art"></th><th>Track</th><th>Format</th><th class="num">Size</th><th>Status</th></tr></thead>
+      <thead><tr>
+        <th class="idx"><button class="rb-sort ${L.sort ? "" : "on"}" data-act="library-sort" data-id="" title="Folder order">#</button></th>
+        <th class="art"></th>
+        <th aria-sort="${L.sort === "title" || L.sort === "artist" ? (L.desc ? "descending" : "ascending") : "none"}"><span class="track-head">${["title", "artist"].map((c) => html`<button class="rb-sort ${L.sort === c ? "on" : ""}" data-act="library-sort" data-id="${c}" title="Sort by ${c}">${c === "title" ? "Track" : "Artist"}${L.sort === c ? raw(`<svg viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="${L.desc ? "M1 3h8L5 8z" : "M1 7h8L5 2z"}" fill="currentColor"/></svg>`) : ""}</button>`)}</span></th>
+        ${sortHead("bpm", "BPM", "num bpm")}${sortHead("key", "Key", "key")}${sortHead("time", "Time", "num time")}${sortHead("format", "Format", "format")}${sortHead("state", "Status")}
+      </tr></thead>
       <tbody>${L.tracks.map(trackRow)}</tbody>
     </table>
     <div class="tracks-foot"><span class="small muted">Showing ${num(L.tracks.length)} of ${num(L.total)}</span>${L.tracks.length < L.total ? html`<button class="btn" data-act="library-more" ${L.loadingTracks ? "disabled" : ""}>Show more</button>` : ""}</div>`;
@@ -846,6 +880,7 @@ export function librarySourceView(id: string): Raw {
   const title = L.folder ? L.folder.split("/").pop() ?? L.folder : all ? "All tracks" : s!.name;
   const crumb = all ? "Collection" : [locationLabel(s!.location), s!.name, ...L.folder.split("/").filter(Boolean).slice(0, -1)].join(" · ");
   const browsable = all || !!s?.states;
+  const stale = (s ? [s] : L.sources).filter((x) => x.states && !x.tags_read);
   return html`<div class="library browser">
     <div class="devtools-heading">
       <div><div class="eyebrow">${crumb}${s && !s.connected ? " · not connected" : ""}</div><h1>${title}</h1>${s ? html`<div class="small faint source-path">${s.path}${L.folder ? `/${L.folder}` : ""}</div>` : html`<div class="small muted">Every track in ${plural(L.sources.length, "source")}.</div>`}</div>
@@ -854,6 +889,7 @@ export function librarySourceView(id: string): Raw {
     ${errorBanner()}
     ${scanning ? html`<div class="banner"><span class="spinner" aria-hidden="true"></span><div>Scanning. ${L.progress?.files ? html`${plural(L.progress.files, "track")} found.` : ""}</div></div>` : ""}
     ${s && !s.connected ? html`<div class="banner"><div>This drive isn't connected. You're looking at the scan from ${when(s.scanned_unix)}.</div></div>` : ""}
+    ${stale.length && !scanning ? html`<div class="banner"><div style="flex:1">${s ? "This folder was scanned" : `${stale.map((x) => x.name).join(", ")} ${stale.length === 1 ? "was" : "were"} scanned`} before BoothReady read tags, so ${s ? "its" : "their"} tracks show file names only. Scan again to see artist, title, BPM and key.</div>${s && s.connected ? html`<button class="btn" data-act="library-scan" data-id="${s.id}">Scan again</button>` : ""}</div>` : ""}
     ${s ? collectPanel(s) : ""}
     ${s?.collected_from ? nextStep(s) : ""}
     <div class="rb">
@@ -869,7 +905,7 @@ export function librarySourceView(id: string): Raw {
                 <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
                 ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}
               </div>
-              <input id="library-search" class="search" type="search" placeholder="Search by track or folder name" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
+              <input id="library-search" class="search" type="search" placeholder="Search by title, artist, album or folder" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
               <div id="library-tracks" class="card tracks-card">${trackTable()}</div>`
           : html`<p class="muted">${s?.totals ? "The track list from the last scan isn't saved on this computer. Scan again to see it." : "Scan this folder to see its tracks."}</p>`}
       </div>

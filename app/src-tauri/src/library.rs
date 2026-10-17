@@ -5,6 +5,7 @@
 //! JSON in the app's own data folder, so a source on an unplugged drive can
 //! still be browsed from its last scan.
 
+use boothready_core::audio::tags::{MusicalKey, TrackTags};
 use boothready_core::audio::{AudioInfo, Codec, Container};
 use boothready_core::rules::DeviceProfile;
 use boothready_core::scan::TrackProbe;
@@ -73,6 +74,9 @@ pub struct LibrarySource {
     pub skipped: u32,
     /// The source the tracks were collected from, for a local collection.
     pub collected_from: Option<String>,
+    /// The last scan read the tags of the tracks on this computer. False for
+    /// a scan saved by an older version, which shows file names only.
+    pub tags_read: bool,
 }
 
 /// The tracks a collect request covers, taken from a source's last scan.
@@ -101,6 +105,131 @@ pub struct LibraryTrack {
     /// Why the file is unreadable, when it is.
     pub note: Option<String>,
     pub issues: Vec<PlayerIssue>,
+    /// From the file's tags; the file name stands in when there is no title.
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<u16>,
+    pub bpm: Option<f32>,
+    /// Standard notation ("Am") and its Camelot position ("8A").
+    pub key: Option<String>,
+    pub camelot: Option<String>,
+    /// Length in seconds, from the header.
+    pub duration: Option<f64>,
+}
+
+/// What the browser asks for: a state filter, a search, a folder, an order
+/// and a page. Every field has a default, so a caller names only what it needs.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TrackQuery {
+    /// A [`TrackState`] name, or "all" or empty for every state.
+    pub filter: String,
+    /// Words that must each appear in the path or the tags.
+    pub query: String,
+    /// A folder inside the source, or empty for all of it.
+    pub folder: String,
+    /// A column to order by ("title", "artist", "album", "bpm", "key",
+    /// "time", "format", "size" or "state"); empty keeps folder order.
+    pub sort: String,
+    pub desc: bool,
+    pub offset: usize,
+    pub limit: usize,
+}
+
+impl TrackQuery {
+    fn wants(&self, state: TrackState) -> bool {
+        self.filter.is_empty() || self.filter == "all" || state_name(state) == self.filter
+    }
+}
+
+/// The search words, lower-cased. A track matches when every word appears in
+/// its path or one of its tags, so "klock subzero" finds artist and album.
+fn search_words(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+fn matches_search(track: &SourceTrack, words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    let mut haystack = track.path.to_lowercase();
+    if let Some(tags) = &track.tags {
+        for text in [&tags.title, &tags.artist, &tags.album, &tags.genre].into_iter().flatten() {
+            haystack.push('\n');
+            haystack.push_str(&text.to_lowercase());
+        }
+    }
+    words.iter().all(|w| haystack.contains(w.as_str()))
+}
+
+fn file_stem(path: &str) -> &str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem)
+}
+
+/// Orders two tracks by one column. Tracks missing the value go last in
+/// either direction, and ties fall back to folder order.
+fn compare_tracks(
+    column: &str,
+    desc: bool,
+    a: (&SourceTrack, TrackState),
+    b: (&SourceTrack, TrackState),
+) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    fn text(t: &SourceTrack, pick: fn(&TrackTags) -> &Option<String>) -> Option<String> {
+        t.tags.as_ref().and_then(|tags| pick(tags).as_ref()).map(|v| v.to_lowercase())
+    }
+    fn number(v: Option<f64>) -> Option<i64> {
+        v.map(|n| (n * 1000.0).round() as i64)
+    }
+    let title = |t: &SourceTrack| Some(text(t, |g| &g.title).unwrap_or_else(|| file_stem(&t.path).to_lowercase()));
+    let duration = |t: &SourceTrack| match &t.probe {
+        Some(TrackProbe::Ok(info)) => info.duration_secs,
+        _ => None,
+    };
+    let camelot = |t: &SourceTrack| {
+        let key = t.tags.as_ref()?.key.as_deref().and_then(MusicalKey::parse)?;
+        let wheel = key.camelot();
+        let n: i64 = wheel.trim_end_matches(['A', 'B']).parse().ok()?;
+        Some(n * 2 + i64::from(!key.minor))
+    };
+    let by = |x: Option<String>, y: Option<String>| (x.map(Key::Text), y.map(Key::Text));
+    #[derive(PartialEq, Eq, PartialOrd, Ord)]
+    enum Key {
+        Text(String),
+        Number(i64),
+    }
+    let num = |x: Option<i64>, y: Option<i64>| (x.map(Key::Number), y.map(Key::Number));
+    let (x, y) = match column {
+        "title" => by(title(a.0), title(b.0)),
+        "artist" => by(text(a.0, |g| &g.artist), text(b.0, |g| &g.artist)),
+        "album" => by(text(a.0, |g| &g.album), text(b.0, |g| &g.album)),
+        "bpm" => num(
+            number(a.0.tags.as_ref().and_then(|g| g.bpm).map(f64::from)),
+            number(b.0.tags.as_ref().and_then(|g| g.bpm).map(f64::from)),
+        ),
+        "key" => num(camelot(a.0), camelot(b.0)),
+        "time" => num(number(duration(a.0)), number(duration(b.0))),
+        "size" => num(Some(a.0.size as i64), Some(b.0.size as i64)),
+        "format" => by(
+            Some(a.0.path.rsplit_once('.').map_or("", |(_, e)| e).to_lowercase()),
+            Some(b.0.path.rsplit_once('.').map_or("", |(_, e)| e).to_lowercase()),
+        ),
+        "state" => num(Some(a.1 as i64), Some(b.1 as i64)),
+        _ => (None, None),
+    };
+    let primary = match (x, y) {
+        (Some(x), Some(y)) if desc => y.cmp(&x),
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    };
+    // Within one artist, tracks follow their titles.
+    let secondary = if column == "artist" { title(a.0).cmp(&title(b.0)) } else { Ordering::Equal };
+    primary.then(secondary).then_with(|| a.0.path.cmp(&b.0.path))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +341,7 @@ impl LibraryState {
             let mut scan = boothready_core::sources::scan_source(folder, &placeholder, &never_cancelled, |_| {})
                 .map_err(|e| e.to_string())?;
             demo_sizes(&mut scan);
+            demo_tags(&mut scan);
             state.sources.push(SourceRecord {
                 id: (*id).to_string(),
                 path: folder.clone(),
@@ -333,18 +463,19 @@ impl LibraryState {
         let source = self.record(id)?;
         let folder = folder.trim_matches('/');
         let scan = self.scan(id).ok_or_else(|| "Scan this folder first.".to_string())?;
-        let query = query.trim().to_lowercase();
+        let words = search_words(query);
+        let wanted = TrackQuery { filter: filter.to_string(), ..TrackQuery::default() };
         let mut picked =
             Selection { source, paths: Vec::new(), bytes: 0, cloud_only: 0, cloud_only_bytes: 0, unreadable: 0 };
         for track in &scan.tracks {
             if !in_folder(&track.path, folder) {
                 continue;
             }
-            if !query.is_empty() && !track.path.to_lowercase().contains(&query) {
+            if !matches_search(track, &words) {
                 continue;
             }
             let state = judge(track, targets).0;
-            if filter != "all" && state_name(state) != filter {
+            if !wanted.wants(state) {
                 continue;
             }
             if state == TrackState::Unreadable {
@@ -409,7 +540,11 @@ impl LibraryState {
         records
             .into_iter()
             .map(|record| {
-                let states = self.scan(&record.id).map(|scan| count_states(&scan, targets));
+                let scan = self.scan(&record.id);
+                let states = scan.as_ref().map(|scan| count_states(scan, targets));
+                let tags_read = scan.as_ref().is_none_or(|scan| {
+                    scan.tags_read || scan.tracks.iter().all(|t| t.availability == Availability::CloudOnly)
+                });
                 let made = record.collection;
                 LibrarySource {
                     name: made.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| name_of(&record.path)),
@@ -422,6 +557,7 @@ impl LibraryState {
                     totals: record.totals,
                     states,
                     skipped: record.skipped,
+                    tags_read,
                     id: record.id,
                 }
             })
@@ -429,58 +565,57 @@ impl LibraryState {
     }
 
     /// One page of a source's tracks, filtered by folder, by a search on the
-    /// path and by state. `id` may be [`ALL_SOURCES`], which pages through
-    /// every source and puts each source's name in front of the folder.
-    /// `filter` is a [`TrackState`] name or "all".
-    #[allow(clippy::too_many_arguments)]
-    pub fn tracks(
-        &mut self,
-        id: &str,
-        targets: &[&DeviceProfile],
-        filter: &str,
-        query: &str,
-        folder: &str,
-        offset: usize,
-        limit: usize,
-    ) -> Result<LibraryPage, String> {
+    /// path and tags and by state, in the order the query asks for. `id` may
+    /// be [`ALL_SOURCES`], which pages through every source and puts each
+    /// source's name in front of the folder.
+    pub fn tracks(&mut self, id: &str, targets: &[&DeviceProfile], q: &TrackQuery) -> Result<LibraryPage, String> {
         let ids: Vec<String> = if id == ALL_SOURCES {
             self.sources.iter().map(|s| s.id.clone()).collect()
         } else {
             self.record(id)?;
             vec![id.to_string()]
         };
-        let query = query.trim().to_lowercase();
-        let folder = folder.trim_matches('/');
-        let mut total = 0u32;
-        let mut tracks = Vec::new();
-        let mut states = StateCounts::default();
+        let words = search_words(&q.query);
+        let folder = q.folder.trim_matches('/');
+        let mut scans = Vec::new();
         for sid in &ids {
-            let Some(scan) = self.scan(sid) else { continue };
-            let label = if id == ALL_SOURCES { self.record(sid).ok().map(|r| display_name(&r)) } else { None };
-            for track in &scan.tracks {
-                if !in_folder(&track.path, folder) {
-                    continue;
-                }
-                if !query.is_empty() && !track.path.to_lowercase().contains(&query) {
-                    continue;
-                }
-                let (state, issues) = judge(track, targets);
-                states.add(state);
-                if filter != "all" && state_name(state) != filter {
-                    continue;
-                }
-                if total as usize >= offset && tracks.len() < limit {
-                    let mut row = track_row(sid, track, state, issues);
-                    if let Some(source) = &label {
-                        row.folder =
-                            if row.folder.is_empty() { source.clone() } else { format!("{source}/{}", row.folder) };
-                    }
-                    tracks.push(row);
-                }
-                total += 1;
+            if let Some(scan) = self.scan(sid) {
+                let label = if id == ALL_SOURCES { self.record(sid).ok().map(|r| display_name(&r)) } else { None };
+                scans.push((sid.clone(), label, scan));
             }
         }
-        Ok(LibraryPage { total, tracks, states })
+        let mut states = StateCounts::default();
+        let mut picked: Vec<(usize, &SourceTrack, TrackState)> = Vec::new();
+        for (n, (_, _, scan)) in scans.iter().enumerate() {
+            for track in &scan.tracks {
+                if !in_folder(&track.path, folder) || !matches_search(track, &words) {
+                    continue;
+                }
+                let state = judge(track, targets).0;
+                states.add(state);
+                if q.wants(state) {
+                    picked.push((n, track, state));
+                }
+            }
+        }
+        if !q.sort.is_empty() {
+            picked.sort_by(|a, b| compare_tracks(&q.sort, q.desc, (a.1, a.2), (b.1, b.2)));
+        }
+        let tracks = picked
+            .iter()
+            .skip(q.offset)
+            .take(q.limit)
+            .map(|&(n, track, state)| {
+                let (sid, label, _) = &scans[n];
+                let mut row = track_row(sid, track, state, judge(track, targets).1);
+                if let Some(source) = label {
+                    row.folder =
+                        if row.folder.is_empty() { source.clone() } else { format!("{source}/{}", row.folder) };
+                }
+                row
+            })
+            .collect();
+        Ok(LibraryPage { total: picked.len() as u32, tracks, states })
     }
 
     /// The file behind a track, for playing it. The path must name an audio
@@ -540,9 +675,9 @@ impl Location {
     }
 }
 
-/// Demo files are a few kilobytes of valid headers. Give them the sizes real
-/// tracks have, so the simulated library reads like a real one. A damaged
-/// file keeps its true size.
+/// Demo files are a few kilobytes of valid headers. Give them the sizes and
+/// lengths real tracks have, so the simulated library reads like a real one.
+/// A damaged file keeps its true size.
 pub(crate) fn demo_sizes(scan: &mut SourceScan) {
     for track in &mut scan.tracks {
         let lossless = match &track.probe {
@@ -551,11 +686,11 @@ pub(crate) fn demo_sizes(scan: &mut SourceScan) {
             None => [".wav", ".aiff", ".aif", ".flac"].iter().any(|e| track.path.to_lowercase().ends_with(e)),
         };
         // FNV-1a, so a track keeps the same size on every run.
-        let hash = track
-            .path
-            .bytes()
-            .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+        let hash = demo_hash(&track.path);
         track.size = if lossless { 38_000_000 + hash % 40_000_000 } else { 7_000_000 + hash % 8_000_000 };
+        if let Some(TrackProbe::Ok(info)) = &mut track.probe {
+            info.duration_secs = Some(270.0 + (hash % 240) as f64);
+        }
     }
 }
 
@@ -578,11 +713,55 @@ fn demo_archive(seed: &SourceScan) -> SourceScan {
             modified_unix: Some(DEMO_TIME - 86_400 * (n as u64 + 30)),
             availability: like.availability,
             probe: like.probe.clone(),
+            tags: None,
         });
     }
     scan.tracks.sort_by(|a, b| a.path.cmp(&b.path));
     demo_sizes(&mut scan);
+    demo_tags(&mut scan);
     scan
+}
+
+/// FNV-1a of a path, so a demo track gets the same made-up values every run.
+fn demo_hash(path: &str) -> u64 {
+    path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The demo files are bare headers with no tags. Give the readable ones the
+/// tags a DJ's files would have: artist and album from "Artist/Album/Title"
+/// folders, and a tempo and key that suit the crate. One track is left
+/// untagged so the file name fallback shows.
+pub(crate) fn demo_tags(scan: &mut SourceScan) {
+    scan.tags_read = true;
+    const KEYS: [&str; 24] = [
+        "Am", "Em", "Bm", "F#m", "C#m", "G#m", "Ebm", "Bbm", "Fm", "Cm", "Gm", "Dm", "C", "G", "D", "A", "E", "B",
+        "F#", "Db", "Ab", "Eb", "Bb", "F",
+    ];
+    for track in &mut scan.tracks {
+        if !matches!(track.probe, Some(TrackProbe::Ok(_))) || track.path.ends_with("Studio Master.wav") {
+            continue;
+        }
+        let hash = demo_hash(&track.path);
+        let parts: Vec<&str> = track.path.split('/').collect();
+        let (low, span) = match parts[0] {
+            "Ambient" => (82, 16),
+            "Disco" => (114, 8),
+            "House" | "Edits" => (120, 7),
+            "Breaks" => (128, 8),
+            "Hi-Res" => (118, 10),
+            _ => (128, 12),
+        };
+        let archive = file_stem(&track.path).starts_with("Archive Track");
+        track.tags = Some(TrackTags {
+            title: (!archive).then(|| file_stem(&track.path).to_string()),
+            artist: (parts.len() == 3 && !archive).then(|| parts[0].to_string()),
+            album: (parts.len() == 3 && !archive).then(|| parts[1].to_string()),
+            genre: Some(if archive { parts[0] } else { "Techno" }.to_string()),
+            year: Some(2012 + (hash % 14) as u16),
+            bpm: Some((low + (hash % span)) as f32 + if hash % 5 == 0 { 0.5 } else { 0.0 }),
+            key: Some(KEYS[(hash >> 8) as usize % KEYS.len()].to_string()),
+        });
+    }
 }
 
 fn is_lossless(info: &AudioInfo) -> bool {
@@ -710,6 +889,8 @@ fn track_row(source: &str, track: &SourceTrack, state: TrackState, issues: Vec<P
         Some(TrackProbe::Unreadable(reason)) => (extension, String::new(), Some(reason.clone())),
         None => (extension, String::new(), None),
     };
+    let tags = track.tags.as_ref();
+    let key = tags.and_then(|t| t.key.as_deref()).and_then(MusicalKey::parse);
     LibraryTrack {
         source: source.to_string(),
         path: track.path.clone(),
@@ -721,6 +902,18 @@ fn track_row(source: &str, track: &SourceTrack, state: TrackState, issues: Vec<P
         state,
         note,
         issues,
+        title: tags.and_then(|t| t.title.clone()),
+        artist: tags.and_then(|t| t.artist.clone()),
+        album: tags.and_then(|t| t.album.clone()),
+        genre: tags.and_then(|t| t.genre.clone()),
+        year: tags.and_then(|t| t.year),
+        bpm: tags.and_then(|t| t.bpm),
+        camelot: key.map(MusicalKey::camelot),
+        key: key.map(|k| k.name().to_string()),
+        duration: match &track.probe {
+            Some(TrackProbe::Ok(info)) => info.duration_secs,
+            _ => None,
+        },
     }
 }
 
@@ -728,6 +921,17 @@ fn track_row(source: &str, track: &SourceTrack, state: TrackState, issues: Vec<P
 mod tests {
     use super::*;
     use boothready_core::rules::Ruleset;
+
+    fn ask(filter: &str, query: &str, folder: &str, offset: usize, limit: usize) -> TrackQuery {
+        TrackQuery {
+            filter: filter.into(),
+            query: query.into(),
+            folder: folder.into(),
+            offset,
+            limit,
+            ..TrackQuery::default()
+        }
+    }
 
     fn club(rules: &Ruleset) -> Vec<&DeviceProfile> {
         rules.devices_by_id(&rules.preset("unknown_club").unwrap().devices)
@@ -764,36 +968,98 @@ mod tests {
     }
 
     #[test]
+    fn tags_are_searched_and_sorted() {
+        let root = tempfile::tempdir().unwrap();
+        let rules = Ruleset::builtin();
+        let targets = club(&rules);
+        let mut library = LibraryState::demo(root.path()).unwrap();
+        assert!(library.list(&targets).iter().all(|s| s.tags_read));
+
+        // Every word must match somewhere: the artist folder and the album tag.
+        let found = library.tracks("demo-computer", &targets, &ask("all", "klock subzero", "", 0, 50)).unwrap();
+        assert_eq!(found.total, 2);
+        assert!(found.tracks.iter().all(|t| t.artist.as_deref() == Some("Ben Klock")));
+        let first = &found.tracks[0];
+        assert!(first.title.is_some() && first.bpm.is_some() && first.camelot.is_some() && first.duration.is_some());
+
+        let mut sorted = |sort: &str, desc: bool| {
+            let q = TrackQuery { sort: sort.into(), desc, limit: 500, ..TrackQuery::default() };
+            library.tracks("demo-computer", &targets, &q).unwrap().tracks
+        };
+        for desc in [false, true] {
+            let rows = sorted("bpm", desc);
+            let tempos: Vec<f32> = rows.iter().filter_map(|t| t.bpm).collect();
+            let mut expected = tempos.clone();
+            expected.sort_by(|a, b| if desc { b.total_cmp(a) } else { a.total_cmp(b) });
+            assert_eq!(tempos, expected);
+            // Untagged and unreadable tracks go last in both directions.
+            let first_missing = rows.iter().position(|t| t.bpm.is_none()).unwrap();
+            assert!(rows[first_missing..].iter().all(|t| t.bpm.is_none()));
+        }
+        let wheel: Vec<String> = sorted("key", false).iter().filter_map(|t| t.camelot.clone()).collect();
+        let position = |c: &String| {
+            let n: u32 = c.trim_end_matches(['A', 'B']).parse().unwrap();
+            n * 2 + u32::from(c.ends_with('B'))
+        };
+        assert!(wheel.windows(2).all(|w| position(&w[0]) <= position(&w[1])), "{wheel:?}");
+        let artists: Vec<Option<String>> = sorted("artist", false).iter().map(|t| t.artist.clone()).collect();
+        let named = artists.iter().take_while(|a| a.is_some()).count();
+        assert!(artists[..named].windows(2).all(|w| w[0] <= w[1]));
+        assert!(artists[named..].iter().all(Option::is_none));
+        // The file name stands in for a missing title when sorting by title.
+        let titles: Vec<String> =
+            sorted("title", false).iter().map(|t| t.title.clone().unwrap_or_else(|| t.name.clone())).collect();
+        assert!(titles.windows(2).all(|w| w[0].to_lowercase() <= w[1].to_lowercase()), "{titles:?}");
+    }
+
+    #[test]
+    fn a_scan_from_before_tags_asks_to_be_scanned_again() {
+        let root = tempfile::tempdir().unwrap();
+        let rules = Ruleset::builtin();
+        let mut library = LibraryState::demo(root.path()).unwrap();
+        let mut old = (*library.scans["demo-computer"]).clone();
+        old.tags_read = false;
+        for track in &mut old.tracks {
+            track.tags = None;
+        }
+        library.scans.insert("demo-computer".into(), Arc::new(old));
+        let sources = library.list(&club(&rules));
+        assert!(!sources[0].tags_read);
+        // The cloud folder's scan read tags; its online files have none to read.
+        assert!(sources[1].tags_read);
+    }
+
+    #[test]
     fn tracks_are_filtered_searched_and_paged() {
         let root = tempfile::tempdir().unwrap();
         let rules = Ruleset::builtin();
         let targets = club(&rules);
         let mut library = LibraryState::demo(root.path()).unwrap();
 
-        let all = library.tracks("demo-computer", &targets, "all", "", "", 0, 500).unwrap();
+        let all = library.tracks("demo-computer", &targets, &ask("all", "", "", 0, 500)).unwrap();
         assert_eq!(all.total as usize, all.tracks.len());
         assert_eq!(all.total, 13);
 
-        let page = library.tracks("demo-computer", &targets, "all", "", "", 10, 5).unwrap();
+        let page = library.tracks("demo-computer", &targets, &ask("all", "", "", 10, 5)).unwrap();
         assert_eq!((page.total, page.tracks.len()), (13, 3));
 
-        let blocked = library.tracks("demo-computer", &targets, "blocked", "", "", 0, 500).unwrap();
+        let blocked = library.tracks("demo-computer", &targets, &ask("blocked", "", "", 0, 500)).unwrap();
         assert!(blocked.total > 0);
         assert!(blocked.tracks.iter().all(|t| t.state == TrackState::Blocked && !t.issues.is_empty()));
 
-        let found = library.tracks("demo-computer", &targets, "all", "SUBZERO", "", 0, 500).unwrap();
+        let found = library.tracks("demo-computer", &targets, &ask("all", "SUBZERO", "", 0, 500)).unwrap();
         assert!(found.total >= 1);
         assert!(found.tracks.iter().all(|t| t.path.to_lowercase().contains("subzero")));
 
-        let online = library.tracks("demo-cloud", &targets, "cloud_only", "", "", 0, 500).unwrap();
+        let online = library.tracks("demo-cloud", &targets, &ask("cloud_only", "", "", 0, 500)).unwrap();
         assert_eq!(online.total, 4);
         assert!(online.tracks.iter().all(|t| t.detail.is_empty() && t.issues.is_empty()));
 
-        let broken = library.tracks("demo-computer", &targets, "unreadable", "", "", 0, 500).unwrap();
+        let broken = library.tracks("demo-computer", &targets, &ask("unreadable", "", "", 0, 500)).unwrap();
         assert_eq!(broken.total, 1);
         assert!(broken.tracks[0].note.is_some());
 
-        assert!(library.tracks("missing", &targets, "all", "", "", 0, 10).is_err());
+        assert!(library.tracks("missing", &targets, &ask("all", "", "", 0, 10)).is_err());
     }
 
     #[test]
@@ -914,18 +1180,18 @@ mod tests {
         let kolsch = folders.iter().position(|f| f.path == "Kolsch").unwrap();
         assert_eq!(speicher, kolsch + 1, "a folder is listed right before its subfolders");
 
-        let page = library.tracks("demo-computer", &targets, "all", "", "Hi-Res", 0, 500).unwrap();
+        let page = library.tracks("demo-computer", &targets, &ask("all", "", "Hi-Res", 0, 500)).unwrap();
         assert_eq!(page.total, 4);
         assert!(page.tracks.iter().all(|t| t.folder == "Hi-Res"));
         assert_eq!(page.states.blocked + page.states.ready, 4);
-        let blocked = library.tracks("demo-computer", &targets, "blocked", "", "Hi-Res", 0, 500).unwrap();
+        let blocked = library.tracks("demo-computer", &targets, &ask("blocked", "", "Hi-Res", 0, 500)).unwrap();
         assert_eq!(blocked.states, page.states, "state counts ignore the state filter");
-        assert!(library.tracks("demo-computer", &targets, "all", "", "Hi", 0, 500).unwrap().total == 0);
+        assert!(library.tracks("demo-computer", &targets, &ask("all", "", "Hi", 0, 500)).unwrap().total == 0);
 
-        let everything = library.tracks(ALL_SOURCES, &targets, "all", "", "", 0, 1000).unwrap();
+        let everything = library.tracks(ALL_SOURCES, &targets, &ask("all", "", "", 0, 1000)).unwrap();
         let separately: u32 = ["demo-computer", "demo-cloud", "demo-archive"]
             .iter()
-            .map(|id| library.tracks(id, &targets, "all", "", "", 0, 1000).unwrap().total)
+            .map(|id| library.tracks(id, &targets, &ask("all", "", "", 0, 1000)).unwrap().total)
             .sum();
         assert_eq!(everything.total, separately);
         assert!(everything.tracks.iter().any(|t| t.folder.starts_with("Promos 2026/")));
