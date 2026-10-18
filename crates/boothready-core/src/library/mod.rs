@@ -9,6 +9,8 @@ mod engine;
 pub mod pdb;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod pdb_fixture;
+#[cfg(feature = "device-library-writer")]
+pub mod pdb_writer;
 mod resolve;
 
 use crate::audio::{is_audio_path, AudioInfo};

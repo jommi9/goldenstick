@@ -55,7 +55,7 @@ The release config ships `boothready-helper` next to the app's executable. A dev
 
 | Path | What it does |
 |---|---|
-| `crates/boothready-core` | The engine. It parses partitions and filesystems from raw sectors, probes audio headers, reads rekordbox `export.pdb` and Engine DJ databases, evaluates the compatibility rules, plans multi-USB kits, builds MBR + FAT32 drives and verifies them. |
+| `crates/boothready-core` | The engine. It parses partitions and filesystems from raw sectors, probes audio headers, reads rekordbox `export.pdb` and Engine DJ databases, writes a rekordbox Device Library tree from playlist folders (`boothready export-pdb`, ported from djbooth, see its `UPSTREAM.md`), evaluates the compatibility rules, plans multi-USB kits, builds MBR + FAT32 drives and verifies them. |
 | `crates/boothready-core/data/ruleset.json` | Device profiles and target presets. Every claim has a support level and an evidence level. |
 | `crates/boothready-platform` | Device discovery, watching and ejecting on Linux (sysfs), macOS (`diskutil`/`ioreg`) and Windows (storage IOCTLs, SetupAPI, CfgMgr32), plus the folder-backed demo platform. |
 | `crates/boothready-helper` | The elevated helper. It takes a closed set of JSON requests and refuses to erase unless the drive still matches what the user confirmed. |

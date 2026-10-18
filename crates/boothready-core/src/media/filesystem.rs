@@ -182,7 +182,7 @@ fn read_fat<R: Read + Seek>(disk: &mut Disk<R>, offset: u64, len: u64, b: &[u8])
     let mut dir_label = None;
     if root_start + root_len <= disk.size() && root_len > 0 {
         let dir = disk.read_at(root_start, root_len as usize)?;
-        for entry in dir.chunks_exact(32) {
+        for entry in dir.as_chunks::<32>().0 {
             if entry[0] == 0 {
                 break;
             }
@@ -240,7 +240,7 @@ fn read_exfat<R: Read + Seek>(disk: &mut Disk<R>, offset: u64, len: u64, b: &[u8
     let root_len = cluster.min(64 * 1024);
     if root_cluster >= 2 && root + root_len <= disk.size() {
         let dir = disk.read_at(root, root_len as usize)?;
-        for entry in dir.chunks_exact(32) {
+        for entry in dir.as_chunks::<32>().0 {
             match entry[0] {
                 0x00 => break,
                 0x83 => {

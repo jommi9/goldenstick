@@ -236,7 +236,7 @@ fn fat32_structures_are_complete() {
     assert_eq!(&boot[510..512], &[0x55, 0xAA]);
     let g = fat32_geometry(le32(boot, 32), 512, layout.cluster_size).unwrap();
     assert_eq!((le16(boot, 14), le32(boot, 36)), (g.reserved_sectors, g.fat_sectors));
-    assert!(g.reserved_sectors >= 32 && g.data_start() % g.sectors_per_cluster == 0);
+    assert!(g.reserved_sectors >= 32 && g.data_start().is_multiple_of(g.sectors_per_cluster));
     // Backups of the boot sector and FSInfo sit in sectors 6 and 7.
     assert_eq!(sector(6), boot);
     assert_eq!(sector(7), sector(1));

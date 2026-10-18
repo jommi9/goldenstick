@@ -5,7 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-rust-version.workspace = true
+# The default `device-library-writer` feature pulls in djbooth-analyzer,
+# which uses let-chains and needs 1.88; the workspace declares 1.85 for the
+# helper, which leaves that feature off.
+rust-version = "1.88"
 
 [lints]
 workspace = true
@@ -23,6 +26,10 @@ base64.workspace = true
 hex.workspace = true
 uuid.workspace = true
 lofty = { workspace = true, optional = true }
+# Device Library writer: the empty export.pdb template is stored gzipped,
+# and the analyser produces the ANLZ files an export tree carries.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
+djbooth-analyzer = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -32,7 +39,7 @@ rekordcrate = { version = "=0.3.0", default-features = false }
 binrw = "0.14"
 
 [features]
-default = ["sqlite", "tags"]
+default = ["sqlite", "tags", "device-library-writer"]
 # Engine DJ database validation and the local store. Off in the privileged
 # helper, which has no business opening databases.
 sqlite = ["dep:rusqlite"]
@@ -41,3 +48,7 @@ sqlite = ["dep:rusqlite"]
 tags = ["dep:lofty"]
 # Exposes builders for synthetic rekordbox exports (tests, demo images).
 fixtures = []
+# Writing rekordbox Device Library exports (export.pdb plus analysis files),
+# ported from djbooth. Off in the privileged helper, which never writes
+# libraries. Needs `tags` to read artist and title from the audio files.
+device-library-writer = ["tags", "dep:flate2", "dep:djbooth-analyzer"]

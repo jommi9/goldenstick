@@ -79,41 +79,9 @@ pub fn describe(r: &AnalysisReport, out: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
 
-    /// A 16-bit stereo WAV of short clicks at `bpm`, `seconds` long.
     fn click_track(path: &Path, bpm: f64, seconds: u32) {
-        let rate = 44_100u32;
-        let frames = rate * seconds;
-        let beat = (f64::from(rate) * 60.0 / bpm) as u32;
-        let mut pcm = Vec::with_capacity(frames as usize * 4);
-        for i in 0..frames {
-            let pos = i % beat;
-            let s = if pos < 400 {
-                let env = 1.0 - f64::from(pos) / 400.0;
-                (f64::from(pos) * 2.0 * std::f64::consts::PI * 1000.0 / f64::from(rate)).sin() * env * 0.8
-            } else {
-                0.0
-            };
-            let v = (s * f64::from(i16::MAX)) as i16;
-            pcm.extend_from_slice(&v.to_le_bytes());
-            pcm.extend_from_slice(&v.to_le_bytes());
-        }
-        let mut f = std::fs::File::create(path).unwrap();
-        let data = pcm.len() as u32;
-        f.write_all(b"RIFF").unwrap();
-        f.write_all(&(36 + data).to_le_bytes()).unwrap();
-        f.write_all(b"WAVEfmt ").unwrap();
-        f.write_all(&16u32.to_le_bytes()).unwrap();
-        f.write_all(&1u16.to_le_bytes()).unwrap();
-        f.write_all(&2u16.to_le_bytes()).unwrap();
-        f.write_all(&rate.to_le_bytes()).unwrap();
-        f.write_all(&(rate * 4).to_le_bytes()).unwrap();
-        f.write_all(&4u16.to_le_bytes()).unwrap();
-        f.write_all(&16u16.to_le_bytes()).unwrap();
-        f.write_all(b"data").unwrap();
-        f.write_all(&data.to_le_bytes()).unwrap();
-        f.write_all(&pcm).unwrap();
+        std::fs::write(path, boothready_core::audio::fixtures::click_track_wav(bpm, seconds)).unwrap();
     }
 
     #[test]

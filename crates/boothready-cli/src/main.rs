@@ -4,9 +4,12 @@
 
 mod analyze;
 mod demo;
+mod export;
 mod render;
 mod staging;
 mod testlab;
+#[cfg(test)]
+mod testutil;
 
 use anyhow::{bail, Context, Result};
 use boothready_core::copy::{plan_copy, run_copy, CopyTarget};
@@ -143,6 +146,22 @@ enum Cmd {
         /// Beat grid: normal (steady tempo), dynamic (changing tempo) or auto.
         #[arg(long, default_value = "normal")]
         rhythm_mode: String,
+    },
+    /// Write a rekordbox Device Library (export.pdb, analysis files and the
+    /// audio) into a local folder, one playlist per folder of music. Never
+    /// writes to a USB: copy the finished folder with `boothready copy`.
+    ExportPdb {
+        /// Local folder that receives Contents/ and PIONEER/. It must not hold an export already.
+        out: PathBuf,
+        /// A playlist as NAME=FOLDER; every MP3, M4A, FLAC, WAV or AIFF under FOLDER joins it. Repeatable.
+        #[arg(long = "playlist", value_name = "NAME=FOLDER", required = true)]
+        playlists: Vec<String>,
+        /// Beat grid: normal (steady tempo), dynamic (changing tempo) or auto.
+        #[arg(long, default_value = "normal")]
+        rhythm_mode: String,
+        /// Write no analysis files. Players then show no waveform or beat grid.
+        #[arg(long)]
+        skip_analysis: bool,
     },
     /// Build an MBR + FAT32 disk image (never touches devices).
     MakeImage {
@@ -359,6 +378,26 @@ fn main() -> Result<()> {
                 return print_json(&report);
             }
             println!("{}", analyze::describe(&report, out));
+        }
+        Cmd::ExportPdb { out, playlists, rhythm_mode, skip_analysis } => {
+            let playlists = playlists.iter().map(|p| export::parse_playlist(p)).collect::<Result<Vec<_>>>()?;
+            let analysis = export::analysis(*skip_analysis, rhythm_mode)?;
+            let devices = backend(&cli)
+                .platform()
+                .list_devices()
+                .context("listing drives to make sure the output folder is not on a USB")?;
+            export::guard_target(out, &devices)?;
+            let (report, warnings) = export::run(out, &playlists, analysis, cli.json)?;
+            if cli.json {
+                #[derive(serde::Serialize)]
+                struct Out<'a> {
+                    #[serde(flatten)]
+                    report: &'a boothready_core::export::device_library::ExportReport,
+                    skipped: &'a [String],
+                }
+                return print_json(&Out { report: &report, skipped: &warnings });
+            }
+            println!("{}", export::describe(&report, &warnings));
         }
         Cmd::MakeImage { path, size_gb, label } => {
             if path.exists() && !std::fs::metadata(path)?.is_file() {
