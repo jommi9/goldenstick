@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 pub struct DriveFacts {
     pub scheme: PartitionScheme,
     pub filesystem: Option<FilesystemKind>,
+    /// The volume was not ejected safely last time. `None` when the volume
+    /// is mounted, because mounting sets the same on-disk flag.
     pub fs_dirty: Option<bool>,
     pub primary_is_first: bool,
     pub partition_count: usize,

@@ -17,7 +17,9 @@ pub struct FilesystemInfo {
     /// Size the filesystem believes it has.
     pub total_bytes: Option<u64>,
     /// `Some(true)` when the volume was not cleanly unmounted (pulled
-    /// without ejecting, or a crash while writing).
+    /// without ejecting, or a crash while writing). The OS also sets it
+    /// while the volume is mounted, so it only describes the last removal
+    /// when read from an unmounted volume.
     pub dirty: Option<bool>,
     pub warnings: Vec<String>,
 }

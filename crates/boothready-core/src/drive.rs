@@ -137,13 +137,20 @@ pub fn analyze_drive(
             false,
         ),
     };
-    let facts = DriveFacts::from_parts(
+    let mut facts = DriveFacts::from_parts(
         &layout,
         &libraries,
         &audio,
         dev.usb.as_ref().and_then(|u| u.max_power_ma),
         identification.catalog_id.clone(),
     );
+    if root.is_some() {
+        // macOS marks FAT32 and exFAT volumes dirty on disk as soon as it
+        // mounts them read-write, and HFS+ after the first write, until the
+        // volume is ejected. A raw read of a mounted volume therefore shows
+        // the current mount, and the state it was left in last time is gone.
+        facts.fs_dirty = None;
+    }
     let headline = general_headline(&facts, rules);
     let interrupted = manifest.as_ref().is_some_and(|m| m.is_interrupted());
     DriveReport {
