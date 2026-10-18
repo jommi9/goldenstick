@@ -5,7 +5,7 @@
 import { inTauri } from "./api";
 import type { Api } from "./api";
 import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus, waveArt } from "./art";
-import { initLibrary, libraryAct, libraryChange, libraryHomeRow, libraryInput, librarySourceName, librarySourceView, libraryView, refreshLibrary } from "./library";
+import { initLibrary, libraryAct, libraryChange, libraryHomeRow, libraryInput, libraryPlayerBar, librarySourceName, librarySourceView, libraryView, refreshLibrary } from "./library";
 import type {
   AppInfo,
   Candidate,
@@ -997,6 +997,7 @@ function shell(content: Raw): Raw {
       ${S.alert ? html`<div class="banner ${S.alert.kind}" role="alert" style="margin-bottom:18px"><div style="flex:1">${S.alert.text}</div><button class="btn link" data-act="dismiss-alert">Dismiss</button></div>` : ""}
       ${content}
     </main>
+    ${libraryPlayerBar()}
     <footer class="foot">
       <span>BoothReady ${info?.version ?? ""}</span>
       <span>Compatibility rules v${info?.rules_version ?? "?"}${RULES_STATUS[info?.rules_review_status ?? ""] ?? ""}</span>

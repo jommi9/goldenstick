@@ -415,6 +415,8 @@ export interface LibrarySource {
   skipped: number;
   /** For a local collection: the folder name of the source its tracks came from. */
   collected_from: string | null;
+  /** The last scan read the tags of the tracks on this computer. */
+  tags_read: boolean;
 }
 
 /** What collecting the shown tracks would copy, and where to. */
@@ -449,6 +451,8 @@ export interface PlayerIssue {
 }
 
 export interface LibraryTrack {
+  /** The id of the source the track is in. */
+  source: string;
   path: string;
   name: string;
   folder: string;
@@ -458,11 +462,33 @@ export interface LibraryTrack {
   state: TrackState;
   note: string | null;
   issues: PlayerIssue[];
+  /** From the file's tags. The file name stands in when there is no title. */
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  genre: string | null;
+  year: number | null;
+  bpm: number | null;
+  /** Standard notation ("Am") and its Camelot position ("8A"). */
+  key: string | null;
+  camelot: string | null;
+  /** Length in seconds, from the header. */
+  duration: number | null;
 }
 
 export interface LibraryPage {
   total: number;
   tracks: LibraryTrack[];
+  /** States of every track in the folder and search, before the state filter. */
+  states: StateCounts;
+}
+
+/** A folder inside a source, listed parent first. */
+export interface FolderNode {
+  path: string;
+  name: string;
+  depth: number;
+  tracks: number;
 }
 
 export interface LibraryScanProgress {

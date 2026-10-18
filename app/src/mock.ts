@@ -13,6 +13,7 @@ import type {
   HardwareCard,
   KitPlan,
   LibrarySource,
+  FolderNode,
   LibraryTrack,
   Preset,
   StateCounts,
@@ -48,6 +49,92 @@ type Stage = "initial" | "prepared" | "exported";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Every search word must appear in the path or one of the tags, as in the engine. */
+function matchesSearch(t: LibraryTrack, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = [t.path, t.title, t.artist, t.album, t.genre].filter(Boolean).join("\n").toLowerCase();
+  return words.every((w) => haystack.includes(w));
+}
+
+const STATE_RANK: Record<string, number> = { ready: 0, cloud_only: 1, blocked: 2, unchecked: 3, unreadable: 4 };
+
+/** The engine's column order: missing values last either way, ties in folder order. */
+function compareTracks(sort: string, desc: boolean, a: LibraryTrack, b: LibraryTrack): number {
+  const stem = (t: LibraryTrack) => t.name.replace(/\.[^.]+$/, "");
+  const title = (t: LibraryTrack) => (t.title ?? stem(t)).toLowerCase();
+  const wheel = (t: LibraryTrack) => (t.camelot ? parseInt(t.camelot, 10) * 2 + (t.camelot.endsWith("B") ? 1 : 0) : null);
+  const value = (t: LibraryTrack): string | number | null => {
+    switch (sort) {
+      case "title":
+        return title(t);
+      case "artist":
+        return t.artist?.toLowerCase() ?? null;
+      case "album":
+        return t.album?.toLowerCase() ?? null;
+      case "bpm":
+        return t.bpm;
+      case "key":
+        return wheel(t);
+      case "time":
+        return t.duration;
+      case "size":
+        return t.size;
+      case "format":
+        return t.name.split(".").pop()?.toLowerCase() ?? "";
+      case "state":
+        return STATE_RANK[t.state];
+      default:
+        return null;
+    }
+  };
+  const x = value(a);
+  const y = value(b);
+  let order = 0;
+  if (x !== null && y !== null) order = (x < y ? -1 : x > y ? 1 : 0) * (desc ? -1 : 1);
+  else if (x !== null) order = -1;
+  else if (y !== null) order = 1;
+  if (!order && sort === "artist") order = title(a) < title(b) ? -1 : title(a) > title(b) ? 1 : 0;
+  return order || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+}
+
+const tones = new Map<string, string>();
+
+/**
+ * A quiet 30-second stand-in for a demo track: a soft tone pulsing at 124
+ * BPM, pitched from the path so each track sounds different.
+ */
+function toneUrl(path: string): string {
+  const cached = tones.get(path);
+  if (cached) return cached;
+  let hash = 0;
+  for (const c of path) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+  const rate = 8000;
+  const samples = rate * 30;
+  const pitch = 110 * 2 ** ((hash % 12) / 12);
+  const beat = (60 / 124) * rate;
+  const wav = new DataView(new ArrayBuffer(44 + samples));
+  const text = (at: number, s: string) => [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  wav.setUint32(4, 36 + samples, true);
+  text(8, "WAVEfmt ");
+  wav.setUint32(16, 16, true);
+  wav.setUint16(20, 1, true);
+  wav.setUint16(22, 1, true);
+  wav.setUint32(24, rate, true);
+  wav.setUint32(28, rate, true);
+  wav.setUint16(32, 1, true);
+  wav.setUint16(34, 8, true);
+  text(36, "data");
+  wav.setUint32(40, samples, true);
+  for (let i = 0; i < samples; i++) {
+    const envelope = Math.exp(-((i % beat) / beat) * 5);
+    wav.setUint8(44 + i, 128 + Math.round(24 * envelope * Math.sin((2 * Math.PI * pitch * i) / rate)));
+  }
+  const url = URL.createObjectURL(new Blob([wav.buffer], { type: "audio/wav" }));
+  tones.set(path, url);
+  return url;
+}
+
 export async function createMockApi(): Promise<Api> {
   const data = (await import("./mock-data.json")).default as unknown as Snapshot;
   const params = new URLSearchParams(location.search);
@@ -64,6 +151,7 @@ export async function createMockApi(): Promise<Api> {
     { id: "dual-library-export", title: "Complete rekordbox export", description: "Device Library and OneLibrary with clean audio" },
     { id: "prepare-fat32", title: "Safe fixture preparation", description: "Run the real helper request against an image-backed demo stick" },
     { id: "copy-and-verify", title: "Backup copy and read-back", description: "Copy a complete export to another fixture and verify every file" },
+    { id: "mounted-dirty-flag", title: "Dirty flag while mounted", description: "A FAT32 image whose clean-shutdown bit is cleared, the way macOS leaves it while mounted, checked mounted and unmounted" },
   ];
 
   // URL parameters make a browser-only reproduction easy to share:
@@ -123,14 +211,34 @@ export async function createMockApi(): Promise<Api> {
     const pool = c.origin === "demo-cloud" ? lib.collected.tracks : tracksOf(c.origin, targets);
     return pool.filter((t) => c.paths.has(t.path));
   };
-  const pick = (id: string, targets: string[], filter: string, query: string): LibraryTrack[] => {
-    const q = query.trim().toLowerCase();
-    return tracksOf(id, targets).filter((t) => (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
+  const inFolder = (path: string, folder: string) => !folder || path.startsWith(`${folder}/`);
+  const pick = (id: string, targets: string[], filter: string, query: string, folder = ""): LibraryTrack[] => {
+    return tracksOf(id, targets).filter((t) => inFolder(t.path, folder) && (filter === "all" || t.state === filter) && matchesSearch(t, query));
   };
-  const collectPlan = (id: string, targets: string[], filter: string, query: string, name: string) => {
+  /** Every source's tracks, with the source's name in front of the folder, as the engine does for "*". */
+  const allSourcesTracks = (targets: string[]): LibraryTrack[] =>
+    listSources(targets).flatMap((s) => tracksOf(s.id, targets).map((t) => ({ ...t, source: s.id, folder: t.folder ? `${s.name}/${t.folder}` : s.name })));
+  const foldersOf = (id: string): FolderNode[] => {
+    const counts = new Map<string, number>();
+    for (const t of tracksOf(id, [])) {
+      const parts = t.path.split("/");
+      for (let end = 1; end < parts.length; end++) {
+        const key = parts.slice(0, end).join("/");
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+    const byParts = (a: string, b: string) => {
+      const x = a.split("/");
+      const y = b.split("/");
+      for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+      return x.length - y.length;
+    };
+    return [...counts.keys()].sort(byParts).map((path) => ({ path, name: path.split("/").pop() ?? path, depth: path.split("/").length - 1, tracks: counts.get(path) ?? 0 }));
+  };
+  const collectPlan = (id: string, targets: string[], filter: string, query: string, name: string, folder = "") => {
     const origin = listSources(targets).find((s) => s.id === id);
     if (!origin) throw new Error("That music source was removed.");
-    const matching = pick(id, targets, filter, query);
+    const matching = pick(id, targets, filter, query, folder);
     const tracks = matching.filter((t) => t.state !== "unreadable");
     const online = tracks.filter((t) => t.state === "cloud_only");
     const sum = (list: LibraryTrack[]) => list.reduce((n, t) => n + t.size, 0);
@@ -160,10 +268,10 @@ export async function createMockApi(): Promise<Api> {
   };
   const tracksOf = (id: string, targets: string[]): LibraryTrack[] => {
     const lib = libraryFor(targets);
-    if (lib.tracks[id]) return lib.tracks[id];
     const made = collections.find((c) => c.id === id);
-    if (made) return collectionTracks(made, targets);
-    return addedSources.find((a) => a.source.id === id && a.scanned) ? lib.tracks["demo-computer"] : [];
+    const list = lib.tracks[id] ?? (made ? collectionTracks(made, targets) : addedSources.find((a) => a.source.id === id && a.scanned) ? lib.tracks["demo-computer"] : []);
+    // Stand-in tracks borrowed from another source still belong to this one.
+    return list.some((t) => t.source !== id) ? list.map((t) => ({ ...t, source: id })) : list;
   };
   const listSources = (targets: string[]): LibrarySource[] => {
     const lib = libraryFor(targets);
@@ -182,6 +290,7 @@ export async function createMockApi(): Promise<Api> {
         name: c.name,
         path: `/Users/dj/Music/BoothReady/${c.name}/files`,
         collected_from: origin?.name ?? lib.collected.source.collected_from,
+        tags_read: true,
         totals: { tracks: tracks.length, bytes: tracks.reduce((n, t) => n + t.size, 0), cloud_only: 0, cloud_only_bytes: 0, unreadable: 0 },
         states: countStates(tracks),
       };
@@ -414,13 +523,14 @@ export async function createMockApi(): Promise<Api> {
           states: null,
           skipped: 0,
           collected_from: null,
+          tags_read: true,
         },
       });
       return id;
     },
-    libraryCollectPlan: async (id, targets, filter, query, name) => collectPlan(id, targets, filter, query, name).plan,
-    libraryCollect: async (id, targets, filter, query, name) => {
-      const { plan, origin, tracks } = collectPlan(id, targets, filter, query, name);
+    libraryCollectPlan: async (id, targets, filter, query, name, folder) => collectPlan(id, targets, filter, query, name, folder).plan,
+    libraryCollect: async (id, targets, filter, query, name, folder) => {
+      const { plan, origin, tracks } = collectPlan(id, targets, filter, query, name, folder);
       if (!origin.connected) throw new Error("The source folder can't be reached.");
       if (!plan.tracks) throw new Error("There are no readable tracks to collect.");
       if (plan.exists) throw new Error("The collection couldn't be made: source changed or destination belongs to another collection.");
@@ -461,10 +571,18 @@ export async function createMockApi(): Promise<Api> {
     libraryCancelScan: async () => {
       libraryCancelled = true;
     },
-    libraryTracks: async (id, targets, filter, query, offset, limit) => {
-      const q = query.trim().toLowerCase();
-      const matching = tracksOf(id, targets).filter((t) => (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
-      return { total: matching.length, tracks: matching.slice(offset, offset + limit) };
+    libraryTracks: async (id, targets, filter, query, offset, limit, folder = "", sort = "", desc = false) => {
+      const scoped = (id === "*" ? allSourcesTracks(targets) : tracksOf(id, targets)).filter((t) => inFolder(t.path, folder) && matchesSearch(t, query));
+      const matching = scoped.filter((t) => filter === "all" || t.state === filter);
+      if (sort) matching.sort((a, b) => compareTracks(sort, desc, a, b));
+      return { total: matching.length, tracks: matching.slice(offset, offset + limit), states: countStates(scoped) };
+    },
+    libraryFolders: async (id) => foldersOf(id),
+    libraryPlayUrl: async (id, path) => {
+      const t = tracksOf(id, []).find((x) => x.path === path);
+      if (!t || t.state === "unreadable") throw new Error("That isn't a track in this source.");
+      if (params.get("player") === "unsupported") return "data:audio/x-aiff;base64,AAAA";
+      return toneUrl(path);
     },
     onLibraryScanProgress: on("library-scan-progress"),
     onDeviceEvent: on("device-event"),

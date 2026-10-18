@@ -9,17 +9,19 @@ use anyhow::{bail, Context, Result};
 use boothready_core::copy::{plan_copy, run_copy, CopyTarget};
 use boothready_core::demo::{create_stick, DemoStick, STICKS};
 use boothready_core::drive::{analyze_drive, DriveReport};
+use boothready_core::format::build_fat32;
 use boothready_core::identify::UsbCatalog;
 use boothready_core::library::LibraryFormat;
 use boothready_core::media::inspect;
 use boothready_core::privileged::{DeviceFingerprint, HelperEvent, HelperRequest};
-use boothready_core::rules::{assess_drive, Ruleset, Verdict};
+use boothready_core::rules::{assess_drive, FixKind, Ruleset, Verdict};
 use boothready_core::verify::{verify_volume, Expectations, VerifyRequest};
 use boothready_helper::{handle, Backend, DemoBackend};
 use boothready_model::{FilesystemKind, PartitionScheme};
 use boothready_platform::Platform;
 use serde::Serialize;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -31,6 +33,7 @@ enum ScenarioKind {
     DualLibrary,
     PrepareFat32,
     CopyAndVerify,
+    MountedDirtyFlag,
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +74,12 @@ const SCENARIOS: &[Scenario] = &[
         title: "Backup copy and read-back",
         description: "Copy a complete export to another fixture and verify every file",
         kind: ScenarioKind::CopyAndVerify,
+    },
+    Scenario {
+        id: "mounted-dirty-flag",
+        title: "Dirty flag while mounted",
+        description: "A FAT32 image whose clean-shutdown bit is cleared, the way macOS leaves it while mounted, checked mounted and unmounted",
+        kind: ScenarioKind::MountedDirtyFlag,
     },
 ];
 
@@ -192,6 +201,7 @@ fn execute_virtual(scenario: &Scenario, root: &Path, rules: &Ruleset, catalog: &
         }
         ScenarioKind::PrepareFat32 => run_prepare_scenario(root, &mut checks),
         ScenarioKind::CopyAndVerify => run_copy_scenario(root, &mut checks),
+        ScenarioKind::MountedDirtyFlag => run_mounted_dirty_scenario(root, rules, catalog, &mut checks),
     } {
         Ok(()) => None,
         Err(e) => Some(e.to_string()),
@@ -387,6 +397,87 @@ fn run_copy_scenario(root: &Path, checks: &mut Vec<Check>) -> Result<()> {
     Ok(())
 }
 
+/// macOS clears the FAT32 clean-shutdown bit when it mounts a volume
+/// read-write and sets it again on eject, so a raw read of a mounted stick
+/// always sees it cleared. Observed on 2026-10-14 with `hdiutil attach` of a
+/// `make-image` FAT32 image, before any file was written.
+fn run_mounted_dirty_scenario(
+    root: &Path,
+    rules: &Ruleset,
+    catalog: &UsbCatalog,
+    checks: &mut Vec<Check>,
+) -> Result<()> {
+    let usb = root.join("usb");
+    create_stick(&usb, stick("samsung-64")?)?;
+    let platform = boothready_platform::demo::DemoPlatform::new(usb);
+    let dev = platform
+        .list_devices()?
+        .into_iter()
+        .find(|d| d.id == "demo:samsung-64")
+        .context("fixture 'samsung-64' was not created")?;
+    let size = 1u64 << 30;
+    let mut img = fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&dev.os_path)?;
+    img.set_len(size)?;
+    let layout = build_fat32(&mut img, size, 512, "SAMSUNG", 0x6469_7274_7966)?;
+    clear_fat32_clean_bit(&mut img, layout.partition_start)?;
+    drop(img);
+
+    let raw = inspect(fs::File::open(&dev.os_path)?)?;
+    let raw_dirty = raw.primary().and_then(|p| p.filesystem.as_ref()).and_then(|f| f.dirty);
+    check(checks, "raw-flag-cleared", raw_dirty == Some(true), format!("dirty {raw_dirty:?}"));
+
+    let targets = rules.preset("pioneer_only").context("pioneer_only preset is missing")?;
+    let devices = rules.devices_by_id(&targets.devices);
+    let unsafe_eject = |a: &boothready_core::rules::DriveAssessment| {
+        a.devices.iter().any(|d| d.layers.iter().any(|l| l.headline == "Not ejected safely last time"))
+            || a.fixes.iter().any(|f| f.kind == FixKind::RepairFilesystem)
+    };
+
+    let mounted = analyze_drive(&dev, Some(raw.clone()), rules, catalog, |_, _| {});
+    let assessment = assess_drive(&mounted.facts, &devices, rules);
+    check(
+        checks,
+        "mounted-flag-ignored",
+        mounted.mount_point.is_some() && mounted.facts.fs_dirty.is_none(),
+        format!("mounted at {:?}, fs_dirty {:?}", mounted.mount_point, mounted.facts.fs_dirty),
+    );
+    check(checks, "mounted-no-eject-warning", !unsafe_eject(&assessment), assessment.overall.label().into());
+
+    let mut unmounted_dev = dev.clone();
+    for v in &mut unmounted_dev.volumes {
+        v.mount_point = None;
+    }
+    let unmounted = analyze_drive(&unmounted_dev, Some(raw), rules, catalog, |_, _| {});
+    let assessment = assess_drive(&unmounted.facts, &devices, rules);
+    check(
+        checks,
+        "unmounted-flag-trusted",
+        unmounted.facts.fs_dirty == Some(true) && unsafe_eject(&assessment),
+        format!("fs_dirty {:?}, {}", unmounted.facts.fs_dirty, assessment.overall.label()),
+    );
+    Ok(())
+}
+
+/// Clear ClnShutBitMask in FAT[1] of every FAT copy.
+fn clear_fat32_clean_bit(img: &mut fs::File, partition_start: u64) -> Result<()> {
+    let mut boot = [0u8; 512];
+    img.seek(SeekFrom::Start(partition_start))?;
+    img.read_exact(&mut boot)?;
+    let bps = u16::from_le_bytes([boot[11], boot[12]]) as u64;
+    let reserved = u16::from_le_bytes([boot[14], boot[15]]) as u64;
+    let fat_sectors = u32::from_le_bytes([boot[36], boot[37], boot[38], boot[39]]) as u64;
+    for i in 0..boot[16] as u64 {
+        let at = partition_start + (reserved + i * fat_sectors) * bps + 4;
+        let mut entry = [0u8; 4];
+        img.seek(SeekFrom::Start(at))?;
+        img.read_exact(&mut entry)?;
+        let cleared = u32::from_le_bytes(entry) & !0x0800_0000;
+        img.seek(SeekFrom::Start(at))?;
+        img.write_all(&cleared.to_le_bytes())?;
+    }
+    Ok(())
+}
+
 fn stick(name: &str) -> Result<&'static DemoStick> {
     STICKS.iter().find(|s| s.name == name).with_context(|| format!("unknown fixture stick '{name}'"))
 }
@@ -502,7 +593,7 @@ mod tests {
         )
         .unwrap();
         assert!(suite.passed, "{suite:?}");
-        assert_eq!(suite.scenarios.len(), if cfg!(windows) { 4 } else { 5 });
+        assert_eq!(suite.scenarios.len(), if cfg!(windows) { 5 } else { 6 });
         assert!(suite.scenarios.iter().all(|s| s.artifact.is_some()));
     }
 }

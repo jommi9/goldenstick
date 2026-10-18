@@ -248,7 +248,10 @@ async function checkLibrary(page, text, at) {
     same(await rows.count(), tracks.length, `${s.name} lists every scanned track`);
     for (const [i, t] of tracks.entries()) {
       const row = (await rows.nth(i).textContent()) ?? "";
-      includes(row, t.name, `row ${i + 1} of ${s.name} is ${t.name}`);
+      includes(row, t.title ?? t.name, `row ${i + 1} of ${s.name} is ${t.title ?? t.name}`);
+      if (t.artist) includes(row, t.artist, `${t.name} shows its artist tag`);
+      if (t.camelot) includes(row, t.camelot, `${t.name} shows its key on the Camelot wheel`);
+      if (t.bpm !== null) includes(row, String(Math.round(t.bpm * 100) / 100), `${t.name} shows its tempo`);
       includes(row, STATE_LABEL[t.state], `${t.name} shows the engine's state`);
       for (const issue of t.issues.slice(0, 3)) {
         includes(row, issue.model, `${t.name} names the player that rejects it`);
@@ -264,6 +267,84 @@ async function checkLibrary(page, text, at) {
       same(await page.locator(".tracks tbody tr").count(), n, `the ${state} filter on ${s.name} shows its ${n} tracks`);
     }
   }
+
+  // The browser: a folder in the tree narrows the list to that folder, and
+  // the collection holds every source's tracks.
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.locator('[data-act="library-open"][data-id="demo-computer"]').click();
+  await page.getByRole("table").waitFor();
+  check((await page.locator(".rb-tree").count()) === 1, "the source opens in the browser with its tree");
+  const hiRes = lib.tracks["demo-computer"].filter((t) => t.folder === "Hi-Res");
+  await page.locator('[data-act="library-folder"][data-id="demo-computer|Hi-Res"]').click();
+  await page.waitForTimeout(150);
+  await at("library-folder Hi-Res");
+  same(await page.locator(".tracks tbody tr").count(), hiRes.length, "a folder in the tree lists only its tracks");
+  includes(await text("main#main h1"), "Hi-Res", "the selected folder names the view");
+  await page.locator('[data-act="library-open"][data-id="*"]').click();
+  await page.getByRole("table").waitFor();
+  await page.waitForTimeout(150);
+  await at("library-collection-all");
+  const everything = lib.sources.reduce((n, s) => n + lib.tracks[s.id].length, 0);
+  includes(await text(".tracks-foot"), `of ${everything.toLocaleString("en-US")}`, "the collection holds every source's tracks");
+
+  // Tags: the engine read them, search finds an artist, and a heading
+  // orders the list with untagged tracks last.
+  check(lib.tracks["demo-computer"].filter((t) => t.state !== "unreadable").some((t) => t.title === null), "one demo track is left untagged");
+  check(lib.tracks["demo-computer"].filter((t) => t.artist).length >= 6, "the demo tracks carry artist tags");
+  await page.locator("#library-search").fill("klock");
+  await page.waitForTimeout(400);
+  const klock = lib.tracks["demo-computer"].filter((t) => t.artist === "Ben Klock").length;
+  same(await page.locator(".tracks tbody tr").count(), klock, "searching an artist finds that artist's tracks");
+  await page.locator("#library-search").fill("");
+  await page.waitForTimeout(400);
+  await page.locator('[data-act="library-sort"][data-id="bpm"]').click();
+  await page.waitForTimeout(200);
+  await at("library-sort bpm");
+  const tempos = await page.locator(".tracks tbody td.bpm").allTextContents();
+  const known = tempos.map((x) => x.trim()).filter((x) => x !== "·").map(Number);
+  check(known.length > 0 && known.every((v, i) => i === 0 || known[i - 1] <= v), "sorting by BPM puts the slowest first");
+  check(tempos.map((x) => x.trim()).slice(known.length).every((x) => x === "·"), "tracks without a tempo come last");
+  same(await page.locator('th[aria-sort="ascending"]').count(), 1, "the sorted column says so");
+  await page.locator('[data-act="library-sort"][data-id="bpm"]').click();
+  await page.waitForTimeout(200);
+  const down = (await page.locator(".tracks tbody td.bpm").allTextContents()).map((x) => x.trim()).filter((x) => x !== "·").map(Number);
+  check(down.every((v, i) => i === 0 || down[i - 1] >= v), "the same heading again reverses the order");
+  await page.locator('[data-act="library-sort"][data-id=""]').click();
+  await page.waitForTimeout(200);
+
+  // Playing: a row's number is its play key, the bar along the bottom
+  // follows the track across screens, and unreadable files can't be started.
+  for (const s of lib.sources) check(lib.tracks[s.id].every((t) => t.source === s.id), `every track of ${s.name} names its source`);
+  const unreadable = lib.tracks["demo-computer"].filter((t) => t.state === "unreadable").length;
+  same(await page.locator("tbody tr.unreadable .rb-play").count(), 0, "an unreadable track has no play key");
+  check(unreadable === 0 || (await page.locator("tbody tr.unreadable").count()) > 0, "an unreadable track is listed");
+  const second = page.locator(".rb-play").nth(1);
+  const secondName = (await second.getAttribute("aria-label"))?.replace(/^Play /, "");
+  await second.click();
+  await page.locator(".player").waitFor();
+  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
+  await at("library-player");
+  check((await text(".player-name")).trim().startsWith(secondName), "the player shows the track that was clicked");
+  same((await text("tr.playing td b")).trim(), secondName, "the playing row is marked");
+  await page.waitForFunction(() => document.getElementById("player-elapsed")?.textContent !== "0:00", null, { timeout: 4000 });
+  check(true, "the clock runs while the track plays");
+  await page.locator('[data-act="library-next"]').click();
+  await page.waitForFunction((name) => document.querySelector("tr.playing td b")?.textContent?.trim() !== name, secondName);
+  check(!(await text(".player-name")).trim().startsWith(secondName), "next moves to the following track");
+  await page.keyboard.press("Escape");
+  await page.locator("main#main h1").click();
+  await page.keyboard.press(" ");
+  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Play");
+  check(true, "the space bar pauses");
+  await page.locator('.tab[data-act="home"]').click();
+  check((await page.locator(".player").count()) === 1, "the player stays on other screens");
+  await page.locator('[data-act="library-stop-play"]').click();
+  same(await page.locator(".player").count(), 0, "stop closes the player");
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.locator('[data-act="library-open"][data-id="*"]').click();
+  await page.getByRole("table").waitFor();
+  await page.locator('[data-act="library-folder"][data-id="demo-cloud|"]').click();
+  await page.getByRole("table").waitFor();
 
   // Collecting the cloud folder: the plan matches the scan, and the new
   // collection shows what the engine read once the tracks were local.

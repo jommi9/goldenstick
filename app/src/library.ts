@@ -3,7 +3,7 @@
 // State lives here; app.ts routes views and actions to this module.
 
 import type { Api } from "./api";
-import type { CollectPlan, LibraryCollectProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
+import type { CollectPlan, FolderNode, LibraryCollectProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
 import { gb, html, num, plural, raw, Raw, when } from "./ui";
 
 type Filter = "all" | TrackState;
@@ -35,10 +35,21 @@ const L = {
   removeAsk: null as string | null,
   filter: "all" as Filter,
   query: "",
+  /** The column the list is ordered by; empty keeps folder order. */
+  sort: "",
+  desc: false,
   tracks: [] as LibraryTrack[],
   total: 0,
   tracksFor: null as string | null,
   loadingTracks: false,
+  /** The folder selected in the browser's tree, relative to the source. */
+  folder: "",
+  /** State counts for the current folder and search, from the last page. */
+  states: null as StateCounts | null,
+  /** Folder trees, fetched when a source is opened in the tree. */
+  folders: new Map<string, FolderNode[]>(),
+  /** Expanded tree nodes: a source id, or "source id|folder path". */
+  open: new Set<string>(),
   /** The collect panel for one source: its plan, the run and the result. */
   collect: null as null | {
     sourceId: string;
@@ -93,9 +104,188 @@ export function locationLabel(l: LibraryLocation): string {
 
 const source = (id: string) => L.sources.find((s) => s.id === id);
 
+// ------------------------------------------------------------------ player
+
+/**
+ * One audio element for the whole app. It lives outside the rendered markup,
+ * so re-rendering a screen never interrupts what is playing.
+ */
+const P = {
+  audio: null as HTMLAudioElement | null,
+  /** The loaded track, kept as it was listed when it was started. */
+  now: null as LibraryTrack | null,
+  /** The list it was started from, for previous and next. */
+  queue: [] as LibraryTrack[],
+  loading: false,
+  error: null as string | null,
+  /** True while the seek bar is being dragged, so playback doesn't move it. */
+  seeking: false,
+};
+
+const trackKey = (t: { source: string; path: string }) => `${t.source}|${t.path}`;
+
+function audio(): HTMLAudioElement {
+  if (P.audio) return P.audio;
+  const a = new Audio();
+  a.preload = "auto";
+  a.addEventListener("timeupdate", updateClock);
+  a.addEventListener("durationchange", updateClock);
+  for (const ev of ["play", "pause", "ended"]) a.addEventListener(ev, () => L.host.render());
+  a.addEventListener("error", () => {
+    if (!P.now || !a.getAttribute("src")) return;
+    P.loading = false;
+    P.error = `This ${P.now.format || "file"} file can't be played in BoothReady on this computer. That doesn't change whether your players can play it.`;
+    L.host.render();
+  });
+  P.audio = a;
+  return a;
+}
+
+const clock = (secs: number) => {
+  if (!Number.isFinite(secs) || secs < 0) return "--:--";
+  const s = Math.floor(secs);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+/** Move the clock and the seek bar without re-rendering the screen. */
+function updateClock() {
+  const a = P.audio;
+  if (!a) return;
+  const elapsed = document.getElementById("player-elapsed");
+  const remain = document.getElementById("player-remain");
+  const seek = document.getElementById("library-seek") as HTMLInputElement | null;
+  if (elapsed) elapsed.textContent = clock(a.currentTime);
+  if (remain) remain.textContent = Number.isFinite(a.duration) ? `-${clock(a.duration - a.currentTime)}` : "--:--";
+  if (seek && !P.seeking) {
+    seek.max = String(Number.isFinite(a.duration) ? a.duration : 0);
+    seek.value = String(a.currentTime);
+  }
+}
+
+async function play(t: LibraryTrack) {
+  const a = audio();
+  if (P.now && trackKey(P.now) === trackKey(t)) {
+    if (a.paused) await a.play().catch(() => {});
+    else a.pause();
+    return;
+  }
+  P.now = t;
+  P.queue = L.tracks.filter((x) => x.state !== "unreadable");
+  P.error = null;
+  P.loading = true;
+  a.pause();
+  L.host.render();
+  try {
+    const url = await L.host.api.libraryPlayUrl(t.source, t.path);
+    // A later click may have started another track while this one resolved.
+    if (P.now !== t) return;
+    a.src = url;
+    await a.play();
+  } catch (e) {
+    if (P.now !== t) return;
+    // The element's own error event explains format failures; this covers the rest.
+    if (!P.error && !(e instanceof DOMException && e.name === "AbortError")) P.error = e instanceof DOMException ? `This ${t.format || "file"} file can't be played on this computer.` : String(e);
+  } finally {
+    if (P.now === t) P.loading = false;
+  }
+  L.host.render();
+}
+
+function step(by: number) {
+  if (!P.now) return;
+  // Previous restarts the track once it has played a few seconds, as on a deck.
+  if (by < 0 && P.audio && P.audio.currentTime > 3) {
+    P.audio.currentTime = 0;
+    return;
+  }
+  const at = P.queue.findIndex((t) => trackKey(t) === trackKey(P.now!));
+  const next = P.queue[at + by];
+  if (next) void play(next);
+  else if (by < 0 && P.audio) P.audio.currentTime = 0;
+}
+
+function stopPlayer() {
+  P.audio?.pause();
+  P.audio?.removeAttribute("src");
+  P.audio?.load();
+  P.now = null;
+  P.error = null;
+  P.loading = false;
+}
+
+function togglePlayer() {
+  const a = P.audio;
+  if (!P.now || !a) return;
+  if (a.paused) void a.play().catch(() => {});
+  else a.pause();
+}
+
+const isPlaying = (t: LibraryTrack) => !!P.now && trackKey(P.now) === trackKey(t) && !!P.audio && !P.audio.paused;
+
+const ICON = {
+  play: "M3 1.5v11l9.5-5.5z",
+  pause: "M3 1.5h3v11H3zM8 1.5h3v11H8z",
+  prev: "M2 1.5h2v11H2zM13 1.5v11L4.5 7z",
+  next: "M12 1.5h-2v11h2zM1 1.5v11L9.5 7z",
+  stop: "M2.5 2.5h9v9h-9z",
+};
+const icon = (d: string) => raw(`<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="${d}" fill="currentColor"/></svg>`);
+
+/** The bar along the bottom of the window while a track is loaded. */
+export function libraryPlayerBar(): Raw {
+  const t = P.now;
+  if (!t) return html``;
+  const a = P.audio;
+  const playing = !!a && !a.paused;
+  const s = source(t.source);
+  const cloud = t.state === "cloud_only" ? (s?.location.kind === "cloud" ? s.location.provider : "your cloud app") : null;
+  const at = P.queue.findIndex((x) => trackKey(x) === trackKey(t));
+  const duration = a && Number.isFinite(a.duration) ? a.duration : 0;
+  // Rows in "All tracks" already start their folder with the source's name.
+  const where = s && !t.folder.startsWith(s.name) ? [s.name, t.folder].filter(Boolean).join(" · ") : t.folder;
+  const facts = [t.bpm !== null ? `${bpmText(t.bpm)} BPM` : "", t.camelot ? `${t.camelot} (${t.key})` : "", t.detail ? `${t.format}, ${t.detail}` : t.format].filter(Boolean).join(" · ");
+  return html`<section class="player" aria-label="Player">
+    <div class="player-keys">
+      <button class="player-key" data-act="library-prev" aria-label="Previous track, or the start of this one">${icon(ICON.prev)}</button>
+      <button class="player-key main ${playing ? "on" : ""}" data-act="library-toggle-play" aria-label="${playing ? "Pause" : "Play"}" ${P.error ? "disabled" : ""}>${icon(playing ? ICON.pause : ICON.play)}</button>
+      <button class="player-key" data-act="library-next" aria-label="Next track" ${at >= 0 && at < P.queue.length - 1 ? "" : "disabled"}>${icon(ICON.next)}</button>
+    </div>
+    <div class="player-track">
+      <b class="player-name">${titleOf(t)}${t.artist ? html`<span class="player-artist"> · ${t.artist}</span>` : ""}</b>
+      <div class="small faint">${[where, facts].filter(Boolean).join(" · ")}</div>
+      ${P.error
+        ? html`<div class="small player-error" role="alert">${P.error}</div>`
+        : P.loading && cloud
+          ? html`<div class="small muted">${cloud} is downloading this track so it can play.</div>`
+          : P.loading
+            ? html`<div class="small muted">Loading.</div>`
+            : ""}
+    </div>
+    <div class="player-time">
+      <span id="player-elapsed" class="player-clock">${clock(a?.currentTime ?? 0)}</span>
+      <input id="library-seek" class="player-seek" type="range" min="0" step="0.1" max="${duration}" value="${a?.currentTime ?? 0}" aria-label="Position" ${duration ? "" : "disabled"}>
+      <span id="player-remain" class="player-clock">${duration ? `-${clock(duration - (a?.currentTime ?? 0))}` : "--:--"}</span>
+    </div>
+    <button class="player-key" data-act="library-stop-play" aria-label="Stop and close the player">${icon(ICON.stop)}</button>
+  </section>`;
+}
+
 /** The folder name of a source, for the path bar. */
 export function librarySourceName(id: string): string {
+  if (id === ALL) return "Collection";
   return source(id)?.name ?? "Source";
+}
+
+/** The browser's id for every source at once. */
+const ALL = "*";
+
+async function loadFolders(id: string) {
+  if (id === ALL || L.folders.has(id)) return;
+  try {
+    L.folders.set(id, await L.host.api.libraryFolders(id));
+  } catch (e) {
+    L.error = String(e);
+  }
 }
 
 export function librarySummary(): { sources: number; tracks: number } {
@@ -115,9 +305,10 @@ async function loadTracks(id: string, more = false) {
   L.loadingTracks = true;
   try {
     const offset = more && L.tracksFor === id ? L.tracks.length : 0;
-    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE);
+    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE, L.folder, L.sort, L.desc);
     L.tracks = offset ? [...L.tracks, ...page.tracks] : page.tracks;
     L.total = page.total;
+    L.states = page.states;
     L.tracksFor = id;
   } catch (e) {
     L.error = String(e);
@@ -137,6 +328,14 @@ export async function initLibrary(host: Host) {
     L.collect.progress = p;
     if (host.showing()) host.render();
   });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== " " || !P.now || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    // Space keeps its usual job in fields and on buttons.
+    const el = ev.target as HTMLElement | null;
+    if (el?.closest("input, textarea, select, button, summary, [contenteditable]")) return;
+    ev.preventDefault();
+    togglePlayer();
+  });
   await refreshLibrary();
 }
 
@@ -144,7 +343,7 @@ async function planCollect(name: string) {
   const c = L.collect;
   if (!c) return;
   try {
-    c.plan = await L.host.api.libraryCollectPlan(c.sourceId, L.host.targets(), L.filter, L.query, name);
+    c.plan = await L.host.api.libraryCollectPlan(c.sourceId, L.host.targets(), L.filter, L.query, name, L.folder);
     c.name = c.plan.name;
     c.error = null;
   } catch (e) {
@@ -160,7 +359,7 @@ async function runCollect() {
   c.progress = null;
   L.host.render();
   try {
-    const id = await L.host.api.libraryCollect(c.sourceId, L.host.targets(), L.filter, L.query, c.name);
+    const id = await L.host.api.libraryCollect(c.sourceId, L.host.targets(), L.filter, L.query, c.name, L.folder);
     c.done = { id, name: c.name, tracks: c.plan?.tracks ?? 0 };
   } catch (e) {
     c.error = String(e);
@@ -171,8 +370,11 @@ async function runCollect() {
   L.host.render();
 }
 
-export async function openLibrarySource(id: string) {
+export async function openLibrarySource(id: string, folder = "") {
   L.collect = null;
+  L.folder = folder;
+  L.open.add(id);
+  await loadFolders(id);
   L.filter = "all";
   L.query = "";
   L.tracks = [];
@@ -277,6 +479,23 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       host.render();
       return true;
     }
+    case "library-folder": {
+      // data-id is "source id|folder path"; an empty path is the whole source.
+      const [sourceId, path] = [id.slice(0, id.indexOf("|")), id.slice(id.indexOf("|") + 1)];
+      host.openSource(sourceId);
+      await openLibrarySource(sourceId, path);
+      if (path) L.open.add(`${sourceId}|${path}`);
+      host.render();
+      return true;
+    }
+    case "library-toggle":
+      if (L.open.has(id)) L.open.delete(id);
+      else {
+        L.open.add(id);
+        if (!id.includes("|")) await loadFolders(id);
+      }
+      host.render();
+      return true;
     case "library-filter":
       L.filter = id as Filter;
       if (L.tracksFor) await loadTracks(L.tracksFor);
@@ -298,6 +517,14 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       L.collect = null;
       host.render();
       return true;
+    case "library-sort":
+      // The same column again flips the direction; "#" goes back to folder order.
+      if (!id) [L.sort, L.desc] = ["", false];
+      else if (L.sort === id) L.desc = !L.desc;
+      else [L.sort, L.desc] = [id, false];
+      if (L.tracksFor) await loadTracks(L.tracksFor);
+      renderTracks();
+      return true;
     case "library-more":
       if (L.tracksFor) await loadTracks(L.tracksFor, true);
       host.render();
@@ -312,6 +539,24 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       }
       return true;
     }
+    case "library-play": {
+      const t = L.tracks.find((x) => trackKey(x) === id);
+      if (t) await play(t);
+      return true;
+    }
+    case "library-toggle-play":
+      togglePlayer();
+      return true;
+    case "library-prev":
+      step(-1);
+      return true;
+    case "library-next":
+      step(1);
+      return true;
+    case "library-stop-play":
+      stopPlayer();
+      host.render();
+      return true;
     case "library-dismiss-error":
       L.error = null;
       host.render();
@@ -324,6 +569,12 @@ let searchTimer = 0;
 
 /** Handle typing. Returns false when the field isn't a Library one. */
 export function libraryInput(t: HTMLInputElement): boolean {
+  if (t.id === "library-seek") {
+    P.seeking = true;
+    const elapsed = document.getElementById("player-elapsed");
+    if (elapsed) elapsed.textContent = clock(Number(t.value));
+    return true;
+  }
   if (t.id === "library-path") {
     L.path = t.value;
     return true;
@@ -346,6 +597,11 @@ export function libraryInput(t: HTMLInputElement): boolean {
 
 /** Handle a changed select. Returns false when it isn't a Library one. */
 export async function libraryChange(t: HTMLInputElement | HTMLSelectElement): Promise<boolean> {
+  if (t.id === "library-seek") {
+    if (P.audio) P.audio.currentTime = Number(t.value);
+    P.seeking = false;
+    return true;
+  }
   if (t.id === "library-collect-name") {
     // The name decides the folder, so the plan is fetched again for it.
     await planCollect(t.value);
@@ -431,8 +687,8 @@ export function libraryView(): Raw {
   const attention = all.blocked + all.unchecked + all.unreadable;
   return html`<div class="library">
     <div class="devtools-heading">
-      <div><div class="eyebrow">Music library</div><h1>Your music</h1><p class="muted" style="max-width:640px">Add the folders your music lives in: on this computer, on an external drive or in a synced cloud folder. BoothReady reads them where they are. It never changes, moves or downloads anything.</p></div>
-      <button class="btn" data-act="home">Back</button>
+      <div><div class="eyebrow">Music library</div><h1>Your music</h1><p class="muted" style="max-width:640px">Add the folders your music lives in: on this computer, on an external drive or in a synced cloud folder. BoothReady reads them where they are and never changes or moves them. Scanning downloads nothing.</p></div>
+      <div class="source-actions">${L.sources.some((s) => s.states) ? html`<button class="btn primary" data-act="library-open" data-id="*">Browse the collection</button>` : ""}<button class="btn" data-act="home">Back</button></div>
     </div>
     ${errorBanner()}
     ${L.sources.length
@@ -465,28 +721,55 @@ export function libraryView(): Raw {
   </div>`;
 }
 
+const bpmText = (bpm: number) => String(Math.round(bpm * 100) / 100);
+
+/** A track's name as DJ software shows it: the title tag, or the file name. */
+const titleOf = (t: LibraryTrack) => t.title ?? t.name;
+
 function trackRow(t: LibraryTrack, i: number): Raw {
   const shown = t.issues.slice(0, 3);
   const rest = t.issues.length - shown.length;
   const kind = t.format.toLowerCase().replace(/[^a-z0-9]/g, "") || "other";
-  return html`<tr class="${t.state}">
-    <td class="idx">${String(i + 1).padStart(3, "0")}</td>
+  const n = String(i + 1).padStart(3, "0");
+  const loaded = !!P.now && trackKey(P.now) === trackKey(t);
+  const playing = isPlaying(t);
+  // The artist goes under the title. An untagged file shows its folder
+  // there instead, and the full location is in the title's tooltip.
+  const where = [t.folder, t.name].filter(Boolean).join("/");
+  return html`<tr class="${t.state} ${loaded ? "playing" : ""}">
+    <td class="idx">${t.state === "unreadable"
+      ? n
+      : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${titleOf(t)}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
     <td class="art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
-    <td><b>${t.name}</b>${t.folder ? html`<div class="small faint">${t.folder}</div>` : ""}
-      ${shown.length ? html`<ul class="track-issues">${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul>` : ""}
+    <td class="track-cell"><b title="${where}">${titleOf(t)}</b>${t.artist ? html`<div class="small track-sub track-artist">${t.artist}</div>` : t.folder ? html`<div class="small faint track-sub">${t.folder}</div>` : ""}
+      ${shown.length ? html`<details class="track-issues"><summary>${t.state === "blocked" ? "Won't play on" : "No data for"} ${t.issues.map((i) => i.model).join(", ")}</summary><ul>${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul></details>` : ""}
       ${t.note ? html`<div class="small track-note">${t.note}</div>` : ""}
     </td>
-    <td>${t.format}${t.detail ? html`<div class="small faint">${t.detail}</div>` : t.state === "cloud_only" ? html`<div class="small faint">not checked</div>` : ""}</td>
-    <td class="num">${gb(t.size)}</td>
+    <td class="num bpm">${t.bpm === null ? html`<span class="faint">·</span>` : bpmText(t.bpm)}</td>
+    <td class="key">${t.camelot ? html`<b>${t.camelot}</b><div class="small faint">${t.key}</div>` : html`<span class="faint">·</span>`}</td>
+    <td class="num time">${t.duration === null ? html`<span class="faint">·</span>` : clock(t.duration)}</td>
+    <td class="format">${t.format}${t.detail ? html`<div class="small faint">${t.detail}</div>` : t.state === "cloud_only" ? html`<div class="small faint">not checked</div>` : ""}</td>
     <td><span class="trackstate ${t.state}" title="${STATE_HELP[t.state]}"><i class="dot ${t.state}"></i>${STATE_LABEL[t.state]}</span></td>
   </tr>`;
+}
+
+/** A column heading that orders the list by that column. */
+function sortHead(column: string, label: string, cls = ""): Raw {
+  const on = L.sort === column;
+  const dir = on ? (L.desc ? "descending" : "ascending") : "none";
+  return html`<th class="${cls}" aria-sort="${dir}"><button class="rb-sort ${on ? "on" : ""}" data-act="library-sort" data-id="${column}" title="Sort by ${label.toLowerCase()}">${label}${on ? raw(`<svg viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="${L.desc ? "M1 3h8L5 8z" : "M1 7h8L5 2z"}" fill="currentColor"/></svg>`) : ""}</button></th>`;
 }
 
 function trackTable(): Raw {
   if (L.loadingTracks && !L.tracks.length) return html`<p class="muted">Loading tracks.</p>`;
   if (!L.tracks.length) return html`<p class="muted">${L.query || L.filter !== "all" ? "No tracks match." : "No audio files were found in this folder."}</p>`;
   return html`<table class="tracks">
-      <thead><tr><th class="idx">#</th><th class="art"></th><th>Track</th><th>Format</th><th class="num">Size</th><th>Status</th></tr></thead>
+      <thead><tr>
+        <th class="idx"><button class="rb-sort ${L.sort ? "" : "on"}" data-act="library-sort" data-id="" title="Folder order">#</button></th>
+        <th class="art"></th>
+        <th aria-sort="${L.sort === "title" || L.sort === "artist" ? (L.desc ? "descending" : "ascending") : "none"}"><span class="track-head">${["title", "artist"].map((c) => html`<button class="rb-sort ${L.sort === c ? "on" : ""}" data-act="library-sort" data-id="${c}" title="Sort by ${c}">${c === "title" ? "Track" : "Artist"}${L.sort === c ? raw(`<svg viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="${L.desc ? "M1 3h8L5 8z" : "M1 7h8L5 2z"}" fill="currentColor"/></svg>`) : ""}</button>`)}</span></th>
+        ${sortHead("bpm", "BPM", "num bpm")}${sortHead("key", "Key", "key")}${sortHead("time", "Time", "num time")}${sortHead("format", "Format", "format")}${sortHead("state", "Status")}
+      </tr></thead>
       <tbody>${L.tracks.map(trackRow)}</tbody>
     </table>
     <div class="tracks-foot"><span class="small muted">Showing ${num(L.tracks.length)} of ${num(L.total)}</span>${L.tracks.length < L.total ? html`<button class="btn" data-act="library-more" ${L.loadingTracks ? "disabled" : ""}>Show more</button>` : ""}</div>`;
@@ -559,35 +842,74 @@ function renderTracks() {
   else L.host.render();
 }
 
+/** The browser's tree: the whole collection, then each source and its folders. */
+function tree(selected: string): Raw {
+  const all = L.sources.reduce((n, s) => n + (s.totals?.tracks ?? 0), 0);
+  const node = (key: string, label: string, count: number, depth: number, hasChildren: boolean, act: string, on: boolean) => html`<div class="rb-node ${on ? "on" : ""}" style="--depth:${depth}">
+      ${hasChildren ? html`<button class="rb-caret" data-act="library-toggle" data-id="${key}" aria-label="${L.open.has(key) ? "Collapse" : "Expand"} ${label}" aria-expanded="${L.open.has(key) ? "true" : "false"}">${raw(`<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="${L.open.has(key) ? "M1 3h8L5 8z" : "M3 1v8l5-4z"}" fill="currentColor"/></svg>`)}</button>` : html`<span class="rb-caret"></span>`}
+      <button class="rb-label" data-act="${act}" data-id="${act === "library-open" ? key : `${key.includes("|") ? key : `${key}|`}`}"><span class="rb-name">${label}</span><b>${num(count)}</b></button>
+    </div>`;
+  const sourceNodes = L.sources.map((s) => {
+    const folders = L.folders.get(s.id) ?? [];
+    const visible = folders.filter((f) => {
+      // Shown when every ancestor folder is expanded.
+      const parts = f.path.split("/");
+      for (let end = 1; end < parts.length; end++) if (!L.open.has(`${s.id}|${parts.slice(0, end).join("/")}`)) return false;
+      return true;
+    });
+    const hasKids = (f: FolderNode) => folders.some((g) => g.path.startsWith(`${f.path}/`));
+    return html`${node(s.id, s.name, s.totals?.tracks ?? 0, 0, !!s.states && (folders.length > 0 || !L.folders.has(s.id)), "library-folder", selected === s.id && !L.folder)}
+      ${L.open.has(s.id) ? visible.map((f) => node(`${s.id}|${f.path}`, f.name, f.tracks, f.depth + 1, hasKids(f), "library-folder", selected === s.id && L.folder === f.path)) : ""}`;
+  });
+  return html`<nav class="rb-tree" aria-label="Library">
+    <div class="rb-section">Collection</div>
+    ${node(ALL, "All tracks", all, 0, false, "library-open", selected === ALL)}
+    <div class="rb-section">Sources</div>
+    ${sourceNodes}
+    <button class="btn link small rb-manage" data-act="open-library">Manage sources</button>
+  </nav>`;
+}
+
 export function librarySourceView(id: string): Raw {
-  const s = source(id);
-  if (!s) return html`<div class="library"><p class="muted">That music source was removed.</p><button class="btn" data-act="open-library">Back to your music</button></div>`;
-  const c = s.states;
+  const all = id === ALL;
+  const s = all ? undefined : source(id);
+  if (!all && !s) return html`<div class="library"><p class="muted">That music source was removed.</p><button class="btn" data-act="open-library">Back to your music</button></div>`;
+  const c = L.states ?? s?.states ?? null;
   const total = c ? STATE_ORDER.reduce((n, k) => n + c[k], 0) : 0;
-  const scanning = s.scanning || L.progress?.source_id === s.id;
-  return html`<div class="library">
+  const scanning = !!s && (s.scanning || L.progress?.source_id === s.id);
+  const title = L.folder ? L.folder.split("/").pop() ?? L.folder : all ? "All tracks" : s!.name;
+  const crumb = all ? "Collection" : [locationLabel(s!.location), s!.name, ...L.folder.split("/").filter(Boolean).slice(0, -1)].join(" · ");
+  const browsable = all || !!s?.states;
+  const stale = (s ? [s] : L.sources).filter((x) => x.states && !x.tags_read);
+  return html`<div class="library browser">
     <div class="devtools-heading">
-      <div><div class="eyebrow">${locationLabel(s.location)}${s.connected ? "" : " · not connected"}</div><h1>${s.name}</h1><div class="small faint source-path">${s.path}</div></div>
-      <div class="source-actions"><button class="btn" data-act="open-library">Back to your music</button>${scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`}${c && !s.collected_from && !L.collect ? html`<button class="btn primary" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}</div>
+      <div><div class="eyebrow">${crumb}${s && !s.connected ? " · not connected" : ""}</div><h1>${title}</h1>${s ? html`<div class="small faint source-path">${s.path}${L.folder ? `/${L.folder}` : ""}</div>` : html`<div class="small muted">Every track in ${plural(L.sources.length, "source")}.</div>`}</div>
+      <div class="source-actions"><button class="btn" data-act="open-library">Manage sources</button>${s ? (scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`) : ""}${s && s.states && !s.collected_from && !L.collect ? html`<button class="btn primary" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}</div>
     </div>
     ${errorBanner()}
     ${scanning ? html`<div class="banner"><span class="spinner" aria-hidden="true"></span><div>Scanning. ${L.progress?.files ? html`${plural(L.progress.files, "track")} found.` : ""}</div></div>` : ""}
-    ${s.connected ? "" : html`<div class="banner"><div>This drive isn't connected. You're looking at the scan from ${when(s.scanned_unix)}.</div></div>`}
-    <div class="library-top">
-      <div class="small muted">${s.totals ? html`<b>${plural(s.totals.tracks, "track")}</b> · ${gb(s.totals.bytes)} · scanned ${when(s.scanned_unix)}` : "Not scanned yet."}</div>
-      ${playersControl()}
+    ${s && !s.connected ? html`<div class="banner"><div>This drive isn't connected. You're looking at the scan from ${when(s.scanned_unix)}.</div></div>` : ""}
+    ${stale.length && !scanning ? html`<div class="banner"><div style="flex:1">${s ? "This folder was scanned" : `${stale.map((x) => x.name).join(", ")} ${stale.length === 1 ? "was" : "were"} scanned`} before BoothReady read tags, so ${s ? "its" : "their"} tracks show file names only. Scan again to see artist, title, BPM and key.</div>${s && s.connected ? html`<button class="btn" data-act="library-scan" data-id="${s.id}">Scan again</button>` : ""}</div>` : ""}
+    ${s ? collectPanel(s) : ""}
+    ${s?.collected_from ? nextStep(s) : ""}
+    <div class="rb">
+      ${tree(id)}
+      <div class="rb-main">
+        <div class="library-top">
+          <div class="small muted">${s?.totals ? html`<b>${plural(s.totals.tracks, "track")}</b> in this source · ${gb(s.totals.bytes)} · scanned ${when(s.scanned_unix)}` : all ? html`<b>${plural(total, "track")}</b> across your sources` : "Not scanned yet."}</div>
+          ${playersControl()}
+        </div>
+        ${c ? stateBar(c) : ""}
+        ${browsable && c
+          ? html`<div class="library-filters rb-filters" role="group" aria-label="Filter tracks">
+                <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
+                ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}
+              </div>
+              <input id="library-search" class="search" type="search" placeholder="Search by title, artist, album or folder" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
+              <div id="library-tracks" class="card tracks-card">${trackTable()}</div>`
+          : html`<p class="muted">${s?.totals ? "The track list from the last scan isn't saved on this computer. Scan again to see it." : "Scan this folder to see its tracks."}</p>`}
+      </div>
     </div>
-    ${c ? stateBar(c) : ""}
-    ${collectPanel(s)}
-    ${s.collected_from ? nextStep(s) : ""}
-    ${c
-      ? html`<div class="browse"><div class="library-filters" role="group" aria-label="Filter tracks">
-            <button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
-            ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}
-          </div>
-          <div class="browse-main"><input id="library-search" class="search" type="search" placeholder="Search by track or folder name" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false">
-          <div id="library-tracks" class="card tracks-card">${trackTable()}</div></div></div>`
-      : html`<p class="muted">${s.totals ? "The track list from the last scan isn't saved on this computer. Scan again to see it." : "Scan this folder to see its tracks."}</p>`}
   </div>`;
 }
 
