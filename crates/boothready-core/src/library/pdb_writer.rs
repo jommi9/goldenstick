@@ -998,9 +998,10 @@ impl DevicePdbWriter {
         let mut slots = slot_count(&self.data, page_offset)?;
         let mut used = usize::from(read_u16(&self.data, page_offset + 0x1e)?);
         // djbooth fills a page up to 511 slots and stores the ninth bit of the
-        // count in the byte at 0x19. Readers written from crate-digger's
-        // notes, BoothReady's own among them, only take the byte at 0x18, so
-        // a page is closed at 255 rows here; rekordbox itself only exceeds
+        // count in the byte at 0x19, as rekordbox does. BoothReady's reader
+        // honours it, but readers written from crate-digger's older notes
+        // (rekordcrate 0.3.0, beat-link) only take the byte at 0x18, so a
+        // page is closed at 255 rows here; rekordbox itself only exceeds
         // that on 12-byte playlist entry pages.
         if slots >= MAX_ROWS_PER_PAGE
             || PAGE_HEADER_BYTES + used + allocation + directory_bytes(slots + 1) > self.page_size

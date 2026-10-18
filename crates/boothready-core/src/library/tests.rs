@@ -30,15 +30,18 @@ fn real_export_row_counts_match_rekordcrate_expectations() {
     let bytes = fs::read(data.join("pdb/num_rows/export.pdb")).unwrap();
     let pdb = parse_pdb(&bytes).unwrap();
     let count = |kind| pdb.row_counts.iter().find(|(k, _)| *k == kind).map(|(_, n)| *n).unwrap();
-    // Expected values come from rekordcrate's own test suite.
+    // Expected values come from rekordcrate's own test suite, except the
+    // playlist entries: rekordcrate 0.3.0 expects 6637 because it takes the
+    // row count from one byte, while the 13-bit count in the page header
+    // gives 7440, the same value the 11-bit present-row counts sum to.
     assert_eq!(count(TABLE_TRACKS), 3886);
     assert_eq!(count(TABLE_ARTISTS), 2216);
     assert_eq!(count(TABLE_PLAYLIST_TREE), 104);
-    assert_eq!(count(TABLE_PLAYLIST_ENTRIES), 6637);
+    assert_eq!(count(TABLE_PLAYLIST_ENTRIES), 7440);
     assert_eq!(pdb.tracks.len(), 3886);
     assert_eq!(pdb.playlists.len(), 104);
     let entries: usize = pdb.playlists.iter().map(|p| p.track_ids.len()).sum();
-    assert_eq!(entries, 6637);
+    assert_eq!(entries, 7440);
     assert!(pdb.tracks.iter().all(|t| t.file_path.starts_with('/')), "paths should be volume-absolute");
     assert!(pdb.tracks.iter().filter(|t| t.artist.is_some()).count() > 3000);
     assert!(pdb.tracks.iter().all(|t| t.sample_rate == 0 || (8000..=192_000).contains(&t.sample_rate)));
@@ -182,6 +185,58 @@ fn fixture_roundtrip_and_rekordcrate_agrees() {
     assert_eq!(rows(PageType::PlaylistEntries), 400);
     assert_eq!(rows(PageType::PlaylistTree), 1);
     assert_eq!(rows(PageType::Artists), 2);
+}
+
+/// Real rekordbox exports hold playlist entry pages with 284 rows. The page
+/// header packs a 13-bit row-offset count into bytes 0x18..0x1B, so byte
+/// 0x18 holds 28 and bit 0 of byte 0x19 carries the ninth bit, while the u16
+/// at 0x22 is the index of the row the last transaction touched.
+#[test]
+fn playlist_entry_page_with_284_rows_is_read_in_full() {
+    let tracks: Vec<FixtureTrack> =
+        (1..=284).map(|i| track(i, &format!("/Contents/{i}.mp3"), 1000, 44_100, 16)).collect();
+    let playlists = vec![FixturePlaylist {
+        id: 3,
+        parent_id: 0,
+        name: "Big".into(),
+        is_folder: false,
+        sort_order: 0,
+        track_ids: (1..=284).collect(),
+    }];
+    let mut bytes = build_pdb(&tracks, &[(1, "A".into())], &playlists);
+
+    // The fixture writes the row count at 0x22 so that rekordcrate can read
+    // its pages too. Give the entry page the transaction fields a real export
+    // carries instead, so only the packed count at 0x18 says how many rows
+    // there are: page 145 of rekordcrate's `num_rows` export has 284 rows
+    // and a last transaction that touched one row at index 60.
+    const PAGE: usize = 4096;
+    let entry_pages: Vec<usize> = (1..bytes.len() / PAGE)
+        .filter(|&i| {
+            let p = &bytes[i * PAGE..(i + 1) * PAGE];
+            u32::from_le_bytes(p[8..12].try_into().unwrap()) == TABLE_PLAYLIST_ENTRIES && p[0x1B] & 0x40 == 0
+        })
+        .collect();
+    assert_eq!(entry_pages.len(), 1, "284 twelve-byte rows fill exactly one 4 KiB page");
+    let o = entry_pages[0] * PAGE;
+    assert_eq!(bytes[o + 0x18], 28);
+    assert_eq!(bytes[o + 0x19] & 1, 1);
+    bytes[o + 0x20..o + 0x22].copy_from_slice(&1u16.to_le_bytes());
+    bytes[o + 0x22..o + 0x24].copy_from_slice(&60u16.to_le_bytes());
+
+    let check = |bytes: &[u8]| {
+        let pdb = parse_pdb(bytes).unwrap();
+        assert!(pdb.warnings.is_empty(), "{:?}", pdb.warnings);
+        let count = pdb.row_counts.iter().find(|(k, _)| *k == TABLE_PLAYLIST_ENTRIES).map(|(_, n)| *n).unwrap();
+        assert_eq!(count, 284);
+        assert_eq!(pdb.playlists[0].track_ids, (1..=284).collect::<Vec<_>>());
+    };
+    check(&bytes);
+
+    // A failed last transaction leaves 0x1FFF in both transaction fields.
+    bytes[o + 0x20..o + 0x22].copy_from_slice(&0x1FFFu16.to_le_bytes());
+    bytes[o + 0x22..o + 0x24].copy_from_slice(&0x1FFFu16.to_le_bytes());
+    check(&bytes);
 }
 
 #[test]

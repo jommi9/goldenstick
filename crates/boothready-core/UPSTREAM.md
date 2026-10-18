@@ -34,11 +34,14 @@ data rather than linked code, and it is listed in the legal review in
 
 - A data page is closed at 255 rows. djbooth fills a page up to 511 slots and
   stores the ninth bit of the count in the byte at `0x19`, which rekordbox
-  itself does on playlist entry pages. Readers written from crate-digger's
-  notes, among them BoothReady's `src/library/pdb.rs`, rekordcrate and
-  beat-link, take the count from the byte at `0x18` alone and would see only
-  part of such a page. Pages written here are readable by both conventions
-  at the cost of about ten percent more pages for playlists over 255 tracks.
+  itself does on playlist entry pages: crate-digger documents bytes
+  `0x18..0x1B` as a 13-bit row-offset count followed by an 11-bit count of
+  present rows. BoothReady's `src/library/pdb.rs` reads the 13-bit count,
+  while readers written from crate-digger's older notes, among them
+  rekordcrate 0.3.0 and beat-link, take the byte at `0x18` alone and would
+  see only part of such a page. Pages written here are readable by both
+  conventions at the cost of about ten percent more pages for playlists over
+  255 tracks.
 - `export_device_library` takes a list of audio files and playlists instead of
   reading rekordbox's `master.db`, and it reads title, artist, album, genre,
   tempo and key from the files' tags and from `djbooth-analyzer` instead of
