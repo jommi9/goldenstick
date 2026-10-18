@@ -84,7 +84,10 @@ pub fn guard_target(root: &Path, devices: &[PhysicalDevice]) -> Result<()> {
     while !ancestor.exists() {
         ancestor = ancestor.parent().context("the output folder has no existing parent")?;
     }
-    let ancestor = ancestor.canonicalize()?;
+    // Absolute rather than canonical: on Windows a canonical path carries a
+    // `\\?\` prefix that no mount point has, and on every OS the device
+    // lookup compares against the mount points as the platform lists them.
+    let ancestor = std::path::absolute(ancestor)?;
     if let Some(device) = device_for_path(&ancestor, devices) {
         if device.bus == BusType::Usb || device.removable {
             bail!(
