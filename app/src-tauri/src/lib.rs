@@ -1007,6 +1007,9 @@ struct TrackRequest {
     targets: Vec<String>,
     filter: String,
     query: String,
+    /// A folder inside the source, or empty for all of it.
+    #[serde(default)]
+    folder: String,
     offset: u32,
     limit: u32,
 }
@@ -1016,7 +1019,15 @@ fn library_tracks(app: AppHandle, state: State<'_, AppState>, request: TrackRequ
     let players = state.rules.devices_by_id(&request.targets);
     let limit = request.limit.clamp(1, 500) as usize;
     state.with_library(&app, |library| {
-        library.tracks(&request.id, &players, &request.filter, &request.query, request.offset as usize, limit)
+        library.tracks(
+            &request.id,
+            &players,
+            &request.filter,
+            &request.query,
+            &request.folder,
+            request.offset as usize,
+            limit,
+        )
     })?
 }
 
@@ -1027,6 +1038,9 @@ struct CollectRequest {
     targets: Vec<String>,
     filter: String,
     query: String,
+    /// A folder inside the source, or empty for all of it.
+    #[serde(default)]
+    folder: String,
     /// The collection's name. Empty asks for the suggested one.
     name: String,
 }
@@ -1084,8 +1098,9 @@ fn collect_plan(
     request: &CollectRequest,
 ) -> Res<(CollectPlan, library::Selection, PathBuf)> {
     let players = state.rules.devices_by_id(&request.targets);
-    let selection = state
-        .with_library(app, |library| library.selection(&request.id, &players, &request.filter, &request.query))??;
+    let selection = state.with_library(app, |library| {
+        library.selection(&request.id, &players, &request.filter, &request.query, &request.folder)
+    })??;
     let source_name =
         selection.source.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Music".into());
     let typed = if request.name.trim().is_empty() {
@@ -1114,6 +1129,12 @@ fn collect_plan(
         free_bytes: space.map(|s| s.free_bytes),
     };
     Ok((plan, selection, destination))
+}
+
+/// The folders inside a source, for the browser's tree.
+#[tauri::command]
+fn library_folders(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<Vec<library::FolderNode>> {
+    state.with_library(&app, |library| library.folders(&id))?
 }
 
 /// What collecting the shown tracks would copy, and where to.
@@ -1266,6 +1287,7 @@ pub fn run() {
             library_scan,
             library_cancel_scan,
             library_tracks,
+            library_folders,
             library_collect_plan,
             library_collect,
             library_cancel_collect,
@@ -1371,7 +1393,7 @@ pub fn mock_snapshot(root: &Path) -> Res<serde_json::Value> {
     let shown_root = library_root.display().to_string();
     // Collect the whole cloud folder with the real engine, so the mock can
     // show what those tracks look like once they are on the computer.
-    let picked = library.selection("demo-cloud", &[], "all", "")?;
+    let picked = library.selection("demo-cloud", &[], "all", "", "")?;
     let collected_root = library_root.join("Collections").join("Promos 2026 2026-09-21");
     let (made, mut collected_scan) =
         library::run_collect(&picked, &collected_root, &AtomicBool::new(false), &mut |_| {})?;
@@ -1399,7 +1421,7 @@ pub fn mock_snapshot(root: &Path) -> Res<serde_json::Value> {
                 .replace(&format!("{shown_root}/Volumes"), "/Volumes")
                 .replace(&format!("{shown_root}/Collections"), "/Users/dj/Music/BoothReady")
                 .replace(&shown_root, "/Users/dj");
-            let page = library.tracks(&source.id, &players, "all", "", 0, 500)?;
+            let page = library.tracks(&source.id, &players, "all", "", "", 0, 500)?;
             if source.id == collected_id {
                 source.id = "demo-collected".into();
                 collected = json!({ "source": source, "tracks": page.tracks });

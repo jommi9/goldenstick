@@ -13,6 +13,7 @@ import type {
   HardwareCard,
   KitPlan,
   LibrarySource,
+  FolderNode,
   LibraryTrack,
   Preset,
   StateCounts,
@@ -124,14 +125,35 @@ export async function createMockApi(): Promise<Api> {
     const pool = c.origin === "demo-cloud" ? lib.collected.tracks : tracksOf(c.origin, targets);
     return pool.filter((t) => c.paths.has(t.path));
   };
-  const pick = (id: string, targets: string[], filter: string, query: string): LibraryTrack[] => {
+  const inFolder = (path: string, folder: string) => !folder || path.startsWith(`${folder}/`);
+  const pick = (id: string, targets: string[], filter: string, query: string, folder = ""): LibraryTrack[] => {
     const q = query.trim().toLowerCase();
-    return tracksOf(id, targets).filter((t) => (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
+    return tracksOf(id, targets).filter((t) => inFolder(t.path, folder) && (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
   };
-  const collectPlan = (id: string, targets: string[], filter: string, query: string, name: string) => {
+  /** Every source's tracks, with the source's name in front of the folder, as the engine does for "*". */
+  const allSourcesTracks = (targets: string[]): LibraryTrack[] =>
+    listSources(targets).flatMap((s) => tracksOf(s.id, targets).map((t) => ({ ...t, folder: t.folder ? `${s.name}/${t.folder}` : s.name })));
+  const foldersOf = (id: string): FolderNode[] => {
+    const counts = new Map<string, number>();
+    for (const t of tracksOf(id, [])) {
+      const parts = t.path.split("/");
+      for (let end = 1; end < parts.length; end++) {
+        const key = parts.slice(0, end).join("/");
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+    const byParts = (a: string, b: string) => {
+      const x = a.split("/");
+      const y = b.split("/");
+      for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+      return x.length - y.length;
+    };
+    return [...counts.keys()].sort(byParts).map((path) => ({ path, name: path.split("/").pop() ?? path, depth: path.split("/").length - 1, tracks: counts.get(path) ?? 0 }));
+  };
+  const collectPlan = (id: string, targets: string[], filter: string, query: string, name: string, folder = "") => {
     const origin = listSources(targets).find((s) => s.id === id);
     if (!origin) throw new Error("That music source was removed.");
-    const matching = pick(id, targets, filter, query);
+    const matching = pick(id, targets, filter, query, folder);
     const tracks = matching.filter((t) => t.state !== "unreadable");
     const online = tracks.filter((t) => t.state === "cloud_only");
     const sum = (list: LibraryTrack[]) => list.reduce((n, t) => n + t.size, 0);
@@ -419,9 +441,9 @@ export async function createMockApi(): Promise<Api> {
       });
       return id;
     },
-    libraryCollectPlan: async (id, targets, filter, query, name) => collectPlan(id, targets, filter, query, name).plan,
-    libraryCollect: async (id, targets, filter, query, name) => {
-      const { plan, origin, tracks } = collectPlan(id, targets, filter, query, name);
+    libraryCollectPlan: async (id, targets, filter, query, name, folder) => collectPlan(id, targets, filter, query, name, folder).plan,
+    libraryCollect: async (id, targets, filter, query, name, folder) => {
+      const { plan, origin, tracks } = collectPlan(id, targets, filter, query, name, folder);
       if (!origin.connected) throw new Error("The source folder can't be reached.");
       if (!plan.tracks) throw new Error("There are no readable tracks to collect.");
       if (plan.exists) throw new Error("The collection couldn't be made: source changed or destination belongs to another collection.");
@@ -462,11 +484,13 @@ export async function createMockApi(): Promise<Api> {
     libraryCancelScan: async () => {
       libraryCancelled = true;
     },
-    libraryTracks: async (id, targets, filter, query, offset, limit) => {
+    libraryTracks: async (id, targets, filter, query, offset, limit, folder = "") => {
       const q = query.trim().toLowerCase();
-      const matching = tracksOf(id, targets).filter((t) => (filter === "all" || t.state === filter) && (!q || t.path.toLowerCase().includes(q)));
-      return { total: matching.length, tracks: matching.slice(offset, offset + limit) };
+      const scoped = (id === "*" ? allSourcesTracks(targets) : tracksOf(id, targets)).filter((t) => inFolder(t.path, folder) && (!q || t.path.toLowerCase().includes(q)));
+      const matching = scoped.filter((t) => filter === "all" || t.state === filter);
+      return { total: matching.length, tracks: matching.slice(offset, offset + limit), states: countStates(scoped) };
     },
+    libraryFolders: async (id) => foldersOf(id),
     onLibraryScanProgress: on("library-scan-progress"),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),

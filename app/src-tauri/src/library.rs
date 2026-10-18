@@ -105,6 +105,30 @@ pub struct LibraryTrack {
 pub struct LibraryPage {
     pub total: u32,
     pub tracks: Vec<LibraryTrack>,
+    /// States of every track in the folder and search, before the state
+    /// filter, so the filter buttons can show their counts.
+    pub states: StateCounts,
+}
+
+/// The id that stands for every source at once: the whole collection.
+pub const ALL_SOURCES: &str = "*";
+
+/// A folder inside a source, for the browser's tree. Folders are listed
+/// parent first, each followed by its subfolders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FolderNode {
+    /// Relative to the source, forward slashes.
+    pub path: String,
+    pub name: String,
+    pub depth: u32,
+    /// Tracks in this folder and every folder below it.
+    pub tracks: u32,
+}
+
+/// True when `path` lies inside `folder`. An empty folder holds everything.
+fn in_folder(path: &str, folder: &str) -> bool {
+    folder.is_empty()
+        || (path.len() > folder.len() && path.starts_with(folder) && path.as_bytes()[folder.len()] == b'/')
 }
 
 #[derive(Default)]
@@ -115,6 +139,11 @@ pub struct LibraryState {
     scans: HashMap<String, Arc<SourceScan>>,
     scanning: HashSet<String>,
     collecting: bool,
+}
+
+/// The name a source is listed under: its collection name or folder name.
+fn display_name(record: &SourceRecord) -> String {
+    record.collection.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| name_of(&record.path))
 }
 
 fn name_of(path: &Path) -> String {
@@ -297,13 +326,18 @@ impl LibraryState {
         targets: &[&DeviceProfile],
         filter: &str,
         query: &str,
+        folder: &str,
     ) -> Result<Selection, String> {
         let source = self.record(id)?;
+        let folder = folder.trim_matches('/');
         let scan = self.scan(id).ok_or_else(|| "Scan this folder first.".to_string())?;
         let query = query.trim().to_lowercase();
         let mut picked =
             Selection { source, paths: Vec::new(), bytes: 0, cloud_only: 0, cloud_only_bytes: 0, unreadable: 0 };
         for track in &scan.tracks {
+            if !in_folder(&track.path, folder) {
+                continue;
+            }
             if !query.is_empty() && !track.path.to_lowercase().contains(&query) {
                 continue;
             }
@@ -392,38 +426,82 @@ impl LibraryState {
             .collect()
     }
 
-    /// One page of a source's tracks, filtered by state and by a search on
-    /// the path. `filter` is a [`TrackState`] name or "all".
+    /// One page of a source's tracks, filtered by folder, by a search on the
+    /// path and by state. `id` may be [`ALL_SOURCES`], which pages through
+    /// every source and puts each source's name in front of the folder.
+    /// `filter` is a [`TrackState`] name or "all".
+    #[allow(clippy::too_many_arguments)]
     pub fn tracks(
         &mut self,
         id: &str,
         targets: &[&DeviceProfile],
         filter: &str,
         query: &str,
+        folder: &str,
         offset: usize,
         limit: usize,
     ) -> Result<LibraryPage, String> {
-        self.record(id)?;
-        let Some(scan) = self.scan(id) else {
-            return Ok(LibraryPage { total: 0, tracks: Vec::new() });
+        let ids: Vec<String> = if id == ALL_SOURCES {
+            self.sources.iter().map(|s| s.id.clone()).collect()
+        } else {
+            self.record(id)?;
+            vec![id.to_string()]
         };
         let query = query.trim().to_lowercase();
+        let folder = folder.trim_matches('/');
         let mut total = 0u32;
         let mut tracks = Vec::new();
-        for track in &scan.tracks {
-            if !query.is_empty() && !track.path.to_lowercase().contains(&query) {
-                continue;
+        let mut states = StateCounts::default();
+        for sid in &ids {
+            let Some(scan) = self.scan(sid) else { continue };
+            let label = if id == ALL_SOURCES { self.record(sid).ok().map(|r| display_name(&r)) } else { None };
+            for track in &scan.tracks {
+                if !in_folder(&track.path, folder) {
+                    continue;
+                }
+                if !query.is_empty() && !track.path.to_lowercase().contains(&query) {
+                    continue;
+                }
+                let (state, issues) = judge(track, targets);
+                states.add(state);
+                if filter != "all" && state_name(state) != filter {
+                    continue;
+                }
+                if total as usize >= offset && tracks.len() < limit {
+                    let mut row = track_row(track, state, issues);
+                    if let Some(source) = &label {
+                        row.folder =
+                            if row.folder.is_empty() { source.clone() } else { format!("{source}/{}", row.folder) };
+                    }
+                    tracks.push(row);
+                }
+                total += 1;
             }
-            let (state, issues) = judge(track, targets);
-            if filter != "all" && state_name(state) != filter {
-                continue;
-            }
-            if total as usize >= offset && tracks.len() < limit {
-                tracks.push(track_row(track, state, issues));
-            }
-            total += 1;
         }
-        Ok(LibraryPage { total, tracks })
+        Ok(LibraryPage { total, tracks, states })
+    }
+
+    /// The folders inside a source with the number of tracks below each.
+    pub fn folders(&mut self, id: &str) -> Result<Vec<FolderNode>, String> {
+        self.record(id)?;
+        let Some(scan) = self.scan(id) else { return Ok(Vec::new()) };
+        // Keyed by components, so a folder sorts directly before its children.
+        let mut counts: std::collections::BTreeMap<Vec<String>, u32> = std::collections::BTreeMap::new();
+        for track in &scan.tracks {
+            let parts: Vec<&str> = track.path.split('/').collect();
+            for end in 1..parts.len() {
+                *counts.entry(parts[..end].iter().map(|p| p.to_string()).collect()).or_default() += 1;
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|(parts, tracks)| FolderNode {
+                name: parts.last().cloned().unwrap_or_default(),
+                depth: parts.len() as u32 - 1,
+                path: parts.join("/"),
+                tracks,
+            })
+            .collect())
     }
 }
 
@@ -660,30 +738,30 @@ mod tests {
         let targets = club(&rules);
         let mut library = LibraryState::demo(root.path()).unwrap();
 
-        let all = library.tracks("demo-computer", &targets, "all", "", 0, 500).unwrap();
+        let all = library.tracks("demo-computer", &targets, "all", "", "", 0, 500).unwrap();
         assert_eq!(all.total as usize, all.tracks.len());
         assert_eq!(all.total, 13);
 
-        let page = library.tracks("demo-computer", &targets, "all", "", 10, 5).unwrap();
+        let page = library.tracks("demo-computer", &targets, "all", "", "", 10, 5).unwrap();
         assert_eq!((page.total, page.tracks.len()), (13, 3));
 
-        let blocked = library.tracks("demo-computer", &targets, "blocked", "", 0, 500).unwrap();
+        let blocked = library.tracks("demo-computer", &targets, "blocked", "", "", 0, 500).unwrap();
         assert!(blocked.total > 0);
         assert!(blocked.tracks.iter().all(|t| t.state == TrackState::Blocked && !t.issues.is_empty()));
 
-        let found = library.tracks("demo-computer", &targets, "all", "SUBZERO", 0, 500).unwrap();
+        let found = library.tracks("demo-computer", &targets, "all", "SUBZERO", "", 0, 500).unwrap();
         assert!(found.total >= 1);
         assert!(found.tracks.iter().all(|t| t.path.to_lowercase().contains("subzero")));
 
-        let online = library.tracks("demo-cloud", &targets, "cloud_only", "", 0, 500).unwrap();
+        let online = library.tracks("demo-cloud", &targets, "cloud_only", "", "", 0, 500).unwrap();
         assert_eq!(online.total, 4);
         assert!(online.tracks.iter().all(|t| t.detail.is_empty() && t.issues.is_empty()));
 
-        let broken = library.tracks("demo-computer", &targets, "unreadable", "", 0, 500).unwrap();
+        let broken = library.tracks("demo-computer", &targets, "unreadable", "", "", 0, 500).unwrap();
         assert_eq!(broken.total, 1);
         assert!(broken.tracks[0].note.is_some());
 
-        assert!(library.tracks("missing", &targets, "all", "", 0, 10).is_err());
+        assert!(library.tracks("missing", &targets, "all", "", "", 0, 10).is_err());
     }
 
     #[test]
@@ -727,7 +805,7 @@ mod tests {
         let targets = club(&rules);
         let mut library = LibraryState::demo(&root).unwrap();
 
-        let picked = library.selection("demo-cloud", &targets, "cloud_only", "").unwrap();
+        let picked = library.selection("demo-cloud", &targets, "cloud_only", "", "").unwrap();
         assert_eq!((picked.paths.len(), picked.cloud_only, picked.unreadable), (4, 4, 0));
         assert!(picked.bytes > 0 && picked.bytes == picked.cloud_only_bytes);
 
@@ -766,15 +844,15 @@ mod tests {
         let rules = Ruleset::builtin();
         let targets = club(&rules);
         let mut library = LibraryState::demo(root.path()).unwrap();
-        let all = library.selection("demo-computer", &targets, "all", "").unwrap();
+        let all = library.selection("demo-computer", &targets, "all", "", "").unwrap();
         assert_eq!((all.paths.len(), all.unreadable), (12, 1));
-        let found = library.selection("demo-computer", &targets, "all", "subzero").unwrap();
+        let found = library.selection("demo-computer", &targets, "all", "subzero", "").unwrap();
         assert!(
             !found.paths.is_empty()
                 && found.paths.iter().all(|p| p.to_string_lossy().to_lowercase().contains("subzero"))
         );
-        assert!(library.selection("demo-archive", &targets, "all", "").is_ok());
-        assert!(library.selection("missing", &targets, "all", "").is_err());
+        assert!(library.selection("demo-archive", &targets, "all", "", "").is_ok());
+        assert!(library.selection("missing", &targets, "all", "", "").is_err());
     }
 
     #[test]
@@ -788,6 +866,40 @@ mod tests {
         assert_eq!(date_of(951_782_400), "2000-02-29");
         assert_eq!(space_needed(10_000, 3, 4096), 10_000 + 3 * (4096 + 512) + 4 * 1024 * 1024);
         assert_eq!(space_needed(u64::MAX, 3, 4096), u64::MAX);
+    }
+
+    #[test]
+    fn folders_and_the_whole_collection_can_be_browsed() {
+        let root = tempfile::tempdir().unwrap();
+        let rules = Ruleset::builtin();
+        let targets = club(&rules);
+        let mut library = LibraryState::demo(root.path()).unwrap();
+
+        let folders = library.folders("demo-computer").unwrap();
+        let hi_res = folders.iter().find(|f| f.path == "Hi-Res").unwrap();
+        assert_eq!((hi_res.depth, hi_res.tracks), (0, 4));
+        let speicher = folders.iter().position(|f| f.path == "Kolsch/Speicher").unwrap();
+        let kolsch = folders.iter().position(|f| f.path == "Kolsch").unwrap();
+        assert_eq!(speicher, kolsch + 1, "a folder is listed right before its subfolders");
+
+        let page = library.tracks("demo-computer", &targets, "all", "", "Hi-Res", 0, 500).unwrap();
+        assert_eq!(page.total, 4);
+        assert!(page.tracks.iter().all(|t| t.folder == "Hi-Res"));
+        assert_eq!(page.states.blocked + page.states.ready, 4);
+        let blocked = library.tracks("demo-computer", &targets, "blocked", "", "Hi-Res", 0, 500).unwrap();
+        assert_eq!(blocked.states, page.states, "state counts ignore the state filter");
+        assert!(library.tracks("demo-computer", &targets, "all", "", "Hi", 0, 500).unwrap().total == 0);
+
+        let everything = library.tracks(ALL_SOURCES, &targets, "all", "", "", 0, 1000).unwrap();
+        let separately: u32 = ["demo-computer", "demo-cloud", "demo-archive"]
+            .iter()
+            .map(|id| library.tracks(id, &targets, "all", "", "", 0, 1000).unwrap().total)
+            .sum();
+        assert_eq!(everything.total, separately);
+        assert!(everything.tracks.iter().any(|t| t.folder.starts_with("Promos 2026/")));
+
+        let picked = library.selection("demo-computer", &targets, "all", "", "Hi-Res").unwrap();
+        assert_eq!(picked.paths.len(), 4);
     }
 
     #[test]
