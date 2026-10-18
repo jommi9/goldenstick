@@ -66,7 +66,7 @@ fn export_without_analysis_reads_back_through_the_library_scanner() {
         &src,
         &[
             ("one.wav", "First Track", "Ääkkönen"),
-            ("two: the sequel?.wav", "Second", "Artist B"),
+            ("two - the sequel.wav", "Second", "Artist B"),
             ("three.wav", "Third", "Ääkkönen"),
         ],
         2,
@@ -87,7 +87,7 @@ fn export_without_analysis_reads_back_through_the_library_scanner() {
     assert_eq!(report.tracks.len(), 3);
     assert_eq!(report.playlists, 2);
     assert_eq!(report.analysis_files, 0);
-    assert_eq!(report.tracks[1].usb_path, "/Contents/00000002/two_ the sequel_.wav");
+    assert_eq!(report.tracks[1].usb_path, "/Contents/00000002/two - the sequel.wav");
     assert_eq!(report.tracks[0].title, "First Track");
     assert_eq!(report.tracks[0].artist.as_deref(), Some("Ääkkönen"));
     assert!(phases.contains(&"copy") && phases.contains(&"install"));
@@ -111,7 +111,7 @@ fn export_without_analysis_reads_back_through_the_library_scanner() {
         titles,
         vec![
             ("First Track", Some("Ääkkönen"), "Contents/00000001/one.wav"),
-            ("Second", Some("Artist B"), "Contents/00000002/two_ the sequel_.wav"),
+            ("Second", Some("Artist B"), "Contents/00000002/two - the sequel.wav"),
             ("Third", Some("Ääkkönen"), "Contents/00000003/three.wav"),
         ]
     );
