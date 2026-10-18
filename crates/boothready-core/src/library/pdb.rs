@@ -8,7 +8,9 @@
 //! header with one pointer per table. Each table is a linked list of pages.
 //! Rows live in a heap that grows forward from offset 0x28 of each page, and
 //! their offsets are stored in groups of 16 that grow backwards from the end
-//! of the page, with a bitmask saying which rows are present.
+//! of the page, with a bitmask saying which rows are present. The number of
+//! groups comes from a 13-bit count packed into bytes 0x18..0x1B of the page
+//! header, so pages can hold more than 255 rows.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -260,13 +262,18 @@ impl Reader<'_> {
     }
 
     fn page_rows(&self, page: &[u8], page_start: usize, out: &mut Vec<usize>) {
-        let small = page[0x18] as u16;
-        let Some(large) = u16_at(page, 0x22) else { return };
-        let num_rows = if large > small && large != 0x1FFF { large } else { small } as usize;
-        if num_rows == 0 {
+        // Bytes 0x18..0x1B pack two little-endian bit fields: 13 bits with the
+        // number of row offsets ever allocated in the index, then 11 bits with
+        // the number of rows currently present. Taking the count from byte
+        // 0x18 alone drops bit 8 and above, which rekordbox uses on the
+        // 284-row playlist entry pages of real exports. The u16 at 0x22 is the
+        // index of the row the last transaction touched, not a larger count.
+        let packed = u32::from_le_bytes([page[0x18], page[0x19], page[0x1A], 0]);
+        let num_offsets = (packed & 0x1FFF) as usize;
+        if num_offsets == 0 {
             return;
         }
-        let groups = num_rows.div_ceil(16);
+        let groups = num_offsets.div_ceil(16);
         if groups * ROW_GROUP_LEN + PAGE_HEADER_LEN > self.page_size {
             return;
         }
