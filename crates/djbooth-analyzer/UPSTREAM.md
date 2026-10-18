@@ -20,6 +20,12 @@ files stay comparable with djbooth.
   `-D warnings`; behaviour is unchanged.
 - One test in `stems.rs` iterates with `enumerate` instead of an index range,
   for the same reason.
+- `waveform.rs`: the scalar detail-feature helpers (`FrameFeatures`,
+  `extract_detail_features_scalar`, `detail_frame_samples`, `extract_detail_frame`)
+  and the test-only `extract_detail_features` are gated on
+  `all(target_arch = "aarch64", test)`, since only the aarch64 SIMD tests call
+  them; the x86_64 variant of `extract_detail_features` is removed. Under
+  `-D warnings` the x86_64 CI runners reported them as dead code.
 
 ## Not yet aligned with BoothReady's rules
 

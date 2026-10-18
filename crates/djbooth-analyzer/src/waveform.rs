@@ -229,7 +229,7 @@ fn pack_waveforms(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(target_arch = "aarch64", test))]
 #[derive(Debug, Clone, Copy, Default)]
 struct FrameFeatures {
     peak: f64,
@@ -1946,7 +1946,7 @@ fn store_f64x2(value: float64x2_t) -> [f64; 2] {
     values
 }
 
-#[cfg(test)]
+#[cfg(all(target_arch = "aarch64", test))]
 fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
     let frame_samples = detail_frame_samples(pcm.sample_rate());
     pcm.samples()
@@ -1955,12 +1955,12 @@ fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(target_arch = "aarch64", test))]
 fn detail_frame_samples(sample_rate: u32) -> usize {
     usize::try_from(sample_rate).expect("sample rate fits waveform arithmetic") / 150
 }
 
-#[cfg(test)]
+#[cfg(all(target_arch = "aarch64", test))]
 fn extract_detail_frame(samples: &[f32], frame_samples: usize) -> FrameFeatures {
     let mut peak = 0.0_f64;
     let mut sum_square = 0.0_f64;
@@ -1974,11 +1974,6 @@ fn extract_detail_frame(samples: &[f32], frame_samples: usize) -> FrameFeatures 
         peak,
         rms: (sum_square / denominator).sqrt(),
     }
-}
-
-#[cfg(all(not(target_arch = "aarch64"), test))]
-fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
-    extract_detail_features_scalar(pcm)
 }
 
 #[cfg(all(target_arch = "aarch64", test))]
