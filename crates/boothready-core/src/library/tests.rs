@@ -215,7 +215,58 @@ fn missing_changed_and_case_mismatched_files() {
     let dl = report.rekordbox.as_ref().unwrap().device_library.as_ref().unwrap();
     assert_eq!(dl.missing, vec!["Contents/Artist A/Peak.wav".to_string()]);
     assert_eq!(dl.size_mismatch, vec!["Contents/Artist B/Closing.flac".to_string()]);
-    assert_eq!(report.problems().len(), 2);
+    // The drive summary words size differences once it has the scanned audio.
+    assert_eq!(report.problems().len(), 1);
+}
+
+fn exported(duration: u16, bitrate: u32, rate: u32) -> LibraryTrack {
+    LibraryTrack {
+        id: 1,
+        title: "t".into(),
+        artist: None,
+        path: "Contents/t.mp3".into(),
+        db_sample_rate: Some(rate),
+        db_bit_depth: None,
+        db_file_size: Some(1),
+        db_duration_secs: Some(duration),
+        db_bitrate_kbps: Some(bitrate),
+    }
+}
+
+#[test]
+fn a_size_change_with_the_same_audio_is_a_tag_change() {
+    let mut info = crate::audio::probe_reader(std::io::Cursor::new(audio::mp3_cbr(400)), 400 * 1044).unwrap();
+    let secs = info.duration_secs.unwrap().round() as u16;
+    let rate = info.sample_rate.unwrap();
+    let kbps = info.bitrate_kbps.unwrap();
+    assert_eq!(classify_size_change(&exported(secs, kbps, rate), Some(&info)), SizeChange::TagsOnly);
+    // A different length, sample rate or constant bitrate means a different file.
+    assert_eq!(classify_size_change(&exported(secs + 20, kbps, rate), Some(&info)), SizeChange::Replaced);
+    assert_eq!(classify_size_change(&exported(secs, kbps, 48_000), Some(&info)), SizeChange::Replaced);
+    assert_eq!(classify_size_change(&exported(secs, kbps + 64, rate), Some(&info)), SizeChange::Replaced);
+    // A variable bitrate is not compared, since rekordbox records an average.
+    info.vbr = true;
+    assert_eq!(classify_size_change(&exported(secs, kbps + 64, rate), Some(&info)), SizeChange::TagsOnly);
+    // Nothing to compare against is treated as a replaced file.
+    assert_eq!(classify_size_change(&exported(secs, kbps, rate), None), SizeChange::Replaced);
+    let mut unknown = exported(secs, kbps, rate);
+    unknown.db_duration_secs = None;
+    assert_eq!(classify_size_change(&unknown, Some(&info)), SizeChange::Replaced);
+}
+
+#[test]
+fn serato_data_in_a_mismatched_file_is_noticed() {
+    let vol = tempfile::tempdir().unwrap();
+    build_rekordbox_volume(vol.path());
+    let path = vol.path().join("Contents/Artist B/Closing.flac");
+    let mut tagged = b"ID3\x04\x00\x00\x00\x00\x00\x20".to_vec();
+    tagged.extend_from_slice(b"GEOB....Serato Markers2.........");
+    tagged.extend_from_slice(&fs::read(&path).unwrap());
+    fs::write(&path, tagged).unwrap();
+    let report = scan_libraries(vol.path());
+    let dl = report.rekordbox.as_ref().unwrap().device_library.as_ref().unwrap();
+    assert_eq!(dl.size_mismatch, vec!["Contents/Artist B/Closing.flac".to_string()]);
+    assert_eq!(dl.serato_tagged, dl.size_mismatch);
 }
 
 fn set_modified(path: &Path, when: SystemTime) {

@@ -28,7 +28,11 @@ pub struct DriveFacts {
     /// Formats present but unreadable or empty.
     pub damaged_libraries: Vec<LibraryFormat>,
     pub device_library_missing: u32,
+    /// Tracks the export recorded with different audio: probably replaced.
     pub device_library_changed: u32,
+    /// Tracks whose tags changed after the export while the audio did not.
+    #[serde(default)]
+    pub device_library_retagged: u32,
     pub engine_missing: u32,
     pub library_warnings: Vec<String>,
     /// One rekordbox database written well before the other.
@@ -60,14 +64,19 @@ impl DriveFacts {
         let primary = layout.primary();
         let fs = primary.and_then(|p| p.filesystem.as_ref());
         let mut damaged = Vec::new();
-        let (mut dl_missing, mut dl_changed) = (0, 0);
+        let (mut dl_missing, mut dl_changed, mut dl_retagged) = (0, 0, 0);
         if let Some(rb) = &libs.rekordbox {
             if let Some(dl) = &rb.device_library {
                 if dl.parse_error.is_some() {
                     damaged.push(LibraryFormat::RekordboxDeviceLibrary);
                 }
                 dl_missing = dl.missing.len() as u32;
-                dl_changed = dl.size_mismatch.len() as u32;
+                for (_, kind) in crate::library::size_changes(dl, audio) {
+                    match kind {
+                        crate::library::SizeChange::Replaced => dl_changed += 1,
+                        crate::library::SizeChange::TagsOnly => dl_retagged += 1,
+                    }
+                }
             }
             if rb.one_library.as_ref().is_some_and(|o| o.size_bytes == 0) {
                 damaged.push(LibraryFormat::RekordboxOneLibrary);
@@ -91,6 +100,7 @@ impl DriveFacts {
             damaged_libraries: damaged,
             device_library_missing: dl_missing,
             device_library_changed: dl_changed,
+            device_library_retagged: dl_retagged,
             engine_missing,
             library_warnings,
             library_lag: libs.rekordbox.as_ref().and_then(|r| r.lag),
@@ -471,7 +481,7 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
             let total = facts.tracks.len();
             if changed > 0 {
                 detail.push(format!(
-                    "{changed} of {total} tracks don't match the file size recorded in the export. If their audio changed, cue points and beatgrids may be off on those tracks. The rest match."
+                    "{changed} of {total} tracks don't match the export: their size and their length or bitrate differ from what rekordbox recorded, so the files were probably replaced. Cue points and beatgrids may be off on those tracks. The rest match."
                 ));
             }
             // Only a size difference: the stick still plays, and nothing is
@@ -487,7 +497,7 @@ fn library_layer(d: &DeviceProfile, facts: &DriveFacts) -> (LayerResult, Vec<Fix
                     title: "Export this USB again from rekordbox".into(),
                     detail: if only_sizes {
                         format!(
-                            "{changed} of {total} tracks differ in size from what rekordbox recorded when it exported them. If you replaced or edited those files, export again so their cue points and beatgrids match. If you didn't, the USB plays as it is."
+                            "{changed} of {total} tracks differ from what rekordbox recorded when it exported them, in length or bitrate as well as size. If you replaced those files, export again so their cue points and beatgrids match. The rest of the USB plays as it is."
                         )
                     } else if missing > 0 || changed > 0 || warned {
                         "The export on this drive no longer matches its files. A fresh export from rekordbox fixes that."

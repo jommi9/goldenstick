@@ -63,9 +63,17 @@ pub struct DriveSummary {
     pub content: ContentStats,
     pub formats: Vec<LibraryFormat>,
     pub library_problems: Vec<String>,
-    /// Tracks whose size differs from the export's record, for the report
-    /// to name. Capped so a badly mismatched drive stays readable.
+    /// Tracks that differ from the export in their audio as well as their
+    /// size, for the report to name. Capped so a badly mismatched drive
+    /// stays readable.
     pub mismatched_tracks: Vec<String>,
+    /// Findings that need no action, such as tags that changed after the
+    /// export while the audio stayed the same.
+    pub library_notes: Vec<String>,
+    /// Tracks in the Engine DJ library, when there is one.
+    pub engine_tracks: Option<u32>,
+    /// Crates in the Serato library, when there is one.
+    pub serato_crates: Option<u32>,
     pub playlists: Vec<PlaylistDto>,
     pub library_tracks: usize,
     pub tracks_scanned: usize,
@@ -82,6 +90,47 @@ impl DriveSummary {
     pub fn from_report(r: &DriveReport) -> Self {
         let primary_fs = r.layout.primary().and_then(|p| p.filesystem.as_ref());
         let dl = r.libraries.rekordbox.as_ref().and_then(|rb| rb.device_library.as_ref());
+        let changes = dl.map(|dl| boothready_core::library::size_changes(dl, &r.audio)).unwrap_or_default();
+        let replaced: Vec<String> = changes
+            .iter()
+            .filter(|(_, k)| *k == boothready_core::library::SizeChange::Replaced)
+            .map(|(p, _)| p.clone())
+            .collect();
+        let retagged = changes.len() - replaced.len();
+        let mut library_problems = r.libraries.problems();
+        if !replaced.is_empty() {
+            let n = replaced.len();
+            library_problems.insert(
+                0,
+                if n == 1 {
+                    "1 track differs from what rekordbox analysed when it exported it".to_string()
+                } else {
+                    format!("{n} tracks differ from what rekordbox analysed when it exported them")
+                },
+            );
+        }
+        let mut library_notes = Vec::new();
+        if retagged > 0 {
+            let serato = dl.map(|dl| {
+                changes
+                    .iter()
+                    .filter(|(p, k)| {
+                        *k == boothready_core::library::SizeChange::TagsOnly && dl.serato_tagged.contains(p)
+                    })
+                    .count()
+            });
+            let by_serato = match serato {
+                Some(s) if s == retagged => ", by Serato".to_string(),
+                Some(s) if s > 0 => format!(", {s} of them by Serato"),
+                _ => String::new(),
+            };
+            library_notes.push(format!(
+                "{} {} newer tags than the rekordbox export{by_serato}. Length, bitrate and sample rate still match what rekordbox analysed, so {} as exported.",
+                if retagged == 1 { "1 track".to_string() } else { format!("{retagged} tracks") },
+                if retagged == 1 { "has" } else { "have" },
+                if retagged == 1 { "it plays" } else { "they play" },
+            ));
+        }
         let sizes: HashMap<String, u64> = r.audio.tracks.iter().map(|t| (t.path.clone(), t.size)).collect();
         let playlists = dl
             .map(|dl| {
@@ -136,8 +185,11 @@ impl DriveSummary {
             mount_point: r.mount_point.clone(),
             content: r.content.clone(),
             formats: r.libraries.formats.clone(),
-            library_problems: r.libraries.problems(),
-            mismatched_tracks: dl.map(|dl| dl.size_mismatch.iter().take(200).cloned().collect()).unwrap_or_default(),
+            library_problems,
+            mismatched_tracks: replaced.iter().take(200).cloned().collect(),
+            library_notes,
+            engine_tracks: r.libraries.engine.as_ref().filter(|e| e.error.is_none()).map(|e| e.track_count),
+            serato_crates: r.libraries.serato.as_ref().map(|s| s.crates),
             playlists,
             library_tracks: dl.map(|d| d.tracks.len()).unwrap_or(0),
             tracks_scanned: r.audio.tracks.len(),
@@ -257,6 +309,7 @@ pub fn candidate(p: &CatalogProduct, gb: Option<u32>) -> Candidate {
 pub struct ScanProgressEvent {
     pub device_id: String,
     pub files: u32,
+    pub total: u32,
     pub bytes: u64,
     pub current: String,
 }

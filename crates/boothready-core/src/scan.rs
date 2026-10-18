@@ -30,6 +30,9 @@ pub struct AudioScan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanProgress {
     pub files_done: u32,
+    /// Audio files found on the volume, known before probing starts.
+    #[serde(default)]
+    pub files_total: u32,
     pub bytes_done: u64,
     pub current: String,
 }
@@ -38,8 +41,10 @@ pub struct ScanProgress {
 /// UI can stream results instead of waiting for the whole drive.
 pub fn scan_audio(root: &Path, mut progress: impl FnMut(&ScanProgress, &ScannedTrack)) -> AudioScan {
     let mut scan = AudioScan::default();
-    let mut p = ScanProgress { files_done: 0, bytes_done: 0, current: String::new() };
-    for (rel, full, size) in walk_audio_files(root) {
+    // List first, which reads only directories, so progress can show a total.
+    let files: Vec<_> = walk_audio_files(root).collect();
+    let mut p = ScanProgress { files_done: 0, files_total: files.len() as u32, bytes_done: 0, current: String::new() };
+    for (rel, full, size) in files {
         let probe = match probe_file(&full) {
             Ok(info) => TrackProbe::Ok(info),
             Err(ProbeError::Unrecognized) => TrackProbe::Unreadable("not a recognised audio file".into()),
