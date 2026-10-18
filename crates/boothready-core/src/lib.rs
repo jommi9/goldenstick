@@ -12,6 +12,7 @@ pub mod copy;
 #[cfg(feature = "fixtures")]
 pub mod demo;
 pub mod drive;
+pub mod export;
 pub mod format;
 pub mod identify;
 pub mod io;

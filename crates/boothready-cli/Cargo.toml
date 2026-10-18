@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 boothready-model.workspace = true
-boothready-core = { workspace = true, features = ["sqlite", "fixtures", "tags"] }
+boothready-core = { workspace = true, features = ["sqlite", "fixtures", "tags", "device-library-writer"] }
 boothready-platform.workspace = true
 boothready-testlab.workspace = true
 boothready-helper = { path = "../boothready-helper" }
@@ -25,6 +25,7 @@ serde_json.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 djbooth-analyzer.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

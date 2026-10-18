@@ -1,6 +1,6 @@
 # Export providers
 
-Status: proposed interface and source review. Candidate repository review began 2026-10-03; vendor retrieval was confirmed and the document reviewed on 2026-10-04. No provider adapter is implemented by this document. No third-party exporter was run, and BoothReady has performed no player tests of these outputs.
+Status: proposed interface and source review, plus one built-in provider. Candidate repository review began 2026-10-03; vendor retrieval was confirmed and the document reviewed on 2026-10-04. On 2026-10-18 the djbooth Device Library writer was ported into `boothready-core` (see [Built-in Device Library writer](#built-in-device-library-writer)). No third-party exporter was run, and BoothReady has performed no player tests of any export.
 
 ## Workflow boundary
 
@@ -42,6 +42,24 @@ The recursive repository trees for REX and fourfour at the pinned commits contai
 - [rekordbox OneLibrary FAQ](https://rekordbox.com/en/support/faq/onelibrary-7/) describes both database formats and conversion through rekordbox.
 
 Both vendor pages were retrieved directly over HTTPS after the browser fetch timed out. The developer page states: “You can now display your rekordbox playlists in the [Bridge] pane by importing playlist information from an XML file.” The FAQ states: “You can convert the traditional Device Library in the USB storage device to the OneLibrary format with rekordbox for Mac/Windows.” These establish the interchange and conversion paths without verifying a particular player. The candidate repository READMEs and license checks above were read directly at pinned commits through GitHub's public API/raw content.
+
+## Built-in Device Library writer
+
+`boothready_core::export::device_library` writes a `device_library_tree` artifact from local audio files: `PIONEER/rekordbox/export.pdb`, one `ANLZ0000.DAT`, `.EXT` and `.2EX` per track under `PIONEER/USBANLZ`, and the audio under `Contents/<track id>/`. It is a port of djbooth's TypeScript writer (MIT), recorded with its local changes in [`crates/boothready-core/UPSTREAM.md`](../crates/boothready-core/UPSTREAM.md). The analysis comes from `crates/djbooth-analyzer`; track metadata comes from the files' tags and headers.
+
+```sh
+cargo run -p boothready-cli -- export-pdb <out dir> --playlist "Friday=~/Music/DJ/Friday" --playlist "Warm-up=~/Music/DJ/Warm-up"
+cargo run -p boothready-cli -- check-dir <out dir>
+```
+
+The command refuses an output folder on a USB or other removable drive and an output folder that already holds an export, builds the tree in a staging folder inside the target, reads the database back through BoothReady's own reader and only then moves `Contents` and `PIONEER` into place. The finished folder goes onto a stick through `boothready copy`, so the device confirmation stays where it is. Nothing in this provider writes to a device.
+
+What this provider establishes and what it does not:
+
+- Fixture evidence only. The tests round-trip tracks, artists, albums, genres, keys and playlists through the reader and through rekordcrate, and the ANLZ files parse with the analyser's own readers. No CDJ or XDJ has read an export from it, so every target's hardware state stays unknown until a player test is recorded.
+- Device Library only. The provider declares no OneLibrary output, so a target that requires `exportLibrary.db` blocks at planning.
+- Cue points, hot cues and loops are empty; the beat grid, key, phrases and waveforms are the analyser's. Colour waveforms come from the analyser's three-band analysis, not from a placeholder.
+- Formats: MP3, M4A (AAC and ALAC), FLAC, WAV and AIFF, the set rekordbox's `FileType` field names. Other audio in a playlist folder is reported and left out.
 
 ## Proposed contract
 
