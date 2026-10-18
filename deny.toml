@@ -68,13 +68,34 @@ private = { ignore = true }
 # to these files must be published, and it belongs in the legal review
 # (docs/ARCHITECTURE.md). Only the desktop app pulls them in, through
 # Tauri's HTML and CSS handling, so they are allowed one crate at a time
-# rather than globally; the helper and the CLI must stay free of MPL code.
+# rather than globally.
+#
+# The Symphonia crates are the audio decoder inside crates/djbooth-analyzer,
+# which the CLI and the app use for `analyze`. They are used unmodified, and
+# allowing them in the CLI was approved on 2026-10-15. The helper must stay
+# free of MPL code.
 exceptions = [
     { crate = "cssparser", allow = ["MPL-2.0"] },
     { crate = "cssparser-macros", allow = ["MPL-2.0"] },
     { crate = "selectors", allow = ["MPL-2.0"] },
     { crate = "dtoa-short", allow = ["MPL-2.0"] },
     { crate = "option-ext", allow = ["MPL-2.0"] },
+    { crate = "symphonia", allow = ["MPL-2.0"] },
+    { crate = "symphonia-bundle-flac", allow = ["MPL-2.0"] },
+    { crate = "symphonia-bundle-mp3", allow = ["MPL-2.0"] },
+    { crate = "symphonia-codec-aac", allow = ["MPL-2.0"] },
+    { crate = "symphonia-codec-adpcm", allow = ["MPL-2.0"] },
+    { crate = "symphonia-codec-alac", allow = ["MPL-2.0"] },
+    { crate = "symphonia-codec-pcm", allow = ["MPL-2.0"] },
+    { crate = "symphonia-codec-vorbis", allow = ["MPL-2.0"] },
+    { crate = "symphonia-common", allow = ["MPL-2.0"] },
+    { crate = "symphonia-core", allow = ["MPL-2.0"] },
+    { crate = "symphonia-format-caf", allow = ["MPL-2.0"] },
+    { crate = "symphonia-format-isomp4", allow = ["MPL-2.0"] },
+    { crate = "symphonia-format-mkv", allow = ["MPL-2.0"] },
+    { crate = "symphonia-format-ogg", allow = ["MPL-2.0"] },
+    { crate = "symphonia-format-riff", allow = ["MPL-2.0"] },
+    { crate = "symphonia-metadata", allow = ["MPL-2.0"] },
 ]
 
 [bans]
