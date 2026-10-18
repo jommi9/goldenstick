@@ -52,7 +52,7 @@ cargo run -p boothready-cli -- export-pdb <out dir> --playlist "Friday=~/Music/D
 cargo run -p boothready-cli -- check-dir <out dir>
 ```
 
-The command refuses an output folder on a USB or other removable drive and an output folder that already holds an export, builds the tree in a staging folder inside the target, reads the database back through BoothReady's own reader and only then moves `Contents` and `PIONEER` into place. The finished folder goes onto a stick through `boothready copy`, so the device confirmation stays where it is. Nothing in this provider writes to a device.
+The command refuses an output folder on a USB or other removable drive, an output folder that already holds `Contents` or `PIONEER`, and one with the staging folder of an interrupted export in it, builds the tree in a staging folder inside the target, reads the database back through BoothReady's own reader and only then moves `Contents` and `PIONEER` into place. The finished folder goes onto a stick through `boothready copy`, so the device confirmation stays where it is. Nothing in this provider writes to a device.
 
 What this provider establishes and what it does not:
 

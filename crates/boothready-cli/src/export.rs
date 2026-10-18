@@ -128,6 +128,7 @@ pub fn run(
         if !quiet {
             let verb = match p.phase {
                 "analyze" => "Analysing",
+                "probe" => "Reading",
                 "copy" => "Copying",
                 "database" => "Writing export.pdb",
                 _ => "Installing",
@@ -163,36 +164,9 @@ pub fn describe(report: &ExportReport, warnings: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::device;
     use boothready_core::audio::fixtures;
-    use boothready_model::Volume;
     use std::fs;
-
-    fn device(mount: PathBuf, bus: BusType, removable: bool, is_system: bool) -> PhysicalDevice {
-        PhysicalDevice {
-            id: "synthetic".into(),
-            os_path: "synthetic".into(),
-            bus,
-            removable,
-            is_system,
-            size_bytes: 1000,
-            logical_sector_size: 512,
-            storage_vendor: None,
-            storage_model: Some("Stick".into()),
-            storage_revision: None,
-            usb: None,
-            partition_scheme: None,
-            volumes: vec![Volume {
-                os_path: "synthetic".into(),
-                mount_point: Some(mount),
-                label: None,
-                filesystem: None,
-                size_bytes: 1000,
-                offset_bytes: None,
-                uuid: None,
-                efi_system: false,
-            }],
-        }
-    }
 
     #[test]
     fn playlist_arguments_split_at_the_first_equals_sign() {

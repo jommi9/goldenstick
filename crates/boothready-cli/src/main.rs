@@ -8,6 +8,8 @@ mod export;
 mod render;
 mod staging;
 mod testlab;
+#[cfg(test)]
+mod testutil;
 
 use anyhow::{bail, Context, Result};
 use boothready_core::copy::{plan_copy, run_copy, CopyTarget};
@@ -380,7 +382,10 @@ fn main() -> Result<()> {
         Cmd::ExportPdb { out, playlists, rhythm_mode, skip_analysis } => {
             let playlists = playlists.iter().map(|p| export::parse_playlist(p)).collect::<Result<Vec<_>>>()?;
             let analysis = export::analysis(*skip_analysis, rhythm_mode)?;
-            let devices = backend(&cli).platform().list_devices().unwrap_or_default();
+            let devices = backend(&cli)
+                .platform()
+                .list_devices()
+                .context("listing drives to make sure the output folder is not on a USB")?;
             export::guard_target(out, &devices)?;
             let (report, warnings) = export::run(out, &playlists, analysis, cli.json)?;
             if cli.json {

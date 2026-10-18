@@ -46,8 +46,9 @@ data rather than linked code, and it is listed in the legal review in
 - The export is always fresh. djbooth's ownership marker
   (`.music-cdj-export.json`), differential reuse of unchanged media files,
   removal of files from an earlier export and history import are not ported.
-  A target that already holds `Contents`, `PIONEER/USBANLZ` or `export.pdb`
-  is refused, following the regeneration rule in `docs/EXPORT-PROVIDERS.md`.
+  A target that already holds `Contents` or `PIONEER`, or the staging folder
+  of an interrupted export, is refused, following the regeneration rule in
+  `docs/EXPORT-PROVIDERS.md`.
 - A track whose analysis fails is still exported, without analysis files and
   with a warning in the report; djbooth requires an `ANLZ0000.DAT` for every
   track because its database already holds one.

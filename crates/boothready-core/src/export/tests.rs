@@ -4,33 +4,8 @@ use djbooth_analyzer::{AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// A 16-bit stereo WAV of short clicks at `bpm`, `seconds` long: the
-/// analyser finds a beat grid in it, which silence would not give.
 fn click_track(path: &Path, bpm: f64, seconds: u32) {
-    let rate = 44_100u32;
-    let frames = rate * seconds;
-    let beat = (f64::from(rate) * 60.0 / bpm) as u32;
-    let mut pcm = Vec::with_capacity(frames as usize * 4);
-    for i in 0..frames {
-        let pos = i % beat;
-        let s = if pos < 400 {
-            let env = 1.0 - f64::from(pos) / 400.0;
-            (f64::from(pos) * 2.0 * std::f64::consts::PI * 1000.0 / f64::from(rate)).sin() * env * 0.8
-        } else {
-            0.0
-        };
-        let v = (s * f64::from(i16::MAX)) as i16;
-        pcm.extend_from_slice(&v.to_le_bytes());
-        pcm.extend_from_slice(&v.to_le_bytes());
-    }
-    let mut wav = crate::audio::fixtures::wav(rate, 16, 2, 0, false);
-    let data_len = pcm.len() as u32;
-    let riff_len = wav.len() as u32 - 8 + data_len;
-    wav[4..8].copy_from_slice(&riff_len.to_le_bytes());
-    let n = wav.len();
-    wav[n - 4..].copy_from_slice(&data_len.to_le_bytes());
-    wav.extend_from_slice(&pcm);
-    fs::write(path, wav).unwrap();
+    fs::write(path, crate::audio::fixtures::click_track_wav(bpm, seconds)).unwrap();
 }
 
 fn tag(path: &Path, title: &str, artist: &str) {
@@ -83,6 +58,7 @@ fn export_without_analysis_reads_back_through_the_library_scanner() {
     };
     let mut phases = Vec::new();
     let report = export_device_library(&request, |p| phases.push(p.phase)).unwrap();
+    assert!(phases.contains(&"probe") && !phases.contains(&"analyze"), "{phases:?}");
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     assert_eq!(report.tracks.len(), 3);
     assert_eq!(report.playlists, 2);
@@ -178,10 +154,13 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
     fs::create_dir(&src).unwrap();
     let tracks = source_tracks(&src, &[("one.wav", "One", "A")], 1);
 
-    let occupied = tmp.path().join("occupied");
-    fs::create_dir_all(occupied.join("Contents")).unwrap();
-    let request = ExportRequest { root: occupied, tracks: tracks.clone(), playlists: vec![], analysis: Analysis::Skip };
-    assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Target(_))));
+    for occupant in ["Contents", "PIONEER", ".boothready-export-stale"] {
+        let occupied = tmp.path().join(format!("occupied-{occupant}"));
+        fs::create_dir_all(occupied.join(occupant)).unwrap();
+        let request =
+            ExportRequest { root: occupied, tracks: tracks.clone(), playlists: vec![], analysis: Analysis::Skip };
+        assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Target(_))), "{occupant}");
+    }
 
     let root = tmp.path().join("stick");
     let request = ExportRequest {
@@ -222,4 +201,14 @@ fn file_names_are_made_safe_for_player_filesystems() {
     assert_eq!(safe_filename("\u{1}\u{2}", 7), "__");
     assert_eq!(safe_filename("   ", 7), "track-00000007");
     assert_eq!(safe_filename(&"x".repeat(300), 1).chars().count(), 180);
+}
+
+#[test]
+fn civil_dates_match_the_calendar() {
+    assert_eq!(civil_date(0), "1970-01-01");
+    assert_eq!(civil_date(10_956), "1999-12-31");
+    assert_eq!(civil_date(11_016), "2000-02-29");
+    assert_eq!(civil_date(19_782), "2024-02-29");
+    assert_eq!(civil_date(19_783), "2024-03-01");
+    assert_eq!(civil_date(20_744), "2026-10-18");
 }

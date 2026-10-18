@@ -173,3 +173,32 @@ pub fn m4a(codec: &str, rate: u32, seconds: u32) -> Vec<u8> {
     v.extend_from_slice(&moov);
     v
 }
+
+/// A 16-bit stereo WAV of short clicks at `bpm`, `seconds` long. The
+/// analyser finds a beat grid in it, which silence would not give.
+pub fn click_track_wav(bpm: f64, seconds: u32) -> Vec<u8> {
+    let rate = 44_100u32;
+    let frames = rate * seconds;
+    let beat = (f64::from(rate) * 60.0 / bpm) as u32;
+    let mut pcm = Vec::with_capacity(frames as usize * 4);
+    for i in 0..frames {
+        let pos = i % beat;
+        let s = if pos < 400 {
+            let env = 1.0 - f64::from(pos) / 400.0;
+            (f64::from(pos) * 2.0 * std::f64::consts::PI * 1000.0 / f64::from(rate)).sin() * env * 0.8
+        } else {
+            0.0
+        };
+        let v = (s * f64::from(i16::MAX)) as i16;
+        pcm.extend_from_slice(&v.to_le_bytes());
+        pcm.extend_from_slice(&v.to_le_bytes());
+    }
+    let mut out = wav(rate, 16, 2, 0, false);
+    let data_len = pcm.len() as u32;
+    let riff_len = out.len() as u32 - 8 + data_len;
+    out[4..8].copy_from_slice(&riff_len.to_le_bytes());
+    let n = out.len();
+    out[n - 4..].copy_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(&pcm);
+    out
+}

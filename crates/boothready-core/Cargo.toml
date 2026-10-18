@@ -5,7 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-rust-version.workspace = true
+# The default `device-library-writer` feature pulls in djbooth-analyzer,
+# which uses let-chains and needs 1.88; the workspace declares 1.85 for the
+# helper, which leaves that feature off.
+rust-version = "1.88"
 
 [lints]
 workspace = true

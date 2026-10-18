@@ -16,7 +16,8 @@
 //! against.
 
 use super::pdb::{
-    TABLE_ALBUMS, TABLE_ARTISTS, TABLE_GENRES, TABLE_KEYS, TABLE_PLAYLIST_ENTRIES, TABLE_PLAYLIST_TREE, TABLE_TRACKS,
+    device_sql_string, u16_at, u32_at, TABLE_ALBUMS, TABLE_ARTISTS, TABLE_GENRES, TABLE_KEYS, TABLE_PLAYLIST_ENTRIES,
+    TABLE_PLAYLIST_TREE, TABLE_TRACKS,
 };
 use base64::Engine;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -77,8 +78,6 @@ pub enum WriterError {
     InvalidInput(String),
     #[error("{0}")]
     Capacity(String),
-    #[error("the Device Library writer is already finalized")]
-    Finalized,
     #[error("the embedded empty export.pdb is damaged: {0}")]
     Template(String),
     #[error("the existing Device Library is damaged: {0}")]
@@ -290,29 +289,10 @@ pub fn encode_device_sql_string(text: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Decode a DeviceSQL string at `offset`, refusing anything malformed.
+/// Decode a DeviceSQL string at `offset` with the reader's decoder, turning
+/// a malformed string into an error instead of a missing value.
 pub fn decode_device_sql_string(data: &[u8], offset: usize) -> Result<String> {
-    let kind = *data.get(offset).ok_or_else(|| damaged(format!("string offset {offset} is outside the database")))?;
-    if kind & 1 == 1 {
-        let length = (usize::from(kind >> 1)).saturating_sub(1);
-        let text = data
-            .get(offset + 1..offset + 1 + length)
-            .ok_or_else(|| damaged(format!("short string at {offset} runs past the end")))?;
-        return Ok(String::from_utf8_lossy(text).into_owned());
-    }
-    let length = usize::from(u16_at(data, offset + 1).ok_or_else(|| damaged("truncated DeviceSQL string header"))?);
-    if length < 4 || offset + length > data.len() {
-        return Err(damaged("invalid DeviceSQL string length"));
-    }
-    let text = &data[offset + 4..offset + length];
-    match kind {
-        0x40 => Ok(String::from_utf8_lossy(text).into_owned()),
-        0x90 => {
-            let units: Vec<u16> = text.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-            Ok(String::from_utf16_lossy(&units))
-        }
-        other => Err(damaged(format!("unknown DeviceSQL string kind {other:#04x}"))),
-    }
+    device_sql_string(data, offset).ok_or_else(|| damaged(format!("malformed DeviceSQL string at byte {offset}")))
 }
 
 /// rekordbox `FileType` for an audio path, from its extension.
@@ -354,14 +334,6 @@ pub fn usb_analysis_path(usb_audio_path: &str) -> Result<String> {
     bucket |= (path_hash >> 8) & 0x20;
     bucket |= (path_hash >> 10) & 0x40;
     Ok(format!("/PIONEER/USBANLZ/P{bucket:03X}/{path_hash:08X}/ANLZ0000.DAT"))
-}
-
-fn u16_at(b: &[u8], o: usize) -> Option<u16> {
-    b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
-}
-
-fn u32_at(b: &[u8], o: usize) -> Option<u32> {
-    b.get(o..o + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
 fn read_u16(b: &[u8], o: usize) -> Result<u16> {
@@ -530,7 +502,8 @@ pub fn inspect_pdb(data: &[u8]) -> Result<PdbInspection> {
 
 /// Builds a `PIONEER/rekordbox/export.pdb` for CDJ-3000 class players.
 ///
-/// Create one writer per export, add every row, then call [`build`](Self::build).
+/// Create one writer per export, add every row, then call [`build`](Self::build),
+/// which consumes the writer.
 #[derive(Debug)]
 pub struct DevicePdbWriter {
     data: Vec<u8>,
@@ -554,7 +527,6 @@ pub struct DevicePdbWriter {
     next_track_id: u32,
     playlist_count: u32,
     next_history_id: u32,
-    finalized: bool,
 }
 
 fn next_entity_id<K>(ids: &HashMap<K, u32>) -> u32 {
@@ -600,7 +572,6 @@ impl DevicePdbWriter {
             next_track_id: 0,
             playlist_count: 0,
             next_history_id: 0,
-            finalized: false,
         };
         if seed {
             writer.seed_existing_rows()?;
@@ -615,7 +586,6 @@ impl DevicePdbWriter {
 
     /// Append one track and return its DeviceSQL track ID.
     pub fn add_track(&mut self, input: &TrackInput) -> Result<u32> {
-        self.require_mutable()?;
         if input.title.is_empty() {
             return Err(invalid("Device Library track title is required"));
         }
@@ -732,7 +702,7 @@ impl DevicePdbWriter {
         let mut blobs: Vec<u8> = Vec::new();
         let mut position = TRACK_ROW_HEADER_BYTES;
         for encoded in &strings {
-            if encoded[0] & 1 == 0 && position % 4 != 0 {
+            if encoded[0] & 1 == 0 && !position.is_multiple_of(4) {
                 let padding = 4 - position % 4;
                 blobs.extend(std::iter::repeat_n(0u8, padding));
                 position += padding;
@@ -749,7 +719,6 @@ impl DevicePdbWriter {
 
     /// Append a playlist or folder and return its node ID. `parent_id` 0 is the root.
     pub fn create_playlist(&mut self, name: &str, parent_id: u32, folder: bool) -> Result<u32> {
-        self.require_mutable()?;
         if name.is_empty() {
             return Err(invalid("Device Library playlist name is required"));
         }
@@ -777,7 +746,6 @@ impl DevicePdbWriter {
     /// Append an ordered membership to a non-folder playlist. `entry_index`
     /// defaults to the next position, counting from 1.
     pub fn add_to_playlist(&mut self, playlist_id: u32, track_id: u32, entry_index: Option<u32>) -> Result<()> {
-        self.require_mutable()?;
         if self.playlist_folders.get(&playlist_id) != Some(&false) {
             return Err(invalid(format!("playlist {playlist_id} is missing or is a folder")));
         }
@@ -797,7 +765,6 @@ impl DevicePdbWriter {
 
     /// Append a CDJ-style history playlist and return its ID.
     pub fn create_history(&mut self, name: &str, id: Option<u32>) -> Result<u32> {
-        self.require_mutable()?;
         if name.is_empty() {
             return Err(invalid("Device Library history name is required"));
         }
@@ -824,7 +791,6 @@ impl DevicePdbWriter {
 
     /// Append one ordered track occurrence to a history playlist.
     pub fn add_to_history(&mut self, history_id: u32, track_id: u32, entry_index: Option<u32>) -> Result<()> {
-        self.require_mutable()?;
         if !self.history_ids.contains(&history_id) {
             return Err(invalid(format!("history {history_id} does not exist")));
         }
@@ -844,7 +810,6 @@ impl DevicePdbWriter {
 
     /// Remove every CDJ history row while keeping all unrelated bytes.
     pub fn clear_histories(&mut self) -> Result<()> {
-        self.require_mutable()?;
         for table in [TABLE_HISTORY_PLAYLISTS, TABLE_HISTORY_ENTRIES] {
             self.clear_table_rows(table)?;
         }
@@ -855,34 +820,22 @@ impl DevicePdbWriter {
     }
 
     /// Stamp page generations and the file sequence, then return the database.
-    /// Further rows cannot be added afterwards.
-    pub fn build(&mut self) -> Result<Vec<u8>> {
-        if !self.finalized {
-            let touched = std::mem::take(&mut self.touched_pages);
-            for (table, pages) in &touched {
-                let generation = *self
-                    .new_generations
-                    .get(table)
-                    .ok_or_else(|| damaged(format!("missing generation for table {table}")))?;
-                for page in pages {
-                    self.put_u32(*page as usize * self.page_size + 0x10, generation)?;
-                }
+    pub fn build(mut self) -> Result<Vec<u8>> {
+        let touched = std::mem::take(&mut self.touched_pages);
+        for (table, pages) in &touched {
+            let generation = *self
+                .new_generations
+                .get(table)
+                .ok_or_else(|| damaged(format!("missing generation for table {table}")))?;
+            for page in pages {
+                self.put_u32(*page as usize * self.page_size + 0x10, generation)?;
             }
-            if !touched.is_empty() {
-                let sequence = read_u32(&self.data, 0x14)?;
-                self.put_u32(0x14, sequence + 1)?;
-            }
-            self.touched_pages = touched;
-            self.finalized = true;
         }
-        Ok(self.data.clone())
-    }
-
-    fn require_mutable(&self) -> Result<()> {
-        if self.finalized {
-            return Err(WriterError::Finalized);
+        if !touched.is_empty() {
+            let sequence = read_u32(&self.data, 0x14)?;
+            self.put_u32(0x14, sequence + 1)?;
         }
-        Ok(())
+        Ok(self.data)
     }
 
     fn next_available_track_id(&mut self) -> u32 {
@@ -1389,7 +1342,6 @@ mod tests {
             w.add_to_playlist(warmup, id, None).unwrap();
         }
         let bytes = w.build().unwrap();
-        assert!(w.add_track(&track(301, "late", None)).is_err(), "finalized writers refuse rows");
 
         let pdb = parse_pdb(&bytes).unwrap();
         assert!(pdb.warnings.is_empty(), "{:?}", pdb.warnings);

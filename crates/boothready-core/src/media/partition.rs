@@ -320,7 +320,7 @@ fn read_gpt<R: Read + Seek>(disk: &mut Disk<R>, ss: u64, s0: &[u8], hdr: &[u8]) 
     let disk_guid = guid_to_string(&hdr[56..72]);
 
     let mut partitions = Vec::new();
-    if !(128..=4096).contains(&entry_size) || entry_size % 8 != 0 {
+    if !(128..=4096).contains(&entry_size) || !entry_size.is_multiple_of(8) {
         warnings.push(format!("GPT entry size {entry_size} is invalid"));
     } else {
         let table_len = num_entries * entry_size;

@@ -20,7 +20,7 @@ use crate::library::pdb::parse_pdb;
 use crate::library::pdb_writer::{
     file_type_for_path, inspect_pdb, usb_analysis_path, DevicePdbWriter, TrackInput, WriterError,
 };
-use crate::library::{ANALYSIS_DIR, DEVICE_LIBRARY_FILE};
+use crate::library::DEVICE_LIBRARY_FILE;
 use djbooth_analyzer::{
     analyze_audio_file_with_options, build_path_tag, AnalysisOptions, AnlzFile, AnlzTag, RhythmMode,
 };
@@ -32,6 +32,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// The three analysis files rekordbox writes per track.
 const ANALYSIS_EXTENSIONS: [&str; 3] = ["DAT", "EXT", "2EX"];
+/// Name prefix of the staging folder built inside the target.
+const STAGING_PREFIX: &str = ".boothready-export-";
 
 /// One playlist to write: a name and the positions of its tracks in
 /// [`ExportRequest::tracks`], in playing order.
@@ -81,6 +83,7 @@ pub struct ExportRequest {
 /// Progress of one export, for a terminal or a progress bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportProgress {
+    /// `analyze` (or `probe` when analysis is skipped), `copy`, `database`, `install`.
     pub phase: &'static str,
     pub done: usize,
     pub total: usize,
@@ -160,7 +163,7 @@ pub fn export_device_library(
     let started = Instant::now();
     validate_request(request)?;
     let root = validate_target(&request.root)?;
-    let staging_dir = root.join(format!(".boothready-export-{}", uuid::Uuid::new_v4()));
+    let staging_dir = root.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
     fs::create_dir(&staging_dir).map_err(io_err(format!("creating {}", staging_dir.display())))?;
     let staging = Staging(staging_dir.clone());
 
@@ -171,9 +174,10 @@ pub fn export_device_library(
     let mut analysis_files = 0usize;
     let total = request.tracks.len();
     let date_added = today();
+    let first_phase = if request.analysis == Analysis::Skip { "probe" } else { "analyze" };
     for (index, source) in request.tracks.iter().enumerate() {
         let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        progress(&ExportProgress { phase: "analyze", done: index, total, current: name.clone() });
+        progress(&ExportProgress { phase: first_phase, done: index, total, current: name.clone() });
         let id = index as u32 + 1;
         let prepared = prepare_track(source, id)?;
         let analysis = match request.analysis.rhythm_mode() {
@@ -319,11 +323,23 @@ fn validate_target(root: &Path) -> Result<PathBuf> {
     if root.parent().is_none() {
         return Err(ExportError::Target(format!("{} is a filesystem root", root.display())));
     }
-    for existing in ["Contents", ANALYSIS_DIR, DEVICE_LIBRARY_FILE] {
+    // A bare PIONEER folder (rekordbox settings, an older USBANLZ) would make
+    // the final rename fail after all the work, so it counts as occupied too.
+    for existing in ["Contents", "PIONEER"] {
         if root.join(existing).exists() {
             return Err(ExportError::Target(format!(
-                "{} already holds a rekordbox export ({existing}); export into an empty folder",
+                "{} already holds a rekordbox export or settings ({existing}); export into an empty folder",
                 root.display()
+            )));
+        }
+    }
+    let entries = fs::read_dir(&root).map_err(io_err(format!("listing {}", root.display())))?;
+    for entry in entries.filter_map(std::result::Result::ok) {
+        if entry.file_name().to_string_lossy().starts_with(STAGING_PREFIX) {
+            return Err(ExportError::Target(format!(
+                "{} holds {} from an interrupted export; remove it and run again",
+                root.display(),
+                entry.file_name().to_string_lossy()
             )));
         }
     }
@@ -492,8 +508,12 @@ pub fn safe_filename(value: &str, track_id: u32) -> String {
 
 /// Today's date as `YYYY-MM-DD` in UTC, the form rekordbox stores.
 fn today() -> String {
-    let days = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0) as i64;
-    // Howard Hinnant's civil-from-days.
+    civil_date(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0) as i64)
+}
+
+/// `YYYY-MM-DD` for a count of days since 1970-01-01 (Howard Hinnant's
+/// civil-from-days).
+pub fn civil_date(days: i64) -> String {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);

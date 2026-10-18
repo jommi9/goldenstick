@@ -83,11 +83,11 @@ struct TablePointer {
     last_page: u32,
 }
 
-fn u16_at(b: &[u8], o: usize) -> Option<u16> {
+pub(crate) fn u16_at(b: &[u8], o: usize) -> Option<u16> {
     b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
 }
 
-fn u32_at(b: &[u8], o: usize) -> Option<u32> {
+pub(crate) fn u32_at(b: &[u8], o: usize) -> Option<u32> {
     b.get(o..o + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
@@ -103,7 +103,7 @@ pub(crate) fn device_sql_string(b: &[u8], o: usize) -> Option<String> {
         0x90 => {
             let len = u16_at(b, o + 1)? as usize;
             let text = b.get(o + 4..o + len.max(4))?;
-            let units: Vec<u16> = text.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let units: Vec<u16> = text.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             Some(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string())
         }
         k if k & 1 == 1 => {
