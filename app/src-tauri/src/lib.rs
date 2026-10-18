@@ -25,7 +25,7 @@ use boothready_helper::{Backend, DemoBackend, NativeBackend};
 use boothready_model::{DeviceEvent, FilesystemKind, PartitionScheme, PhysicalDevice};
 use boothready_platform::{Platform, PlatformError, Watcher};
 use dto::*;
-use library::{LibraryPage, LibrarySource, LibraryState};
+use library::{LibraryPage, LibrarySource, LibraryState, TrackQuery};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1005,30 +1005,16 @@ fn library_cancel_scan(state: State<'_, AppState>) {
 struct TrackRequest {
     id: String,
     targets: Vec<String>,
-    filter: String,
-    query: String,
-    /// A folder inside the source, or empty for all of it.
-    #[serde(default)]
-    folder: String,
-    offset: u32,
-    limit: u32,
+    #[serde(flatten)]
+    query: TrackQuery,
 }
 
 #[tauri::command]
 fn library_tracks(app: AppHandle, state: State<'_, AppState>, request: TrackRequest) -> Res<LibraryPage> {
     let players = state.rules.devices_by_id(&request.targets);
-    let limit = request.limit.clamp(1, 500) as usize;
-    state.with_library(&app, |library| {
-        library.tracks(
-            &request.id,
-            &players,
-            &request.filter,
-            &request.query,
-            &request.folder,
-            request.offset as usize,
-            limit,
-        )
-    })?
+    let mut query = request.query;
+    query.limit = query.limit.clamp(1, 500);
+    state.with_library(&app, |library| library.tracks(&request.id, &players, &query))?
 }
 
 /// Which tracks to collect: a source and the filter and search shown on it.
@@ -1432,7 +1418,7 @@ pub fn mock_snapshot(root: &Path) -> Res<serde_json::Value> {
                 .replace(&format!("{shown_root}/Volumes"), "/Volumes")
                 .replace(&format!("{shown_root}/Collections"), "/Users/dj/Music/BoothReady")
                 .replace(&shown_root, "/Users/dj");
-            let page = library.tracks(&source.id, &players, "all", "", "", 0, 500)?;
+            let page = library.tracks(&source.id, &players, &TrackQuery { limit: 500, ..TrackQuery::default() })?;
             if source.id == collected_id {
                 source.id = "demo-collected".into();
                 collected = json!({ "source": source, "tracks": page.tracks });

@@ -83,7 +83,8 @@ export interface Api {
   libraryScan(id: string): Promise<void>;
   libraryCancelScan(): Promise<void>;
   /** `id` may be "*" for every source at once. `folder` narrows to a folder inside the source. */
-  libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number, folder?: string): Promise<LibraryPage>;
+  /** `sort` is a column name ("title", "artist", "bpm", "key", "time", ...); empty keeps folder order. */
+  libraryTracks(id: string, targets: string[], filter: string, query: string, offset: number, limit: number, folder?: string, sort?: string, desc?: boolean): Promise<LibraryPage>;
   libraryFolders(id: string): Promise<FolderNode[]>;
   /** A URL the webview can play one track from. The path is relative to the source. */
   libraryPlayUrl(id: string, path: string): Promise<string>;
@@ -156,7 +157,7 @@ async function tauriApi(): Promise<Api> {
     libraryRemove: (id) => invoke("library_remove", { id }),
     libraryScan: (id) => invoke("library_scan", { id }),
     libraryCancelScan: () => invoke("library_cancel_scan"),
-    libraryTracks: (id, targets, filter, query, offset, limit, folder) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit, folder: folder ?? "" } }),
+    libraryTracks: (id, targets, filter, query, offset, limit, folder, sort, desc) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit, folder: folder ?? "", sort: sort ?? "", desc: desc ?? false } }),
     libraryFolders: (id) => invoke("library_folders", { id }),
     libraryPlayUrl: async (id, path) => convertFileSrc(await invoke<string>("library_play", { id, path })),
     onLibraryScanProgress: on("library-scan-progress"),

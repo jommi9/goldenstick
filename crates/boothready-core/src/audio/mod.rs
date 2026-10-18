@@ -11,6 +11,7 @@ mod flac;
 mod mp3;
 mod mp4;
 mod ogg;
+pub mod tags;
 mod wav;
 
 use serde::{Deserialize, Serialize};

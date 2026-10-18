@@ -248,7 +248,10 @@ async function checkLibrary(page, text, at) {
     same(await rows.count(), tracks.length, `${s.name} lists every scanned track`);
     for (const [i, t] of tracks.entries()) {
       const row = (await rows.nth(i).textContent()) ?? "";
-      includes(row, t.name, `row ${i + 1} of ${s.name} is ${t.name}`);
+      includes(row, t.title ?? t.name, `row ${i + 1} of ${s.name} is ${t.title ?? t.name}`);
+      if (t.artist) includes(row, t.artist, `${t.name} shows its artist tag`);
+      if (t.camelot) includes(row, t.camelot, `${t.name} shows its key on the Camelot wheel`);
+      if (t.bpm !== null) includes(row, String(Math.round(t.bpm * 100) / 100), `${t.name} shows its tempo`);
       includes(row, STATE_LABEL[t.state], `${t.name} shows the engine's state`);
       for (const issue of t.issues.slice(0, 3)) {
         includes(row, issue.model, `${t.name} names the player that rejects it`);
@@ -284,6 +287,31 @@ async function checkLibrary(page, text, at) {
   const everything = lib.sources.reduce((n, s) => n + lib.tracks[s.id].length, 0);
   includes(await text(".tracks-foot"), `of ${everything.toLocaleString("en-US")}`, "the collection holds every source's tracks");
 
+  // Tags: the engine read them, search finds an artist, and a heading
+  // orders the list with untagged tracks last.
+  check(lib.tracks["demo-computer"].filter((t) => t.state !== "unreadable").some((t) => t.title === null), "one demo track is left untagged");
+  check(lib.tracks["demo-computer"].filter((t) => t.artist).length >= 6, "the demo tracks carry artist tags");
+  await page.locator("#library-search").fill("klock");
+  await page.waitForTimeout(400);
+  const klock = lib.tracks["demo-computer"].filter((t) => t.artist === "Ben Klock").length;
+  same(await page.locator(".tracks tbody tr").count(), klock, "searching an artist finds that artist's tracks");
+  await page.locator("#library-search").fill("");
+  await page.waitForTimeout(400);
+  await page.locator('[data-act="library-sort"][data-id="bpm"]').click();
+  await page.waitForTimeout(200);
+  await at("library-sort bpm");
+  const tempos = await page.locator(".tracks tbody td.bpm").allTextContents();
+  const known = tempos.map((x) => x.trim()).filter((x) => x !== "·").map(Number);
+  check(known.length > 0 && known.every((v, i) => i === 0 || known[i - 1] <= v), "sorting by BPM puts the slowest first");
+  check(tempos.map((x) => x.trim()).slice(known.length).every((x) => x === "·"), "tracks without a tempo come last");
+  same(await page.locator('th[aria-sort="ascending"]').count(), 1, "the sorted column says so");
+  await page.locator('[data-act="library-sort"][data-id="bpm"]').click();
+  await page.waitForTimeout(200);
+  const down = (await page.locator(".tracks tbody td.bpm").allTextContents()).map((x) => x.trim()).filter((x) => x !== "·").map(Number);
+  check(down.every((v, i) => i === 0 || down[i - 1] >= v), "the same heading again reverses the order");
+  await page.locator('[data-act="library-sort"][data-id=""]').click();
+  await page.waitForTimeout(200);
+
   // Playing: a row's number is its play key, the bar along the bottom
   // follows the track across screens, and unreadable files can't be started.
   for (const s of lib.sources) check(lib.tracks[s.id].every((t) => t.source === s.id), `every track of ${s.name} names its source`);
@@ -296,13 +324,13 @@ async function checkLibrary(page, text, at) {
   await page.locator(".player").waitFor();
   await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
   await at("library-player");
-  same((await text(".player-name")).trim(), secondName, "the player shows the track that was clicked");
+  check((await text(".player-name")).trim().startsWith(secondName), "the player shows the track that was clicked");
   same((await text("tr.playing td b")).trim(), secondName, "the playing row is marked");
   await page.waitForFunction(() => document.getElementById("player-elapsed")?.textContent !== "0:00", null, { timeout: 4000 });
   check(true, "the clock runs while the track plays");
   await page.locator('[data-act="library-next"]').click();
-  await page.waitForFunction((name) => document.querySelector(".player-name")?.textContent !== name, secondName);
-  check((await text(".player-name")).trim() !== secondName, "next moves to the following track");
+  await page.waitForFunction((name) => document.querySelector("tr.playing td b")?.textContent?.trim() !== name, secondName);
+  check(!(await text(".player-name")).trim().startsWith(secondName), "next moves to the following track");
   await page.keyboard.press("Escape");
   await page.locator("main#main h1").click();
   await page.keyboard.press(" ");
