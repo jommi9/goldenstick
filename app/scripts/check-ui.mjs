@@ -283,6 +283,38 @@ async function checkLibrary(page, text, at) {
   await at("library-collection-all");
   const everything = lib.sources.reduce((n, s) => n + lib.tracks[s.id].length, 0);
   includes(await text(".tracks-foot"), `of ${everything.toLocaleString("en-US")}`, "the collection holds every source's tracks");
+
+  // Playing: a row's number is its play key, the bar along the bottom
+  // follows the track across screens, and unreadable files can't be started.
+  for (const s of lib.sources) check(lib.tracks[s.id].every((t) => t.source === s.id), `every track of ${s.name} names its source`);
+  const unreadable = lib.tracks["demo-computer"].filter((t) => t.state === "unreadable").length;
+  same(await page.locator("tbody tr.unreadable .rb-play").count(), 0, "an unreadable track has no play key");
+  check(unreadable === 0 || (await page.locator("tbody tr.unreadable").count()) > 0, "an unreadable track is listed");
+  const second = page.locator(".rb-play").nth(1);
+  const secondName = (await second.getAttribute("aria-label"))?.replace(/^Play /, "");
+  await second.click();
+  await page.locator(".player").waitFor();
+  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
+  await at("library-player");
+  same((await text(".player-name")).trim(), secondName, "the player shows the track that was clicked");
+  same((await text("tr.playing td b")).trim(), secondName, "the playing row is marked");
+  await page.waitForFunction(() => document.getElementById("player-elapsed")?.textContent !== "0:00", null, { timeout: 4000 });
+  check(true, "the clock runs while the track plays");
+  await page.locator('[data-act="library-next"]').click();
+  await page.waitForFunction((name) => document.querySelector(".player-name")?.textContent !== name, secondName);
+  check((await text(".player-name")).trim() !== secondName, "next moves to the following track");
+  await page.keyboard.press("Escape");
+  await page.locator("main#main h1").click();
+  await page.keyboard.press(" ");
+  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Play");
+  check(true, "the space bar pauses");
+  await page.locator('.tab[data-act="home"]').click();
+  check((await page.locator(".player").count()) === 1, "the player stays on other screens");
+  await page.locator('[data-act="library-stop-play"]').click();
+  same(await page.locator(".player").count(), 0, "stop closes the player");
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.locator('[data-act="library-open"][data-id="*"]').click();
+  await page.getByRole("table").waitFor();
   await page.locator('[data-act="library-folder"][data-id="demo-cloud|"]').click();
   await page.getByRole("table").waitFor();
 

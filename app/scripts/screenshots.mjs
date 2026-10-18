@@ -134,6 +134,11 @@ async function run(scheme) {
   await page.locator('[data-act="library-open"][data-id="*"]').click();
   await page.getByRole("table").waitFor();
   await shot("28-library-collection", true);
+  await page.locator(".rb-play").nth(2).click();
+  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
+  await page.waitForTimeout(1200);
+  await shot("29-library-player");
+  await page.locator('[data-act="library-stop-play"]').click();
   await page.locator('[data-act="library-folder"][data-id="demo-cloud|"]').click();
   await page.getByRole("table").waitFor();
 

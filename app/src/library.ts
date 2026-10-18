@@ -101,6 +101,171 @@ export function locationLabel(l: LibraryLocation): string {
 
 const source = (id: string) => L.sources.find((s) => s.id === id);
 
+// ------------------------------------------------------------------ player
+
+/**
+ * One audio element for the whole app. It lives outside the rendered markup,
+ * so re-rendering a screen never interrupts what is playing.
+ */
+const P = {
+  audio: null as HTMLAudioElement | null,
+  /** The loaded track, kept as it was listed when it was started. */
+  now: null as LibraryTrack | null,
+  /** The list it was started from, for previous and next. */
+  queue: [] as LibraryTrack[],
+  loading: false,
+  error: null as string | null,
+  /** True while the seek bar is being dragged, so playback doesn't move it. */
+  seeking: false,
+};
+
+const trackKey = (t: { source: string; path: string }) => `${t.source}|${t.path}`;
+
+function audio(): HTMLAudioElement {
+  if (P.audio) return P.audio;
+  const a = new Audio();
+  a.preload = "auto";
+  a.addEventListener("timeupdate", updateClock);
+  a.addEventListener("durationchange", updateClock);
+  for (const ev of ["play", "pause", "ended"]) a.addEventListener(ev, () => L.host.render());
+  a.addEventListener("error", () => {
+    if (!P.now || !a.getAttribute("src")) return;
+    P.loading = false;
+    P.error = `This ${P.now.format || "file"} file can't be played in BoothReady on this computer. That doesn't change whether your players can play it.`;
+    L.host.render();
+  });
+  P.audio = a;
+  return a;
+}
+
+const clock = (secs: number) => {
+  if (!Number.isFinite(secs) || secs < 0) return "--:--";
+  const s = Math.floor(secs);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+/** Move the clock and the seek bar without re-rendering the screen. */
+function updateClock() {
+  const a = P.audio;
+  if (!a) return;
+  const elapsed = document.getElementById("player-elapsed");
+  const remain = document.getElementById("player-remain");
+  const seek = document.getElementById("library-seek") as HTMLInputElement | null;
+  if (elapsed) elapsed.textContent = clock(a.currentTime);
+  if (remain) remain.textContent = Number.isFinite(a.duration) ? `-${clock(a.duration - a.currentTime)}` : "--:--";
+  if (seek && !P.seeking) {
+    seek.max = String(Number.isFinite(a.duration) ? a.duration : 0);
+    seek.value = String(a.currentTime);
+  }
+}
+
+async function play(t: LibraryTrack) {
+  const a = audio();
+  if (P.now && trackKey(P.now) === trackKey(t)) {
+    if (a.paused) await a.play().catch(() => {});
+    else a.pause();
+    return;
+  }
+  P.now = t;
+  P.queue = L.tracks.filter((x) => x.state !== "unreadable");
+  P.error = null;
+  P.loading = true;
+  a.pause();
+  L.host.render();
+  try {
+    const url = await L.host.api.libraryPlayUrl(t.source, t.path);
+    // A later click may have started another track while this one resolved.
+    if (P.now !== t) return;
+    a.src = url;
+    await a.play();
+  } catch (e) {
+    if (P.now !== t) return;
+    // The element's own error event explains format failures; this covers the rest.
+    if (!P.error && !(e instanceof DOMException && e.name === "AbortError")) P.error = e instanceof DOMException ? `This ${t.format || "file"} file can't be played on this computer.` : String(e);
+  } finally {
+    if (P.now === t) P.loading = false;
+  }
+  L.host.render();
+}
+
+function step(by: number) {
+  if (!P.now) return;
+  // Previous restarts the track once it has played a few seconds, as on a deck.
+  if (by < 0 && P.audio && P.audio.currentTime > 3) {
+    P.audio.currentTime = 0;
+    return;
+  }
+  const at = P.queue.findIndex((t) => trackKey(t) === trackKey(P.now!));
+  const next = P.queue[at + by];
+  if (next) void play(next);
+  else if (by < 0 && P.audio) P.audio.currentTime = 0;
+}
+
+function stopPlayer() {
+  P.audio?.pause();
+  P.audio?.removeAttribute("src");
+  P.audio?.load();
+  P.now = null;
+  P.error = null;
+  P.loading = false;
+}
+
+function togglePlayer() {
+  const a = P.audio;
+  if (!P.now || !a) return;
+  if (a.paused) void a.play().catch(() => {});
+  else a.pause();
+}
+
+const isPlaying = (t: LibraryTrack) => !!P.now && trackKey(P.now) === trackKey(t) && !!P.audio && !P.audio.paused;
+
+const ICON = {
+  play: "M3 1.5v11l9.5-5.5z",
+  pause: "M3 1.5h3v11H3zM8 1.5h3v11H8z",
+  prev: "M2 1.5h2v11H2zM13 1.5v11L4.5 7z",
+  next: "M12 1.5h-2v11h2zM1 1.5v11L9.5 7z",
+  stop: "M2.5 2.5h9v9h-9z",
+};
+const icon = (d: string) => raw(`<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="${d}" fill="currentColor"/></svg>`);
+
+/** The bar along the bottom of the window while a track is loaded. */
+export function libraryPlayerBar(): Raw {
+  const t = P.now;
+  if (!t) return html``;
+  const a = P.audio;
+  const playing = !!a && !a.paused;
+  const s = source(t.source);
+  const cloud = t.state === "cloud_only" ? (s?.location.kind === "cloud" ? s.location.provider : "your cloud app") : null;
+  const at = P.queue.findIndex((x) => trackKey(x) === trackKey(t));
+  const duration = a && Number.isFinite(a.duration) ? a.duration : 0;
+  // Rows in "All tracks" already start their folder with the source's name.
+  const where = s && !t.folder.startsWith(s.name) ? [s.name, t.folder].filter(Boolean).join(" · ") : t.folder;
+  return html`<section class="player" aria-label="Player">
+    <div class="player-keys">
+      <button class="player-key" data-act="library-prev" aria-label="Previous track, or the start of this one">${icon(ICON.prev)}</button>
+      <button class="player-key main ${playing ? "on" : ""}" data-act="library-toggle-play" aria-label="${playing ? "Pause" : "Play"}" ${P.error ? "disabled" : ""}>${icon(playing ? ICON.pause : ICON.play)}</button>
+      <button class="player-key" data-act="library-next" aria-label="Next track" ${at >= 0 && at < P.queue.length - 1 ? "" : "disabled"}>${icon(ICON.next)}</button>
+    </div>
+    <div class="player-track">
+      <b class="player-name">${t.name}</b>
+      <div class="small faint">${where}${t.detail ? ` · ${t.format}, ${t.detail}` : t.format ? ` · ${t.format}` : ""}</div>
+      ${P.error
+        ? html`<div class="small player-error" role="alert">${P.error}</div>`
+        : P.loading && cloud
+          ? html`<div class="small muted">${cloud} is downloading this track so it can play.</div>`
+          : P.loading
+            ? html`<div class="small muted">Loading.</div>`
+            : ""}
+    </div>
+    <div class="player-time">
+      <span id="player-elapsed" class="player-clock">${clock(a?.currentTime ?? 0)}</span>
+      <input id="library-seek" class="player-seek" type="range" min="0" step="0.1" max="${duration}" value="${a?.currentTime ?? 0}" aria-label="Position" ${duration ? "" : "disabled"}>
+      <span id="player-remain" class="player-clock">${duration ? `-${clock(duration - (a?.currentTime ?? 0))}` : "--:--"}</span>
+    </div>
+    <button class="player-key" data-act="library-stop-play" aria-label="Stop and close the player">${icon(ICON.stop)}</button>
+  </section>`;
+}
+
 /** The folder name of a source, for the path bar. */
 export function librarySourceName(id: string): string {
   if (id === ALL) return "Collection";
@@ -158,6 +323,14 @@ export async function initLibrary(host: Host) {
     if (!L.collect?.running || L.collect.sourceId !== p.source_id) return;
     L.collect.progress = p;
     if (host.showing()) host.render();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== " " || !P.now || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    // Space keeps its usual job in fields and on buttons.
+    const el = ev.target as HTMLElement | null;
+    if (el?.closest("input, textarea, select, button, summary, [contenteditable]")) return;
+    ev.preventDefault();
+    togglePlayer();
   });
   await refreshLibrary();
 }
@@ -354,6 +527,24 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       }
       return true;
     }
+    case "library-play": {
+      const t = L.tracks.find((x) => trackKey(x) === id);
+      if (t) await play(t);
+      return true;
+    }
+    case "library-toggle-play":
+      togglePlayer();
+      return true;
+    case "library-prev":
+      step(-1);
+      return true;
+    case "library-next":
+      step(1);
+      return true;
+    case "library-stop-play":
+      stopPlayer();
+      host.render();
+      return true;
     case "library-dismiss-error":
       L.error = null;
       host.render();
@@ -366,6 +557,12 @@ let searchTimer = 0;
 
 /** Handle typing. Returns false when the field isn't a Library one. */
 export function libraryInput(t: HTMLInputElement): boolean {
+  if (t.id === "library-seek") {
+    P.seeking = true;
+    const elapsed = document.getElementById("player-elapsed");
+    if (elapsed) elapsed.textContent = clock(Number(t.value));
+    return true;
+  }
   if (t.id === "library-path") {
     L.path = t.value;
     return true;
@@ -388,6 +585,11 @@ export function libraryInput(t: HTMLInputElement): boolean {
 
 /** Handle a changed select. Returns false when it isn't a Library one. */
 export async function libraryChange(t: HTMLInputElement | HTMLSelectElement): Promise<boolean> {
+  if (t.id === "library-seek") {
+    if (P.audio) P.audio.currentTime = Number(t.value);
+    P.seeking = false;
+    return true;
+  }
   if (t.id === "library-collect-name") {
     // The name decides the folder, so the plan is fetched again for it.
     await planCollect(t.value);
@@ -473,7 +675,7 @@ export function libraryView(): Raw {
   const attention = all.blocked + all.unchecked + all.unreadable;
   return html`<div class="library">
     <div class="devtools-heading">
-      <div><div class="eyebrow">Music library</div><h1>Your music</h1><p class="muted" style="max-width:640px">Add the folders your music lives in: on this computer, on an external drive or in a synced cloud folder. BoothReady reads them where they are. It never changes, moves or downloads anything.</p></div>
+      <div><div class="eyebrow">Music library</div><h1>Your music</h1><p class="muted" style="max-width:640px">Add the folders your music lives in: on this computer, on an external drive or in a synced cloud folder. BoothReady reads them where they are and never changes or moves them. Scanning downloads nothing.</p></div>
       <div class="source-actions">${L.sources.some((s) => s.states) ? html`<button class="btn primary" data-act="library-open" data-id="*">Browse the collection</button>` : ""}<button class="btn" data-act="home">Back</button></div>
     </div>
     ${errorBanner()}
@@ -511,8 +713,13 @@ function trackRow(t: LibraryTrack, i: number): Raw {
   const shown = t.issues.slice(0, 3);
   const rest = t.issues.length - shown.length;
   const kind = t.format.toLowerCase().replace(/[^a-z0-9]/g, "") || "other";
-  return html`<tr class="${t.state}">
-    <td class="idx">${String(i + 1).padStart(3, "0")}</td>
+  const n = String(i + 1).padStart(3, "0");
+  const loaded = !!P.now && trackKey(P.now) === trackKey(t);
+  const playing = isPlaying(t);
+  return html`<tr class="${t.state} ${loaded ? "playing" : ""}">
+    <td class="idx">${t.state === "unreadable"
+      ? n
+      : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${t.name}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
     <td class="art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
     <td><b>${t.name}</b>${t.folder ? html`<div class="small faint">${t.folder}</div>` : ""}
       ${shown.length ? html`<details class="track-issues"><summary>${t.state === "blocked" ? "Won't play on" : "No data for"} ${t.issues.map((i) => i.model).join(", ")}</summary><ul>${shown.map((i) => html`<li><b>${i.model}:</b> ${i.reason}</li>`)}${rest > 0 ? html`<li>and ${plural(rest, "more player")}</li>` : ""}</ul></details>` : ""}
