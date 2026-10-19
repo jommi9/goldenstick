@@ -414,6 +414,17 @@ async function checkExport(page, text, at, click) {
   const folderSet = new Set(tracks.map((t) => t.folder.split("/")).flatMap((parts) => parts.map((_, i) => parts.slice(0, i + 1).join("/"))));
   same(await folders.count(), folderSet.size, "every folder of the source can be ticked");
   check(await page.getByRole("button", { name: /^Build the export/ }).isDisabled(), "nothing can be built before a folder is ticked");
+  // A long folder list keeps its place when a folder deep in it is ticked.
+  await page.addStyleTag({ content: ".export-folders { max-height: 100px !important; }" });
+  const box = page.locator('[data-keep-scroll="export-folders"]');
+  await box.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  const scrolled = await box.evaluate((el) => el.scrollTop);
+  await page.locator('.export-folder input[data-folder="Kolsch"]').check();
+  await page.getByRole("button", { name: /^Build the export \(/ }).waitFor();
+  check(scrolled > 0 && (await box.evaluate((el) => el.scrollTop)) === scrolled, "ticking a folder keeps the folder list where it was scrolled");
+  await page.locator('.export-folder input[data-folder="Kolsch"]').uncheck();
+  await page.getByRole("button", { name: "Build the export" }).waitFor();
+  await page.evaluate(() => document.querySelectorAll("style").forEach((s) => s.textContent?.includes("max-height: 100px") && s.remove()));
   await page.locator('.export-folder input[data-folder="Ben Klock"]').check();
   await page.locator('.export-folder input[data-folder="Hi-Res"]').check();
   await page.getByRole("button", { name: `Build the export (${count(picked.length, "track")})` }).waitFor();
@@ -423,6 +434,7 @@ async function checkExport(page, text, at, click) {
   includes(plan, `${count(picked.length, "track")} to analyse`, "the plan counts the tracks to analyse");
   includes(plan, picked.length * 6 < 45 ? "under a minute" : `about ${Math.round((picked.length * 6) / 60)} min`, "the plan estimates the analysis at six seconds a track");
   includes(plan, "/exports/", "the plan shows the export's own folder on this computer");
+  includes(plan, "Device Library only", "the panel says the export holds a Device Library only");
   check(leftOut === 0 || plan.includes(`${count(leftOut, "file")} left out`), "the plan counts the files left out");
   const name = (await page.locator("#library-export-name").inputValue()) ?? "";
   includes(name, computer.name, "the export is named after the source");
@@ -436,6 +448,8 @@ async function checkExport(page, text, at, click) {
   await at("library-export done");
   const done = (await text(".export")) ?? "";
   includes(done, "Nothing has been written to a USB yet.", "the finished export says no USB was written");
+  includes(done, "with beat grids and waveforms for all of them", "the finished export says every track was analysed");
+  check(!done.includes("couldn't be analysed"), "a fully analysed export raises no analysis warning");
   includes(done, `/exports/${name}`, "the finished export names its folder");
   check((await page.locator('.export [data-act="home"]').count()) === 1, "the finished export points at the USB tab");
 
@@ -446,7 +460,18 @@ async function checkExport(page, text, at, click) {
   await page.getByRole("button", { name: /^Build the export/ }).waitFor();
   const again = (await text(".export")) ?? "";
   includes(again, "Nothing to analyse", "tracks analysed for an earlier export are not analysed again");
-  includes(again, `${under("Hi-Res").filter(holdable).length} already analysed for an earlier export`, "the plan says how many analyses it reuses");
+  includes(again, `${under("Hi-Res").filter(holdable).length} already analysed on this computer`, "the plan says how many analyses it reuses");
+  await page.locator('[data-act="library-export-close"]').click();
+
+  // Stopping a build says so at once and leaves no export behind.
+  await page.locator('[data-act="library-export-open"]').click();
+  await page.locator('.export-folder input[data-folder="Paula Temple"]').check();
+  await page.getByRole("button", { name: /^Build the export \(/ }).click();
+  await page.locator('[data-act="library-export-stop"]').click();
+  check((await text(".export")).includes("Stopping after this track.") || (await text(".export")).includes("Stopped."), "a stopped build says it is stopping");
+  await page.getByText("Stopped. Nothing was written to the export folder.").waitFor({ timeout: 10000 });
+  await at("library-export stopped");
+  check((await page.locator('.export-folder input[data-folder="Paula Temple"]').isChecked()), "a stopped build keeps the ticked folders");
   await page.locator('[data-act="library-export-close"]').click();
 
   await page.locator('[data-act="open-library"]').first().click();
@@ -454,6 +479,7 @@ async function checkExport(page, text, at, click) {
   const listed = (await text(".exports")) ?? "";
   includes(listed, name, "the library lists the finished export");
   includes(listed, `${count(picked.length, "track")} in 2 playlists`, "the listed export carries its counts");
+  same(await page.locator(".export-row").count(), 1, "a stopped build adds no export to the list");
 
   // The USB tab: a prepared drive is offered the export, the copy runs
   // through the usual confirmed flow, and verification follows.

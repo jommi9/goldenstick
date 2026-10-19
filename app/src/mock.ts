@@ -290,7 +290,10 @@ export async function createMockApi(): Promise<Api> {
     const sum = (list: LibraryTrack[]) => list.reduce((n, t) => n + t.size, 0);
     const online = unique.filter((t) => t.state === "cloud_only");
     const done = unique.filter((t) => analysed.has(`${id}|${t.path}`)).length;
-    const clean = (name.trim() || `${origin.name} 2026-09-21`).replace(/[^\p{L}\p{N} \-_().,&']/gu, "-").trim();
+    const tidy = (n: string) => n.replace(/[^\p{L}\p{N} \-_().,&']/gu, "-").trim();
+    // An empty name asks for a suggestion, numbered past the exports that took it.
+    let clean = tidy(name.trim() || `${origin.name} 2026-09-21`);
+    if (!name.trim()) for (let n = 2; exportsMade.some((e) => e.name === clean); n++) clean = tidy(`${origin.name} 2026-09-21 ${n}`);
     if (!clean) throw new Error("Give the export a name.");
     return {
       plan: {

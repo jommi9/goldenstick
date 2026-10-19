@@ -1666,8 +1666,15 @@ function body(): Raw {
 export function render() {
   const active = document.activeElement as HTMLElement | null;
   const focusId = active?.id;
+  // Scrolling boxes inside a screen keep their place across a re-render,
+  // so ticking a folder deep in a long list doesn't jump back to the top.
+  const scrolled = [...root().querySelectorAll<HTMLElement>("[data-keep-scroll]")].map((el) => [el.dataset.keepScroll, el.scrollTop] as const);
   root().innerHTML = shell(body()).s;
-  if (focusId) document.getElementById(focusId)?.focus();
+  for (const [key, top] of scrolled) {
+    const el = root().querySelector<HTMLElement>(`[data-keep-scroll="${key}"]`);
+    if (el) el.scrollTop = top;
+  }
+  if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
   const search = document.getElementById("hwsearch") as HTMLInputElement | null;
   if (search && focusId === "hwsearch") {
     search.setSelectionRange(search.value.length, search.value.length);

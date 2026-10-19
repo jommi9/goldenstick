@@ -68,6 +68,8 @@ const L = {
     planning: boolean;
     name: string;
     running: boolean;
+    /** Stop was pressed; the writer stops after the track it is on. */
+    stopping: boolean;
     progress: LibraryExportProgress | null;
     error: string | null;
     done: LocalExport | null;
@@ -433,6 +435,7 @@ async function runExport() {
   const x = L.exp;
   if (!x || x.running || !x.plan) return;
   x.running = true;
+  x.stopping = false;
   x.error = null;
   x.progress = null;
   L.host.render();
@@ -442,6 +445,7 @@ async function runExport() {
     x.error = String(e);
   }
   x.running = false;
+  x.stopping = false;
   x.progress = null;
   await refreshLibrary();
   L.host.render();
@@ -598,17 +602,25 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
     case "library-export-open": {
       // The folder shown in the browser starts ticked; the whole source has no folder to tick.
       const folders = new Set<string>(L.folder ? [L.folder] : []);
-      L.exp = { sourceId: id, folders, plan: null, planning: false, name: "", running: false, progress: null, error: null, done: null };
+      L.exp = { sourceId: id, folders, plan: null, planning: false, name: "", running: false, stopping: false, progress: null, error: null, done: null };
       L.collect = null;
       await loadFolders(id);
       await planExport();
       host.render();
+      // Bring the ticked folder into view inside the folder list.
+      const box = document.querySelector<HTMLElement>('[data-keep-scroll="export-folders"]');
+      const ticked = box?.querySelector<HTMLElement>("input:checked")?.closest<HTMLElement>("label");
+      if (box && ticked) box.scrollTop += ticked.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
       return true;
     }
     case "library-export-start":
       await runExport();
       return true;
     case "library-export-stop":
+      if (L.exp?.running) {
+        L.exp.stopping = true;
+        host.render();
+      }
       await host.api.libraryCancelExport();
       return true;
     case "library-export-close":
@@ -970,8 +982,12 @@ function exportPanel(s: LibrarySource): Raw {
   if (!x || x.sourceId !== s.id) return html``;
   if (x.done) {
     const d = x.done;
+    const analysed = Math.floor(d.analysis_files / 3);
     return html`<section class="card export" aria-live="polite">
-      <div class="banner ok"><div style="flex:1"><b>Export built: ${plural(d.tracks, "track")} in ${plural(d.playlists, "playlist")}${d.analysis_files ? html`, with beat grids and waveforms for ${num(d.analysis_files / 3)} of them` : ""}.</b> It is on this computer as <span class="source-path">${d.path}</span>.</div></div>
+      <div class="banner ok"><div style="flex:1"><b>Export built: ${plural(d.tracks, "track")} in ${plural(d.playlists, "playlist")}${analysed ? html`, with beat grids and waveforms for ${analysed === d.tracks ? "all of them" : `${num(analysed)} of them`}` : ""}.</b> It is on this computer as <span class="source-path">${d.path}</span>.</div></div>
+      ${analysed < d.tracks
+        ? html`<div class="banner warn"><div>${analysed ? `${plural(d.tracks - analysed, "track")} couldn't be analysed` : "No track could be analysed"}, so players show no waveform or beat grid for ${analysed ? "them" : "any of them"}. The notes below say why.</div></div>`
+        : ""}
       <h2>Next: put it on a USB</h2>
       <p class="small muted">Open the USB tab and plug in a prepared USB. BoothReady offers to copy this export onto it, asks you to confirm that exact drive, and then reads every file back to check the copy. Nothing has been written to a USB yet.</p>
       ${d.warnings.length ? html`<details class="export-warnings"><summary>${plural(d.warnings.length, "note")}</summary><ul>${d.warnings.map((w) => html`<li>${w}</li>`)}</ul></details>` : ""}
@@ -992,7 +1008,7 @@ function exportPanel(s: LibrarySource): Raw {
       <div class="eyebrow">Building ${x.name}</div>
       <h2>${g ? EXPORT_PHASE[g.phase] : "Starting"}${g?.current ? html`<span class="muted export-current">: ${g.current}</span>` : ""}</h2>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
-      <div class="collect-progress"><span>${g ? html`${num(Math.min(g.done + (g.phase === "database" || g.phase === "install" ? 0 : 1), total))} of ${plural(total, "track")}${eta ? html` · ${eta} left` : ""}` : "Reading the folders."}</span><button class="btn" data-act="library-export-stop">Stop</button></div>
+      <div class="collect-progress"><span>${g ? html`${num(Math.min(g.done + (g.phase === "database" || g.phase === "install" ? 0 : 1), total))} of ${plural(total, "track")}${eta ? html` · ${eta} left` : ""}` : "Reading the folders."}</span>${x.stopping ? html`<span class="muted">Stopping after this track.</span>` : html`<button class="btn" data-act="library-export-stop">Stop</button>`}</div>
       ${p?.cloud_only ? html`<p class="small muted">Your cloud app downloads ${plural(p.cloud_only, "track")} as they are read, so this step depends on your connection.</p>` : ""}
       <p class="small muted">Each track that hasn't been analysed before takes about ${roughTime(6).replace("under a minute", "six seconds")}. Stopping leaves nothing behind.</p>
     </section>`;
@@ -1003,8 +1019,8 @@ function exportPanel(s: LibrarySource): Raw {
   return html`<section class="card export">
     <div class="eyebrow">Export to USB</div>
     <h2>Build a rekordbox Device Library from ${s.name}</h2>
-    <p class="small muted">Tick the folders to export. Each becomes a playlist with every track below it. BoothReady analyses the tracks itself (beat grid, key and waveforms), writes the export into a folder of its own on this computer, and only then offers to copy it onto a USB.</p>
-    <div class="export-folders" role="group" aria-label="Folders to export">
+    <p class="small muted">Tick the folders to export. Each becomes a playlist with every track below it. BoothReady analyses the tracks itself (beat grid, key and waveforms), writes the export into a folder of its own on this computer, and only then offers to copy it onto a USB. It holds a Device Library only, so players that need OneLibrary, such as the CDJ-3000X, won't list it; the check after the copy shows which players will.</p>
+    <div class="export-folders" role="group" aria-label="Folders to export" data-keep-scroll="export-folders">
       ${folders.length
         ? folders.map((f, i) => html`<label class="check-row export-folder" style="--depth:${f.depth}"><input id="library-export-folder-${i}" type="checkbox" data-folder="${f.path}" ${x.folders.has(f.path) ? "checked" : ""} ${x.running ? "disabled" : ""}><span class="grow">${f.name}</span><b>${num(f.tracks)}</b></label>`)
         : html`<p class="small muted">This source has no folders to export as playlists.</p>`}
@@ -1015,7 +1031,7 @@ function exportPanel(s: LibrarySource): Raw {
           <dt>Playlists</dt><dd>${p.playlists.map((l) => `${l.name} (${num(l.tracks)})`).join(", ")}</dd>
           <dt>Tracks</dt><dd>${num(p.tracks)}, ${gb(p.bytes)}${p.left_out ? html` · <span class="muted">${plural(p.left_out, "file")} left out: damaged, not audio or a format a Device Library can't hold</span>` : ""}</dd>
           ${p.cloud_only ? html`<dt>From the cloud</dt><dd>${num(p.cloud_only)}, ${gb(p.cloud_only_bytes)}. Your cloud app downloads them as they are read.</dd>` : ""}
-          <dt>Analysis</dt><dd>${p.to_analyse ? html`${plural(p.to_analyse, "track")} to analyse, ${roughTime(p.estimate_secs)}` : "Nothing to analyse"}${p.analysed ? html` <span class="muted">· ${num(p.analysed)} already analysed for an earlier export</span>` : ""}</dd>
+          <dt>Analysis</dt><dd>${p.to_analyse ? html`${plural(p.to_analyse, "track")} to analyse, ${roughTime(p.estimate_secs)}` : "Nothing to analyse"}${p.analysed ? html` <span class="muted">· ${num(p.analysed)} already analysed on this computer</span>` : ""}</dd>
           <dt>Folder</dt><dd class="source-path">${p.destination}</dd>
           <dt>Free space</dt><dd>${p.free_bytes === null ? "unknown" : html`${gb(p.free_bytes)} free, ${gb(p.needed_bytes)} needed`}</dd>
         </dl>

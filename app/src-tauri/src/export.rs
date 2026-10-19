@@ -173,13 +173,13 @@ fn prepare(app: &AppHandle, state: &AppState, request: &ExportRequestDto) -> Res
         .collect();
     let collected = collect_from_lists(&lists).map_err(describe)?;
     let source_name = library::name_of_source(&selection.source);
-    let typed = if request.name.trim().is_empty() {
-        format!("{source_name} {}", library::date_of(now_unix()))
+    let root = exports_root(app, state)?;
+    let name = if request.name.trim().is_empty() {
+        suggested_name(&root, &format!("{source_name} {}", library::date_of(now_unix())))?
     } else {
-        request.name.clone()
+        library::collection_folder_name(&request.name)?
     };
-    let name = library::collection_folder_name(&typed)?;
-    let destination = exports_root(app, state)?.join(&name);
+    let destination = root.join(&name);
     let cache = analysis_cache_dir(app, state)?;
     let analysed = cached_analyses(&cache, &collected.tracks, Analysis::Normal) as u32;
     let tracks = collected.tracks.len() as u32;
@@ -217,6 +217,19 @@ fn prepare(app: &AppHandle, state: &AppState, request: &ExportRequestDto) -> Res
         free_bytes: space.map(|s| s.free_bytes),
     };
     Ok(Prepared { plan, selection, collected, destination, cache })
+}
+
+/// A free folder name under `root` for a suggested export name: the name
+/// itself, or the name followed by 2, 3 and so on when earlier exports took it.
+fn suggested_name(root: &Path, base: &str) -> Res<String> {
+    let base = library::collection_folder_name(base)?;
+    if !root.join(&base).exists() {
+        return Ok(base);
+    }
+    (2..1000)
+        .map(|n| format!("{base} {n}"))
+        .find(|name| !root.join(name).exists())
+        .ok_or_else(|| "Give the export a name.".to_string())
 }
 
 /// A scan's relative path as a path of the operating system.
@@ -376,5 +389,9 @@ mod tests {
         assert_eq!(listed[0].tracks, 3);
         assert!(list_exports(&tmp.path().join("missing")).is_empty());
         assert_eq!(rel_path("a/b/c.mp3"), PathBuf::from("a").join("b").join("c.mp3"));
+        assert_eq!(suggested_name(tmp.path(), "Fresh 2026-10-19").unwrap(), "Fresh 2026-10-19");
+        assert_eq!(suggested_name(tmp.path(), "Newer").unwrap(), "Newer 2", "a taken name gets a number");
+        std::fs::create_dir_all(tmp.path().join("Newer 2")).unwrap();
+        assert_eq!(suggested_name(tmp.path(), "Newer").unwrap(), "Newer 3");
     }
 }
