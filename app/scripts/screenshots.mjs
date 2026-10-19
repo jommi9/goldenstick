@@ -153,6 +153,41 @@ async function run(scheme) {
   await page.getByRole("table").waitFor();
   await shot("25-collection", true);
 
+  // Export to USB: tick folders of a source, build the Device Library into
+  // a folder on this computer, then copy it onto a prepared USB.
+  await page.locator('[data-act="library-folder"][data-id="demo-computer|"]').click();
+  await page.getByRole("table").waitFor();
+  await page.locator('[data-act="library-export-open"]').click();
+  await page.getByRole("heading", { name: /^Build a rekordbox Device Library/ }).waitFor();
+  await page.locator('.export-folder input[data-folder="Ben Klock"]').check();
+  await page.locator('.export-folder input[data-folder="Hi-Res"]').check();
+  await page.getByRole("button", { name: /^Build the export \(\d+ tracks?\)$/ }).waitFor();
+  await shot("30-export-plan");
+  await page.getByRole("button", { name: /^Build the export/ }).click();
+  await page.getByText(/^(Analysing|Copying)/).first().waitFor();
+  await page.waitForTimeout(500);
+  await shot("31-export-building");
+  await page.getByText(/^Export built: /).waitFor({ timeout: 20000 });
+  await shot("32-export-done");
+  await click("Go to the USB tab");
+  await page.locator('[data-act="demo-remove"][data-id="samsung-64"]').click();
+  await page.waitForTimeout(400);
+  await page.locator('[data-act="demo-insert"][data-id="samsung-64"]').click();
+  await page.getByText("Scanned").waitFor({ timeout: 15000 });
+  await click("Yes, that's it");
+  await click("See detailed report");
+  await page.getByRole("table").waitFor();
+  await click("It's fine, go to the export step");
+  await page.getByText("Put your music on this USB").waitFor({ timeout: 15000 });
+  await click("Erase this USB first");
+  await page.getByRole("button", { name: /^Erase and prepare/ }).click();
+  const offer = page.locator('[data-copy-source^="export:"]');
+  await offer.getByRole("button", { name: /^Copy \d+ files/ }).waitFor({ timeout: 20000 });
+  await shot("33-export-copy-offer");
+  await offer.getByRole("button", { name: /^Copy \d+ files/ }).click();
+  await page.getByText(/^Copying the export/).waitFor();
+  await page.getByText("Verify before the gig").waitFor({ timeout: 20000 });
+
   // A drive that is already right: the report is the main action, and
   // preparing, which erases, is the second.
   await click("Dev tools");

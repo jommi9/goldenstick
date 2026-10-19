@@ -54,6 +54,14 @@ cargo run -p boothready-cli -- check-dir <out dir>
 
 The command refuses an output folder on a USB or other removable drive, an output folder that already holds `Contents` or `PIONEER`, and one with the staging folder of an interrupted export in it, builds the tree in a staging folder inside the target, reads the database back through BoothReady's own reader and only then moves `Contents` and `PIONEER` into place. The finished folder goes onto a stick through `boothready copy`, so the device confirmation stays where it is. Nothing in this provider writes to a device.
 
+### In the desktop app
+
+The Library screen offers the same writer as **Export to USB** on any scanned source. Each ticked folder becomes a playlist named after the folder, holding every track below it that a Device Library can store; damaged files and other formats are counted as left out. Before anything is written, the panel shows the playlists, the track count, how many tracks the cloud client will download, the analysis estimate and the free space. The estimate is six seconds per track still to analyse, measured with release builds; a debug build of the analyser is many times slower.
+
+Each export goes into a new folder under `exports/` in the app's data folder (the demo folder in demo mode) and is refused when that folder exists, so an export is never written into an earlier one. A record of the export sits in `.boothready/export.json` inside it, which the copy planner skips. The analyser's ANLZ files are kept per track in `analysis-cache/` next to it, keyed by the file's resolved path, size, modification time and rhythm mode, so a track analysed for one export is not analysed again for the next. Stopping a build finishes the current track, removes the staging folder and the empty export folder, and keeps the analyses made so far.
+
+A finished export appears in the USB tab's export step as something to copy, next to verified drives. The copy goes through the same plan, erase requirement and confirmation as a drive-to-drive copy: a stick holding another library has to be erased first, so the export never lands beside or inside an existing library, and a full verification follows the copy.
+
 What this provider establishes and what it does not:
 
 - Fixture evidence only. The tests round-trip tracks, artists, albums, genres, keys and playlists through the reader and through rekordcrate, and the ANLZ files parse with the analyser's own readers. No CDJ or XDJ has read an export from it, so every target's hardware state stays unknown until a player test is recorded.

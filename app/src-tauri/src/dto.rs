@@ -332,6 +332,9 @@ pub struct CopySource {
     pub problems: Vec<String>,
     /// The destination holds other files, so erasing it first clears the way.
     pub needs_erase: bool,
+    /// A Device Library export BoothReady built on this computer, rather
+    /// than another drive. `device_id` is then `export:<folder name>`.
+    pub export: bool,
 }
 
 /// Progress of a verification or a copy, for the drive it concerns.

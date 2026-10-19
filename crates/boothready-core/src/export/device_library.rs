@@ -14,6 +14,7 @@
 //! export is refused, in line with the rule in `docs/EXPORT-PROVIDERS.md`
 //! that a smaller selection regenerates the whole export.
 
+use super::analysis_cache::{AnalysisCache, CachedAnalysis};
 use crate::audio::tags::{read_tags, TrackTags};
 use crate::audio::{probe_file, AudioInfo};
 use crate::library::pdb::parse_pdb;
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// The three analysis files rekordbox writes per track.
@@ -68,6 +70,15 @@ impl Analysis {
     }
 }
 
+/// How many of `tracks` already have an analysis in `cache` for this kind
+/// of analysis, so a time estimate can leave them out. Zero when analysis
+/// is skipped.
+pub fn cached_analyses(cache: &Path, tracks: &[PathBuf], analysis: Analysis) -> usize {
+    let Some(mode) = analysis.rhythm_mode() else { return 0 };
+    let cache = AnalysisCache::new(cache);
+    tracks.iter().filter(|t| cache.has(t, mode)).count()
+}
+
 /// What to export and where.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportRequest {
@@ -78,6 +89,9 @@ pub struct ExportRequest {
     pub tracks: Vec<PathBuf>,
     pub playlists: Vec<PlaylistSpec>,
     pub analysis: Analysis,
+    /// A folder of earlier analyses to read from and add to, so a track
+    /// analysed for one export is not analysed again for the next.
+    pub analysis_cache: Option<PathBuf>,
 }
 
 /// Progress of one export, for a terminal or a progress bar.
@@ -89,6 +103,8 @@ pub struct ExportProgress {
     pub total: usize,
     /// File name being worked on, or empty.
     pub current: String,
+    /// Tracks analysed afresh so far, for a time estimate: cached ones cost nothing.
+    pub analysed: usize,
 }
 
 /// One track as it ended up in the tree.
@@ -131,6 +147,8 @@ pub enum ExportError {
     Writer(#[from] WriterError),
     #[error("the generated export.pdb did not read back correctly: {0}")]
     Verification(String),
+    #[error("the export was stopped; nothing was installed")]
+    Cancelled,
     #[error("{context}: {source}")]
     Io {
         context: String,
@@ -156,8 +174,16 @@ impl Drop for Staging {
 
 /// Build the tree described by `request`. `progress` is called as phases
 /// advance; the whole export fails on the first unreadable track.
-pub fn export_device_library(
+pub fn export_device_library(request: &ExportRequest, progress: impl FnMut(&ExportProgress)) -> Result<ExportReport> {
+    export_device_library_cancellable(request, &AtomicBool::new(false), progress)
+}
+
+/// [`export_device_library`] that stops after the current track once
+/// `cancel` is set, removing its staging folder and leaving the target as
+/// it was.
+pub fn export_device_library_cancellable(
     request: &ExportRequest,
+    cancel: &AtomicBool,
     mut progress: impl FnMut(&ExportProgress),
 ) -> Result<ExportReport> {
     let started = Instant::now();
@@ -175,19 +201,40 @@ pub fn export_device_library(
     let total = request.tracks.len();
     let date_added = today();
     let first_phase = if request.analysis == Analysis::Skip { "probe" } else { "analyze" };
+    let cache = request.analysis_cache.as_ref().map(AnalysisCache::new);
+    let mut analysed = 0usize;
     for (index, source) in request.tracks.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ExportError::Cancelled);
+        }
         let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        progress(&ExportProgress { phase: first_phase, done: index, total, current: name.clone() });
+        progress(&ExportProgress { phase: first_phase, done: index, total, current: name.clone(), analysed });
         let id = index as u32 + 1;
         let prepared = prepare_track(source, id)?;
         let analysis = match request.analysis.rhythm_mode() {
-            Some(mode) => match analyze(source, &prepared.usb_path, mode) {
-                Ok(files) => Some(files),
-                Err(e) => {
-                    warnings.push(format!("{name}: analysis failed, so it has no beat grid or waveform ({e})"));
-                    None
+            Some(mode) => {
+                let cached = cache.as_ref().and_then(|c| c.load(source, mode));
+                let generated = match cached {
+                    Some(hit) => Ok(hit),
+                    None => {
+                        analysed += 1;
+                        let fresh = analyze(source, mode);
+                        if let (Ok(fresh), Some(c)) = (&fresh, &cache) {
+                            if let Err(e) = c.store(source, mode, fresh) {
+                                warnings.push(format!("{name}: the analysis couldn't be kept for next time ({e})"));
+                            }
+                        }
+                        fresh
+                    }
+                };
+                match generated.and_then(|g| with_usb_path(g, &prepared.usb_path)) {
+                    Ok(files) => Some(files),
+                    Err(e) => {
+                        warnings.push(format!("{name}: analysis failed, so it has no beat grid or waveform ({e})"));
+                        None
+                    }
                 }
-            },
+            }
             None => None,
         };
         let mut files_written = 0u8;
@@ -203,7 +250,7 @@ pub fn export_device_library(
             analysis_files += usize::from(files_written);
         }
 
-        progress(&ExportProgress { phase: "copy", done: index, total, current: name.clone() });
+        progress(&ExportProgress { phase: "copy", done: index, total, current: name.clone(), analysed });
         let audio_target = media_path(&staging_dir, &prepared.usb_path);
         if let Some(parent) = audio_target.parent() {
             fs::create_dir_all(parent).map_err(io_err(format!("creating {}", parent.display())))?;
@@ -257,7 +304,10 @@ pub fn export_device_library(
         });
     }
 
-    progress(&ExportProgress { phase: "database", done: total, total, current: String::new() });
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportError::Cancelled);
+    }
+    progress(&ExportProgress { phase: "database", done: total, total, current: String::new(), analysed });
     for playlist in &request.playlists {
         let node = writer.create_playlist(&playlist.name, 0, false)?;
         for (position, &track) in playlist.tracks.iter().enumerate() {
@@ -272,7 +322,7 @@ pub fn export_device_library(
     }
     fs::write(&staged_pdb, &pdb).map_err(io_err(format!("writing {}", staged_pdb.display())))?;
 
-    progress(&ExportProgress { phase: "install", done: total, total, current: String::new() });
+    progress(&ExportProgress { phase: "install", done: total, total, current: String::new(), analysed });
     install(&staging_dir, &root)?;
     drop(staging);
     Ok(ExportReport {
@@ -387,25 +437,40 @@ fn prepare_track(source: &Path, id: u32) -> Result<PreparedTrack> {
 }
 
 struct GeneratedFiles {
-    /// DAT, EXT and 2EX bytes, in that order.
+    /// DAT, EXT and 2EX bytes, in that order, pointing at the exported media.
     files: [Vec<u8>; 3],
     tempo_bpm: f64,
     key: String,
     duration_secs: f64,
 }
 
-/// Analyse one file and point its analysis at where the audio will be on the media.
-fn analyze(source: &Path, usb_path: &str, mode: RhythmMode) -> std::result::Result<GeneratedFiles, String> {
+/// Analyse one file as the analyser sees it, with its own path tag.
+fn analyze(source: &Path, mode: RhythmMode) -> std::result::Result<CachedAnalysis, String> {
     let options = AnalysisOptions::automatic().with_rhythm_mode(mode);
     let generated = analyze_audio_file_with_options(source, options).map_err(|e| format!("{e:#}"))?;
-    let files = [&generated.dat, &generated.ext, &generated.two_ex]
-        .map(|file| with_path(file, usb_path).and_then(|f| f.to_bytes().map_err(|e| format!("{e:#}"))));
-    let [dat, ext, two_ex] = files;
-    Ok(GeneratedFiles {
+    let [dat, ext, two_ex] =
+        [&generated.dat, &generated.ext, &generated.two_ex].map(|f| f.to_bytes().map_err(|e| format!("{e:#}")));
+    Ok(CachedAnalysis {
         files: [dat?, ext?, two_ex?],
         tempo_bpm: generated.beat.bpm,
         key: generated.key.key,
         duration_secs: generated.duration_seconds,
+    })
+}
+
+/// Point an analysis at where the audio will be on the media.
+fn with_usb_path(analysis: CachedAnalysis, usb_path: &str) -> std::result::Result<GeneratedFiles, String> {
+    let [dat, ext, two_ex] = analysis.files.map(|bytes| {
+        AnlzFile::parse(&bytes)
+            .map_err(|e| format!("{e:#}"))
+            .and_then(|f| with_path(&f, usb_path))
+            .and_then(|f| f.to_bytes().map_err(|e| format!("{e:#}")))
+    });
+    Ok(GeneratedFiles {
+        files: [dat?, ext?, two_ex?],
+        tempo_bpm: analysis.tempo_bpm,
+        key: analysis.key,
+        duration_secs: analysis.duration_secs,
     })
 }
 

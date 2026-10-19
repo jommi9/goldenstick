@@ -8,6 +8,7 @@
 
 mod dto;
 mod elevate;
+mod export;
 mod library;
 
 use boothready_core::copy::{plan_copy, run_copy, CopyPlan, CopyProblem, CopyReport, CopyTarget};
@@ -695,6 +696,24 @@ fn copy_plan(src: &Path, dst: &Path, filesystem: Option<FilesystemKind>) -> Res<
     plan_copy(src, dst, &target).map_err(e2s)
 }
 
+/// A dry run of copying a finished Device Library export onto `dst_root`.
+fn export_copy_source(
+    made: &export::LocalExport,
+    dst_root: &Path,
+    filesystem: Option<FilesystemKind>,
+) -> Res<CopySource> {
+    copy_plan(Path::new(&made.path), dst_root, filesystem).map(|plan| CopySource {
+        device_id: format!("export:{}", made.name),
+        display_name: made.name.clone(),
+        role: None,
+        files: plan.files.len() as u32,
+        bytes: plan.files.iter().map(|f| f.size).sum(),
+        problems: plan.problems.iter().map(|p| p.describe()).collect(),
+        needs_erase: plan.problems.iter().any(|p| matches!(p, CopyProblem::DestinationNotEmpty { .. })),
+        export: true,
+    })
+}
+
 /// A dry run of copying `dev` onto `dst_root`, if `dev` is worth copying
 /// from: it holds a DJ library and a passing verification that still
 /// matches what's on it.
@@ -721,13 +740,15 @@ fn copy_source(
         bytes: plan.files.iter().map(|f| f.size).sum(),
         problems: plan.problems.iter().map(|p| p.describe()).collect(),
         needs_erase: plan.problems.iter().any(|p| matches!(p, CopyProblem::DestinationNotEmpty { .. })),
+        export: false,
     }))
 }
 
-/// Connected drives whose contents could be copied onto `device_id`, each
-/// with a dry run of the copy.
+/// What could be copied onto `device_id`, each with a dry run of the copy:
+/// the Device Library exports built on this computer, newest first, then
+/// the connected drives that hold a verified library.
 #[tauri::command]
-async fn copy_sources(state: State<'_, AppState>, device_id: String) -> Res<Vec<CopySource>> {
+async fn copy_sources(app: AppHandle, state: State<'_, AppState>, device_id: String) -> Res<Vec<CopySource>> {
     let devices = state.platform().list_devices().map_err(e2s)?;
     let dst = devices.iter().find(|d| d.id == device_id).ok_or("That USB drive is no longer connected.")?;
     let (dst_root, filesystem) = mounted_root(dst)?;
@@ -736,17 +757,30 @@ async fn copy_sources(state: State<'_, AppState>, device_id: String) -> Res<Vec<
         .filter(|d| d.id != device_id && d.primary_mount().is_some())
         .map(|d| (d.clone(), state.display_name(d)))
         .collect();
-    tauri::async_runtime::spawn_blocking(move || {
-        candidates.into_iter().filter_map(|(dev, name)| copy_source(&dev, name, &dst_root, filesystem)).collect()
+    let exports = export::list_exports(&export::exports_root(&app, &state)?);
+    tauri::async_runtime::spawn_blocking(move || -> Res<Vec<CopySource>> {
+        let mut out: Vec<CopySource> =
+            exports.iter().filter_map(|made| export_copy_source(made, &dst_root, filesystem).ok()).collect();
+        for (dev, name) in candidates {
+            if let Some(source) = copy_source(&dev, name, &dst_root, filesystem) {
+                out.push(source?);
+            }
+        }
+        Ok(out)
     })
     .await
     .map_err(e2s)?
 }
 
-/// Copy one drive's contents onto another, streaming `copy-progress`.
+/// Copy one drive's contents, or a Device Library export built on this
+/// computer (`from_id` of `export:<name>`), onto a drive, streaming
+/// `copy-progress`.
 #[tauri::command]
 async fn copy_drive(app: AppHandle, state: State<'_, AppState>, from_id: String, to_id: String) -> Res<CopyReport> {
-    let (src, _) = mounted_root(&state.device(&from_id)?)?;
+    let src = match from_id.strip_prefix("export:") {
+        Some(name) => export::export_path(&app, &state, name)?,
+        None => mounted_root(&state.device(&from_id)?)?.0,
+    };
     let (dst, filesystem) = mounted_root(&state.device(&to_id)?)?;
     let cancel = state.cancel_copy.clone();
     cancel.store(false, Ordering::Relaxed);
@@ -1289,6 +1323,11 @@ pub fn run() {
             library_collect_plan,
             library_collect,
             library_cancel_collect,
+            export::library_export_plan,
+            export::library_export,
+            export::library_cancel_export,
+            export::library_exports,
+            export::library_export_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BoothReady");

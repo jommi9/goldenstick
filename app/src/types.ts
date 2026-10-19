@@ -318,6 +318,8 @@ export interface CopySource {
   problems: string[];
   /** The destination holds other files, so erasing it first clears the way. */
   needs_erase: boolean;
+  /** A Device Library export built on this computer; `device_id` is then "export:<name>". */
+  export: boolean;
 }
 
 export interface CopyReport {
@@ -496,4 +498,60 @@ export interface LibraryScanProgress {
   files: number;
   bytes: number;
   cloud_only: number;
+}
+
+// ---- export to USB
+
+export interface PlannedPlaylist {
+  folder: string;
+  name: string;
+  tracks: number;
+}
+
+/** What exporting the ticked folders involves, before anything is written. */
+export interface ExportPlan {
+  playlists: PlannedPlaylist[];
+  /** Every track once, however many playlists hold it. */
+  tracks: number;
+  bytes: number;
+  cloud_only: number;
+  cloud_only_bytes: number;
+  /** Tracks left out: damaged, not audio, or a format a Device Library can't hold. */
+  left_out: number;
+  /** Tracks whose analysis is already on this computer from an earlier export. */
+  analysed: number;
+  to_analyse: number;
+  /** Roughly how long the analysis takes, from the tracks still to analyse. */
+  estimate_secs: number;
+  name: string;
+  destination: string;
+  /** A folder with that name is already there; an export never goes into one. */
+  exists: boolean;
+  needed_bytes: number;
+  free_bytes: number | null;
+}
+
+export interface LibraryExportProgress {
+  source_id: string;
+  phase: "analyze" | "probe" | "copy" | "database" | "install";
+  done: number;
+  total: number;
+  current: string;
+  /** Tracks analysed afresh so far, out of `to_analyse`. */
+  analysed: number;
+  to_analyse: number;
+}
+
+/** A finished Device Library export on this computer. */
+export interface LocalExport {
+  name: string;
+  path: string;
+  tracks: number;
+  playlists: number;
+  analysis_files: number;
+  bytes: number;
+  created_unix: number;
+  /** The name of the source the tracks came from. */
+  source: string;
+  warnings: string[];
 }

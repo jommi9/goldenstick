@@ -3,7 +3,7 @@
 // State lives here; app.ts routes views and actions to this module.
 
 import type { Api } from "./api";
-import type { CollectPlan, FolderNode, LibraryCollectProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, Preset, StateCounts, TrackState } from "./types";
+import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState } from "./types";
 import { gb, html, num, plural, raw, Raw, when } from "./ui";
 
 type Filter = "all" | TrackState;
@@ -60,7 +60,42 @@ const L = {
     error: string | null;
     done: { id: string; name: string; tracks: number } | null;
   },
+  /** The Export to USB panel for one source: ticked folders, the plan, the run and the result. */
+  exp: null as null | {
+    sourceId: string;
+    folders: Set<string>;
+    plan: ExportPlan | null;
+    planning: boolean;
+    name: string;
+    running: boolean;
+    /** Stop was pressed; the writer stops after the track it is on. */
+    stopping: boolean;
+    progress: LibraryExportProgress | null;
+    error: string | null;
+    done: LocalExport | null;
+  },
+  /** Finished exports on this computer, newest first. */
+  exports: [] as LocalExport[],
+  exportRemoveAsk: null as string | null,
 };
+
+const EXPORT_PHASE: Record<LibraryExportProgress["phase"], string> = {
+  analyze: "Analysing",
+  probe: "Reading",
+  copy: "Copying",
+  database: "Writing the database",
+  install: "Finishing",
+};
+
+/** A rough length in words: "about 6 min", "about 1 h 10 min". */
+export function roughTime(secs: number): string {
+  if (secs < 45) return "under a minute";
+  const min = Math.round(secs / 60);
+  if (min < 60) return `about ${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `about ${h} h ${m} min` : `about ${h} h`;
+}
 
 const PHASE_LABEL: Record<LibraryCollectProgress["phase"], string> = {
   reading: "Reading the tracks",
@@ -299,6 +334,7 @@ export async function refreshLibrary() {
   } catch (e) {
     L.error = String(e);
   }
+  L.exports = await L.host.api.libraryExports().catch(() => []);
 }
 
 async function loadTracks(id: string, more = false) {
@@ -326,6 +362,11 @@ export async function initLibrary(host: Host) {
   host.api.onLibraryCollectProgress((p) => {
     if (!L.collect?.running || L.collect.sourceId !== p.source_id) return;
     L.collect.progress = p;
+    if (host.showing()) host.render();
+  });
+  host.api.onLibraryExportProgress((p) => {
+    if (!L.exp?.running || L.exp.sourceId !== p.source_id) return;
+    L.exp.progress = p;
     if (host.showing()) host.render();
   });
   document.addEventListener("keydown", (ev) => {
@@ -370,8 +411,49 @@ async function runCollect() {
   L.host.render();
 }
 
+async function planExport() {
+  const x = L.exp;
+  if (!x) return;
+  if (!x.folders.size) {
+    x.plan = null;
+    x.error = null;
+    return;
+  }
+  x.planning = true;
+  try {
+    x.plan = await L.host.api.libraryExportPlan(x.sourceId, [...x.folders], x.name);
+    x.name = x.plan.name;
+    x.error = null;
+  } catch (e) {
+    x.plan = null;
+    x.error = String(e);
+  }
+  x.planning = false;
+}
+
+async function runExport() {
+  const x = L.exp;
+  if (!x || x.running || !x.plan) return;
+  x.running = true;
+  x.stopping = false;
+  x.error = null;
+  x.progress = null;
+  L.host.render();
+  try {
+    x.done = await L.host.api.libraryExport(x.sourceId, [...x.folders], x.name);
+  } catch (e) {
+    x.error = String(e);
+  }
+  x.running = false;
+  x.stopping = false;
+  x.progress = null;
+  await refreshLibrary();
+  L.host.render();
+}
+
 export async function openLibrarySource(id: string, folder = "") {
   L.collect = null;
+  if (L.exp && !L.exp.running) L.exp = null;
   L.folder = folder;
   L.open.add(id);
   await loadFolders(id);
@@ -517,6 +599,54 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       L.collect = null;
       host.render();
       return true;
+    case "library-export-open": {
+      // The folder shown in the browser starts ticked; the whole source has no folder to tick.
+      const folders = new Set<string>(L.folder ? [L.folder] : []);
+      L.exp = { sourceId: id, folders, plan: null, planning: false, name: "", running: false, stopping: false, progress: null, error: null, done: null };
+      L.collect = null;
+      await loadFolders(id);
+      await planExport();
+      host.render();
+      // Bring the ticked folder into view inside the folder list.
+      const box = document.querySelector<HTMLElement>('[data-keep-scroll="export-folders"]');
+      const ticked = box?.querySelector<HTMLElement>("input:checked")?.closest<HTMLElement>("label");
+      if (box && ticked) box.scrollTop += ticked.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
+      return true;
+    }
+    case "library-export-start":
+      await runExport();
+      return true;
+    case "library-export-stop":
+      if (L.exp?.running) {
+        L.exp.stopping = true;
+        host.render();
+      }
+      await host.api.libraryCancelExport();
+      return true;
+    case "library-export-close":
+      if (L.exp?.running) return true;
+      L.exp = null;
+      host.render();
+      return true;
+    case "library-export-remove-ask":
+      L.exportRemoveAsk = id;
+      host.render();
+      return true;
+    case "library-export-remove-keep":
+      L.exportRemoveAsk = null;
+      host.render();
+      return true;
+    case "library-export-remove":
+      try {
+        await host.api.libraryExportRemove(id);
+        host.toast(`The export ${id} was removed from this computer.`);
+      } catch (e) {
+        L.error = String(e);
+      }
+      L.exportRemoveAsk = null;
+      await refreshLibrary();
+      host.render();
+      return true;
     case "library-sort":
       // The same column again flips the direction; "#" goes back to folder order.
       if (!id) [L.sort, L.desc] = ["", false];
@@ -583,6 +713,10 @@ export function libraryInput(t: HTMLInputElement): boolean {
     if (L.collect) L.collect.name = t.value;
     return true;
   }
+  if (t.id === "library-export-name") {
+    if (L.exp) L.exp.name = t.value;
+    return true;
+  }
   if (t.id === "library-search") {
     L.query = t.value;
     clearTimeout(searchTimer);
@@ -606,6 +740,25 @@ export async function libraryChange(t: HTMLInputElement | HTMLSelectElement): Pr
     // The name decides the folder, so the plan is fetched again for it.
     await planCollect(t.value);
     L.host.render();
+    return true;
+  }
+  if (t.id === "library-export-name") {
+    if (L.exp && !L.exp.running) {
+      L.exp.name = t.value;
+      await planExport();
+      L.host.render();
+    }
+    return true;
+  }
+  if (t.id.startsWith("library-export-folder-")) {
+    const folder = (t as HTMLInputElement).dataset.folder ?? "";
+    if (L.exp && !L.exp.running && folder) {
+      if ((t as HTMLInputElement).checked) L.exp.folders.add(folder);
+      else L.exp.folders.delete(folder);
+      L.host.render();
+      await planExport();
+      L.host.render();
+    }
     return true;
   }
   if (t.id !== "library-preset") return false;
@@ -703,7 +856,8 @@ export function libraryView(): Raw {
             ${playersControl()}
           </div>
           ${all.cloud_only ? html`<div class="banner cloud"><div><b>${plural(all.cloud_only, "track")} ${all.cloud_only === 1 ? "is" : "are"} still in the cloud.</b> BoothReady lists them without downloading them, so their format is unknown. To check them, make the folder available offline in your cloud app, then scan again.</div></div>` : ""}
-          <div class="stack">${L.sources.map(sourceCard)}</div>`
+          <div class="stack">${L.sources.map(sourceCard)}</div>
+          ${exportsList()}`
       : L.loaded
         ? html`<div class="card library-empty"><h2>No music sources yet</h2><p class="muted">Start with the folder you keep your DJ music in. You can add more than one.</p></div>`
         : ""}
@@ -819,19 +973,107 @@ function collectPanel(s: LibrarySource): Raw {
 }
 
 /**
+ * Export to USB: tick folders of the source, see what the export involves,
+ * build it into a folder of its own on this computer, then hand it to the
+ * USB tab, where the copy flow puts it on the one stick the user confirms.
+ */
+function exportPanel(s: LibrarySource): Raw {
+  const x = L.exp;
+  if (!x || x.sourceId !== s.id) return html``;
+  if (x.done) {
+    const d = x.done;
+    const analysed = Math.floor(d.analysis_files / 3);
+    return html`<section class="card export" aria-live="polite">
+      <div class="banner ok"><div style="flex:1"><b>Export built: ${plural(d.tracks, "track")} in ${plural(d.playlists, "playlist")}${analysed ? html`, with beat grids and waveforms for ${analysed === d.tracks ? "all of them" : `${num(analysed)} of them`}` : ""}.</b> It is on this computer as <span class="source-path">${d.path}</span>.</div></div>
+      ${analysed < d.tracks
+        ? html`<div class="banner warn"><div>${analysed ? `${plural(d.tracks - analysed, "track")} couldn't be analysed` : "No track could be analysed"}, so players show no waveform or beat grid for ${analysed ? "them" : "any of them"}. The notes below say why.</div></div>`
+        : ""}
+      <h2>Next: put it on a USB</h2>
+      <p class="small muted">Open the USB tab and plug in a prepared USB. BoothReady offers to copy this export onto it, asks you to confirm that exact drive, and then reads every file back to check the copy. Nothing has been written to a USB yet.</p>
+      ${d.warnings.length ? html`<details class="export-warnings"><summary>${plural(d.warnings.length, "note")}</summary><ul>${d.warnings.map((w) => html`<li>${w}</li>`)}</ul></details>` : ""}
+      <div class="actions"><button class="btn primary" data-act="home">Go to the USB tab</button><button class="btn" data-act="library-export-close">Close</button></div>
+    </section>`;
+  }
+  const p = x.plan;
+  if (x.running) {
+    const g = x.progress;
+    const total = g?.total ?? p?.tracks ?? 0;
+    const perTrack = total ? 1 / total : 0;
+    // Analysing and copying split each track's share; the database and install come last.
+    const within = g ? (g.phase === "copy" ? 0.9 : g.phase === "database" || g.phase === "install" ? 1 : 0.1) : 0;
+    const pct = g ? Math.min(100, Math.round(100 * (g.done * perTrack + within * perTrack))) : 0;
+    const leftToAnalyse = g ? Math.max(0, g.to_analyse - g.analysed) : (p?.to_analyse ?? 0);
+    const eta = g && (g.phase === "analyze" || g.phase === "probe" || g.phase === "copy") ? roughTime(leftToAnalyse * 6 + Math.max(0, total - g.done) * 0.5) : null;
+    return html`<section class="card export" aria-live="polite">
+      <div class="eyebrow">Building ${x.name}</div>
+      <h2>${g ? EXPORT_PHASE[g.phase] : "Starting"}${g?.current ? html`<span class="muted export-current">: ${g.current}</span>` : ""}</h2>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
+      <div class="collect-progress"><span>${g ? html`${num(Math.min(g.done + (g.phase === "database" || g.phase === "install" ? 0 : 1), total))} of ${plural(total, "track")}${eta ? html` · ${eta} left` : ""}` : "Reading the folders."}</span>${x.stopping ? html`<span class="muted">Stopping after this track.</span>` : html`<button class="btn" data-act="library-export-stop">Stop</button>`}</div>
+      ${p?.cloud_only ? html`<p class="small muted">Your cloud app downloads ${plural(p.cloud_only, "track")} as they are read, so this step depends on your connection.</p>` : ""}
+      <p class="small muted">Each track that hasn't been analysed before takes about ${roughTime(6).replace("under a minute", "six seconds")}. Stopping leaves nothing behind.</p>
+    </section>`;
+  }
+  const folders = L.folders.get(s.id) ?? [];
+  const short = !!p && p.free_bytes !== null && p.free_bytes < p.needed_bytes;
+  const blocked = !p || short || p.exists || !p.tracks || x.planning;
+  return html`<section class="card export">
+    <div class="eyebrow">Export to USB</div>
+    <h2>Build a rekordbox Device Library from ${s.name}</h2>
+    <p class="small muted">Tick the folders to export. Each becomes a playlist with every track below it. BoothReady analyses the tracks itself (beat grid, key and waveforms), writes the export into a folder of its own on this computer, and only then offers to copy it onto a USB. It holds a Device Library only, so players that need OneLibrary, such as the CDJ-3000X, won't list it; the check after the copy shows which players will.</p>
+    <div class="export-folders" role="group" aria-label="Folders to export" data-keep-scroll="export-folders">
+      ${folders.length
+        ? folders.map((f, i) => html`<label class="check-row export-folder" style="--depth:${f.depth}"><input id="library-export-folder-${i}" type="checkbox" data-folder="${f.path}" ${x.folders.has(f.path) ? "checked" : ""} ${x.running ? "disabled" : ""}><span class="grow">${f.name}</span><b>${num(f.tracks)}</b></label>`)
+        : html`<p class="small muted">This source has no folders to export as playlists.</p>`}
+    </div>
+    ${x.error ? html`<div class="banner bad" role="alert"><div>${x.error}</div></div>` : ""}
+    ${p
+      ? html`<dl class="facts collect-facts">
+          <dt>Playlists</dt><dd>${p.playlists.map((l) => `${l.name} (${num(l.tracks)})`).join(", ")}</dd>
+          <dt>Tracks</dt><dd>${num(p.tracks)}, ${gb(p.bytes)}${p.left_out ? html` · <span class="muted">${plural(p.left_out, "file")} left out: damaged, not audio or a format a Device Library can't hold</span>` : ""}</dd>
+          ${p.cloud_only ? html`<dt>From the cloud</dt><dd>${num(p.cloud_only)}, ${gb(p.cloud_only_bytes)}. Your cloud app downloads them as they are read.</dd>` : ""}
+          <dt>Analysis</dt><dd>${p.to_analyse ? html`${plural(p.to_analyse, "track")} to analyse, ${roughTime(p.estimate_secs)}` : "Nothing to analyse"}${p.analysed ? html` <span class="muted">· ${num(p.analysed)} already analysed on this computer</span>` : ""}</dd>
+          <dt>Folder</dt><dd class="source-path">${p.destination}</dd>
+          <dt>Free space</dt><dd>${p.free_bytes === null ? "unknown" : html`${gb(p.free_bytes)} free, ${gb(p.needed_bytes)} needed`}</dd>
+        </dl>
+        <label class="field-label" for="library-export-name">Export name</label>
+        <input id="library-export-name" class="search" type="text" value="${x.name}" autocomplete="off" spellcheck="false">
+        ${short ? html`<div class="banner bad"><div>There isn't enough free space on this computer for this export.</div></div>` : ""}
+        ${p.exists ? html`<div class="banner warn"><div>An export with this name is already there. Choose another name; an export is never written into an existing one.</div></div>` : ""}`
+      : x.planning
+        ? html`<p class="muted">Working out what to export.</p>`
+        : x.folders.size
+          ? ""
+          : html`<p class="muted">Tick at least one folder.</p>`}
+    <div class="actions"><button class="btn primary" data-act="library-export-start" ${blocked ? "disabled" : ""}>Build the export${p?.tracks ? ` (${plural(p.tracks, "track")})` : ""}</button><button class="btn" data-act="library-export-close">Cancel</button></div>
+  </section>`;
+}
+
+/** Finished exports on this computer, for the Library screen. */
+function exportsList(): Raw {
+  if (!L.exports.length) return html``;
+  return html`<section class="card exports">
+    <div class="eyebrow">Exports on this computer</div>
+    <h2>Ready to copy onto a USB</h2>
+    <p class="small muted">Open the USB tab with a prepared USB plugged in and BoothReady offers to copy one of these onto it.</p>
+    <div class="export-list">${L.exports.map((e) => html`<div class="export-row" data-export="${e.name}">
+      <div class="grow"><b>${e.name}</b><div class="small muted">${plural(e.tracks, "track")} in ${plural(e.playlists, "playlist")} · ${gb(e.bytes)} · from ${e.source} · built ${when(e.created_unix)}</div><div class="small faint source-path">${e.path}</div></div>
+      ${L.exportRemoveAsk === e.name
+        ? html`<span class="small">Remove this export from this computer? USBs are not touched.</span><button class="btn danger" data-act="library-export-remove" data-id="${e.name}">Remove</button><button class="btn link" data-act="library-export-remove-keep">Keep</button>`
+        : html`<button class="btn link small" data-act="library-export-remove-ask" data-id="${e.name}">Remove</button>`}
+    </div>`)}</div>
+  </section>`;
+}
+
+/**
  * What to do with a finished collection. BoothReady does not write DJ
  * libraries, so the export is done in rekordbox and checked back here.
  */
 function nextStep(s: LibrarySource): Raw {
   return html`<section class="card nextstep">
     <div class="eyebrow">Next step</div>
-    <h2>Export this collection to your USB with rekordbox</h2>
-    <ol class="nextsteps">
-      <li>Open rekordbox and choose File, Import, Import Folder, then pick this folder:<div class="source-path">${s.path}</div></li>
-      <li>Connect your USB and export the tracks or playlists to it, with both Device Library and OneLibrary turned on.</li>
-      <li>Come back to the USB tab. BoothReady checks the drive and shows where it will play.</li>
-    </ol>
-    <div class="actions"><button class="btn primary" data-act="open-rekordbox">Open rekordbox</button><button class="btn" data-act="library-copy-path" data-id="${s.id}">Copy folder path</button><button class="btn" data-act="home">Go to the USB tab</button></div>
+    <h2>Export this collection to your USB</h2>
+    <p class="small muted">BoothReady can build the rekordbox Device Library itself from the folders in this collection, or you can import the folder into rekordbox and export from there with both Device Library and OneLibrary turned on.</p>
+    <div class="actions"><button class="btn primary" data-act="library-export-open" data-id="${s.id}" ${L.exp ? "disabled" : ""}>Export to USB</button><button class="btn" data-act="open-rekordbox">Open rekordbox</button><button class="btn" data-act="library-copy-path" data-id="${s.id}">Copy folder path</button><button class="btn" data-act="home">Go to the USB tab</button></div>
   </section>`;
 }
 
@@ -884,14 +1126,15 @@ export function librarySourceView(id: string): Raw {
   return html`<div class="library browser">
     <div class="devtools-heading">
       <div><div class="eyebrow">${crumb}${s && !s.connected ? " · not connected" : ""}</div><h1>${title}</h1>${s ? html`<div class="small faint source-path">${s.path}${L.folder ? `/${L.folder}` : ""}</div>` : html`<div class="small muted">Every track in ${plural(L.sources.length, "source")}.</div>`}</div>
-      <div class="source-actions"><button class="btn" data-act="open-library">Manage sources</button>${s ? (scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`) : ""}${s && s.states && !s.collected_from && !L.collect ? html`<button class="btn primary" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}</div>
+      <div class="source-actions"><button class="btn" data-act="open-library">Manage sources</button>${s ? (scanning ? html`<button class="btn" data-act="library-stop">Stop</button>` : html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"}>Scan again</button>`) : ""}${s && s.states && !s.collected_from && !L.collect ? html`<button class="btn" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Collect</button>` : ""}${s && s.states && !L.exp ? html`<button class="btn primary" data-act="library-export-open" data-id="${s.id}" ${s.connected && !scanning ? "" : "disabled"}>Export to USB</button>` : ""}</div>
     </div>
     ${errorBanner()}
     ${scanning ? html`<div class="banner"><span class="spinner" aria-hidden="true"></span><div>Scanning. ${L.progress?.files ? html`${plural(L.progress.files, "track")} found.` : ""}</div></div>` : ""}
     ${s && !s.connected ? html`<div class="banner"><div>This drive isn't connected. You're looking at the scan from ${when(s.scanned_unix)}.</div></div>` : ""}
     ${stale.length && !scanning ? html`<div class="banner"><div style="flex:1">${s ? "This folder was scanned" : `${stale.map((x) => x.name).join(", ")} ${stale.length === 1 ? "was" : "were"} scanned`} before BoothReady read tags, so ${s ? "its" : "their"} tracks show file names only. Scan again to see artist, title, BPM and key.</div>${s && s.connected ? html`<button class="btn" data-act="library-scan" data-id="${s.id}">Scan again</button>` : ""}</div>` : ""}
+    ${s ? exportPanel(s) : ""}
     ${s ? collectPanel(s) : ""}
-    ${s?.collected_from ? nextStep(s) : ""}
+    ${s?.collected_from && !L.exp ? nextStep(s) : ""}
     <div class="rb">
       ${tree(id)}
       <div class="rb-main">
