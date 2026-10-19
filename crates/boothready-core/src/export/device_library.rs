@@ -21,7 +21,7 @@ use crate::library::pdb::parse_pdb;
 use crate::library::pdb_writer::{
     file_type_for_path, inspect_pdb, usb_analysis_path, DevicePdbWriter, TrackInput, WriterError,
 };
-use crate::library::DEVICE_LIBRARY_FILE;
+use crate::library::{DEVICE_LIBRARY_FILE, ONE_LIBRARY_FILE};
 use djbooth_analyzer::{
     analyze_audio_file_with_options, build_path_tag, AnalysisOptions, AnlzFile, AnlzTag, RhythmMode,
 };
@@ -92,6 +92,9 @@ pub struct ExportRequest {
     /// A folder of earlier analyses to read from and add to, so a track
     /// analysed for one export is not analysed again for the next.
     pub analysis_cache: Option<PathBuf>,
+    /// Also write a OneLibrary database (`exportLibrary.db`) describing the
+    /// same tracks and playlists, for players that read only OneLibrary.
+    pub one_library: bool,
 }
 
 /// Progress of one export, for a terminal or a progress bar.
@@ -127,6 +130,8 @@ pub struct ExportedTrack {
 pub struct ExportReport {
     pub root: PathBuf,
     pub pdb_path: PathBuf,
+    /// The OneLibrary database, when the request asked for one.
+    pub one_library_path: Option<PathBuf>,
     pub tracks: Vec<ExportedTrack>,
     pub playlists: usize,
     pub analysis_files: usize,
@@ -147,6 +152,8 @@ pub enum ExportError {
     Writer(#[from] WriterError),
     #[error("the generated export.pdb did not read back correctly: {0}")]
     Verification(String),
+    #[error("the OneLibrary database: {0}")]
+    OneLibrary(String),
     #[error("the export was stopped; nothing was installed")]
     Cancelled,
     #[error("{context}: {source}")]
@@ -193,7 +200,12 @@ pub fn export_device_library_cancellable(
     fs::create_dir(&staging_dir).map_err(io_err(format!("creating {}", staging_dir.display())))?;
     let staging = Staging(staging_dir.clone());
 
+    #[cfg(not(feature = "onelibrary-writer"))]
+    if request.one_library {
+        return Err(ExportError::Request("this build cannot write OneLibrary databases".into()));
+    }
     let mut writer = DevicePdbWriter::new()?;
+    let mut inputs: Vec<TrackInput> = Vec::new();
     let mut tracks = Vec::with_capacity(request.tracks.len());
     let mut warnings = Vec::new();
     let mut bytes_copied = 0u64;
@@ -292,6 +304,9 @@ pub fn export_device_library_cancellable(
             ..TrackInput::default()
         };
         writer.add_track(&input)?;
+        if request.one_library {
+            inputs.push(input);
+        }
         tracks.push(ExportedTrack {
             id,
             usb_path: prepared.usb_path,
@@ -321,12 +336,17 @@ pub fn export_device_library_cancellable(
         fs::create_dir_all(parent).map_err(io_err(format!("creating {}", parent.display())))?;
     }
     fs::write(&staged_pdb, &pdb).map_err(io_err(format!("writing {}", staged_pdb.display())))?;
+    #[cfg(feature = "onelibrary-writer")]
+    if request.one_library {
+        write_and_verify_one_library(&staging_dir.join(ONE_LIBRARY_FILE), &inputs, request, &tracks, &date_added)?;
+    }
 
     progress(&ExportProgress { phase: "install", done: total, total, current: String::new(), analysed });
     install(&staging_dir, &root)?;
     drop(staging);
     Ok(ExportReport {
         pdb_path: root.join(DEVICE_LIBRARY_FILE),
+        one_library_path: request.one_library.then(|| root.join(ONE_LIBRARY_FILE)),
         root,
         tracks,
         playlists: request.playlists.len(),
@@ -524,6 +544,54 @@ fn verify_pdb(pdb: &[u8], request: &ExportRequest, tracks: &[ExportedTrack]) -> 
     let inspection = inspect_pdb(pdb).map_err(|e| ExportError::Verification(e.to_string()))?;
     if inspection.tracks.len() != tracks.len() || !inspection.histories.is_empty() {
         return Err(ExportError::Verification("djbooth's inspection disagrees with the reader".into()));
+    }
+    Ok(())
+}
+
+/// Write `exportLibrary.db` from the same rows as `export.pdb`, then read it
+/// back through BoothReady's OneLibrary reader and compare it with what the
+/// export holds: every track's ID, path, title, artist, analysis path and
+/// tempo, and every playlist's name and order.
+#[cfg(feature = "onelibrary-writer")]
+fn write_and_verify_one_library(
+    path: &Path,
+    inputs: &[TrackInput],
+    request: &ExportRequest,
+    tracks: &[ExportedTrack],
+    created: &str,
+) -> Result<()> {
+    use crate::library::onelibrary::read_one_library_file;
+    use crate::library::onelibrary_writer::{write_one_library, PlaylistInput};
+    let playlists: Vec<PlaylistInput> = request
+        .playlists
+        .iter()
+        .map(|p| PlaylistInput { name: p.name.clone(), track_ids: p.tracks.iter().map(|&i| i as u32 + 1).collect() })
+        .collect();
+    write_one_library(path, inputs, &playlists, created).map_err(|e| ExportError::OneLibrary(e.to_string()))?;
+    let read = read_one_library_file(path).map_err(|e| ExportError::OneLibrary(format!("did not read back: {e}")))?;
+    let bad = |what: String| ExportError::OneLibrary(format!("did not read back correctly: {what}"));
+    if read.tracks.len() != tracks.len() {
+        return Err(bad(format!("{} tracks instead of {}", read.tracks.len(), tracks.len())));
+    }
+    for ((written, input), got) in tracks.iter().zip(inputs).zip(&read.tracks) {
+        if got.id != written.id
+            || got.file_path != written.usb_path
+            || got.title != written.title
+            || got.artist != written.artist
+        {
+            return Err(bad(format!("track {} came back as {} at {}", written.id, got.id, got.file_path)));
+        }
+        if got.analyze_path != input.analyze_path || got.tempo != input.tempo || got.key != input.key {
+            return Err(bad(format!("track {} lost its analysis path, tempo or key", written.id)));
+        }
+    }
+    if read.playlists.len() != playlists.len() {
+        return Err(bad(format!("{} playlists instead of {}", read.playlists.len(), playlists.len())));
+    }
+    for (want, got) in playlists.iter().zip(&read.playlists) {
+        if got.name != want.name || got.track_ids != want.track_ids || got.is_folder {
+            return Err(bad(format!("playlist '{}' came back as '{}' with other tracks", want.name, got.name)));
+        }
     }
     Ok(())
 }

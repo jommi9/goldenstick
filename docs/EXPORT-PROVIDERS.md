@@ -8,7 +8,7 @@ Google Drive or a selected local folder feeds a verified local collection. An ex
 
 Cloud download success and a readable audio file do not establish player compatibility. The selected player's partition, filesystem and audio requirements still come from `crates/boothready-core/data/ruleset.json`. Export capability describes what a provider can produce; it cannot override those rules.
 
-A rekordbox XML file is an interchange artifact. It requires an import and export step in rekordbox before this workflow can treat the result as a player library. Device Library (`export.pdb`) and OneLibrary (`exportLibrary.db`, formerly Device Library Plus) are distinct export formats. An adapter must declare each format explicitly. Presence alone is insufficient to establish complete contents, especially while BoothReady's OneLibrary inspection remains limited to presence.
+A rekordbox XML file is an interchange artifact. It requires an import and export step in rekordbox before this workflow can treat the result as a player library. Device Library (`export.pdb`) and OneLibrary (`exportLibrary.db`, formerly Device Library Plus) are distinct export formats. An adapter must declare each format explicitly. Presence alone is insufficient to establish complete contents. BoothReady reads OneLibrary contents (track and playlist counts, compared with the Device Library) from a temporary copy of the database since October 2026, and its export writer produces a `dual_library_tree` with both formats unless asked for the Device Library only.
 
 ## Candidate providers
 

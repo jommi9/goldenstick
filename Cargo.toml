@@ -40,7 +40,9 @@ serde_json = "1"
 thiserror = "2"
 blake3 = { version = "1.8", features = ["pure"] }
 walkdir = "2.5"
-rusqlite = { version = "0.37", features = ["bundled"] }
+# SQLCipher in place of plain SQLite, so rekordbox OneLibrary databases
+# (SQLCipher 4) can be read and written. Without a key it behaves as SQLite.
+rusqlite = { version = "0.37", features = ["bundled-sqlcipher"] }
 ed25519-dalek = "2.2"
 base64 = "0.22"
 hex = "0.4"

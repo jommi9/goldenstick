@@ -338,7 +338,12 @@ fn one_library_detection_and_staleness() {
     assert!(report.has(LibraryFormat::RekordboxOneLibrary));
     let rb = report.rekordbox.as_ref().unwrap();
     assert!(rb.one_library.as_ref().unwrap().encrypted);
-    assert!(rb.warnings.is_empty());
+    // Random bytes look encrypted but are no database, so its contents stay unread.
+    assert_eq!(rb.one_library.as_ref().unwrap().tracks, None);
+    assert_eq!(
+        rb.warnings,
+        vec!["rekordbox OneLibrary database did not open with rekordbox's published key".to_string()]
+    );
     assert_eq!(rb.lag, None);
 
     let days = |n: u64| SystemTime::now() - Duration::from_secs(n * 24 * 3600);
