@@ -25,7 +25,6 @@ serde_json.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 djbooth-analyzer.workspace = true
-walkdir.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

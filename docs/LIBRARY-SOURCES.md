@@ -26,6 +26,10 @@ The work is done by the staging engine with a list of selected files, so the cop
 
 A finished collection is added to the library as a source of its own and scanned. Its tracks are on this computer, so tracks that were listed as still in the cloud now have a checked format.
 
+## Exporting to a USB
+
+**Export to USB** on a source builds a rekordbox Device Library from ticked folders of that source, one playlist per folder, into a folder of its own on this computer. Tracks that are still in the cloud are read in full, which makes the cloud client download them, as collecting does. The finished export is then copied onto a prepared USB from the USB tab. [EXPORT-PROVIDERS.md](EXPORT-PROVIDERS.md#in-the-desktop-app) describes where exports and cached analyses are kept and how the copy is guarded.
+
 From the command line, `--only` stages chosen files and reads nothing else in the source:
 
 ```sh

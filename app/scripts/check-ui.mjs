@@ -5,7 +5,7 @@
 // engine rather than when wording changes. Usage: npm run build && npm run check-ui
 import { chromium } from "playwright";
 import { preview } from "vite";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 
 const data = JSON.parse(readFileSync(new URL("../src/mock-data.json", import.meta.url), "utf8"));
 
@@ -195,13 +195,13 @@ async function walk() {
   await page.getByText(`Next: ${ROLE_LABEL[next.role]}`).waitFor();
   await at("next-usb");
   includes(await text("main#main"), `Preparing ${plan.roles.length} USBs`, "the next-USB screen counts the plan's roles");
-  await checkLibrary(page, text, at);
+  await checkLibrary(page, text, at, click);
   await page.close();
 }
 
 // The music library: every source and every track shows what the engine's
 // scan and its per-player verdicts say, for the preset selected above.
-async function checkLibrary(page, text, at) {
+async function checkLibrary(page, text, at, click) {
   const lib = data.library[PRESET];
   const STATE_LABEL = { ready: "Ready", cloud_only: "In the cloud", blocked: "Won't play everywhere", unchecked: "No data", unreadable: "Unreadable" };
   const count = (n, one) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
@@ -382,13 +382,132 @@ async function checkLibrary(page, text, at) {
   }
   check((await page.locator('[data-act="library-collect-open"]').count()) === 0, "a collection doesn't offer to be collected again");
   const next = (await text(".nextstep")) ?? "";
-  includes(next, "Export this collection to your USB with rekordbox", "a collection says what to do next");
-  includes(next, "/Music/BoothReady/", "the next step names the folder to import");
-  check((await page.locator('.nextstep [data-act="open-rekordbox"]').count()) === 1, "the next step offers to open rekordbox");
+  includes(next, "Export this collection to your USB", "a collection says what to do next");
+  check((await page.locator('.nextstep [data-act="library-export-open"]').count()) === 1, "the next step offers to build the export here");
+  check((await page.locator('.nextstep [data-act="open-rekordbox"]').count()) === 1, "the next step still offers rekordbox");
   await page.locator('[data-act="open-library"]').first().click();
   const card = (await page.locator(".source").last().textContent()) ?? "";
   includes(card, "Local collection", "the library marks the new source as a local collection");
   includes(card, `A verified copy of tracks from ${cloud.name}.`, "the collection card names its origin");
+  await checkExport(page, text, at, click);
+}
+
+// Export to USB: ticked folders become playlists, the plan counts the
+// tracks and estimates the analysis, the build reports progress, and the
+// finished export is offered to a prepared USB by the copy flow.
+async function checkExport(page, text, at, click) {
+  const lib = data.library[PRESET];
+  const count = (n, one) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
+  const computer = lib.sources.find((s) => s.id === "demo-computer");
+  const tracks = lib.tracks["demo-computer"];
+  const holdable = (t) => t.state !== "unreadable" && /\.(mp3|m4a|flac|wav|aif|aiff)$/i.test(t.name);
+  const under = (folder) => tracks.filter((t) => t.folder === folder || t.folder.startsWith(`${folder}/`));
+  const picked = [...under("Ben Klock"), ...under("Hi-Res")].filter(holdable);
+  const leftOut = [...under("Ben Klock"), ...under("Hi-Res")].length - picked.length;
+
+  await page.locator('[data-act="library-open"][data-id="demo-computer"]').click();
+  await page.getByRole("table").waitFor();
+  await page.locator('[data-act="library-export-open"]').click();
+  await page.getByRole("heading", { name: `Build a rekordbox Device Library from ${computer.name}` }).waitFor();
+  await at("library-export open");
+  const folders = page.locator(".export-folder");
+  const folderSet = new Set(tracks.map((t) => t.folder.split("/")).flatMap((parts) => parts.map((_, i) => parts.slice(0, i + 1).join("/"))));
+  same(await folders.count(), folderSet.size, "every folder of the source can be ticked");
+  check(await page.getByRole("button", { name: /^Build the export/ }).isDisabled(), "nothing can be built before a folder is ticked");
+  // A long folder list keeps its place when a folder deep in it is ticked.
+  await page.addStyleTag({ content: ".export-folders { max-height: 100px !important; }" });
+  const box = page.locator('[data-keep-scroll="export-folders"]');
+  await box.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  const scrolled = await box.evaluate((el) => el.scrollTop);
+  await page.locator('.export-folder input[data-folder="Kolsch"]').check();
+  await page.getByRole("button", { name: /^Build the export \(/ }).waitFor();
+  check(scrolled > 0 && (await box.evaluate((el) => el.scrollTop)) === scrolled, "ticking a folder keeps the folder list where it was scrolled");
+  await page.locator('.export-folder input[data-folder="Kolsch"]').uncheck();
+  await page.getByRole("button", { name: "Build the export" }).waitFor();
+  await page.evaluate(() => document.querySelectorAll("style").forEach((s) => s.textContent?.includes("max-height: 100px") && s.remove()));
+  await page.locator('.export-folder input[data-folder="Ben Klock"]').check();
+  await page.locator('.export-folder input[data-folder="Hi-Res"]').check();
+  await page.getByRole("button", { name: `Build the export (${count(picked.length, "track")})` }).waitFor();
+  await at("library-export plan");
+  const plan = (await text(".export")) ?? "";
+  includes(plan, `Ben Klock (${under("Ben Klock").filter(holdable).length}), Hi-Res (${under("Hi-Res").filter(holdable).length})`, "the plan names a playlist per ticked folder with its track count");
+  includes(plan, `${count(picked.length, "track")} to analyse`, "the plan counts the tracks to analyse");
+  includes(plan, picked.length * 6 < 45 ? "under a minute" : `about ${Math.round((picked.length * 6) / 60)} min`, "the plan estimates the analysis at six seconds a track");
+  includes(plan, "/exports/", "the plan shows the export's own folder on this computer");
+  includes(plan, "Device Library only", "the panel says the export holds a Device Library only");
+  check(leftOut === 0 || plan.includes(`${count(leftOut, "file")} left out`), "the plan counts the files left out");
+  const name = (await page.locator("#library-export-name").inputValue()) ?? "";
+  includes(name, computer.name, "the export is named after the source");
+
+  await page.getByRole("button", { name: /^Build the export/ }).click();
+  await page.getByText(/^(Analysing|Copying|Writing the database|Finishing)/).first().waitFor();
+  await at("library-export building");
+  includes(await text(".export"), `of ${count(picked.length, "track")}`, "the build counts the tracks as it goes");
+  check((await page.locator('[data-act="library-export-stop"]').count()) === 1, "the build can be stopped");
+  await page.getByText(`Export built: ${count(picked.length, "track")} in 2 playlists`).waitFor({ timeout: 20000 });
+  await at("library-export done");
+  const done = (await text(".export")) ?? "";
+  includes(done, "Nothing has been written to a USB yet.", "the finished export says no USB was written");
+  includes(done, "with beat grids and waveforms for all of them", "the finished export says every track was analysed");
+  check(!done.includes("couldn't be analysed"), "a fully analysed export raises no analysis warning");
+  includes(done, `/exports/${name}`, "the finished export names its folder");
+  check((await page.locator('.export [data-act="home"]').count()) === 1, "the finished export points at the USB tab");
+
+  // A second plan for the same folders has nothing left to analyse.
+  await page.locator('[data-act="library-export-close"]').click();
+  await page.locator('[data-act="library-export-open"]').click();
+  await page.locator('.export-folder input[data-folder="Hi-Res"]').check();
+  await page.getByRole("button", { name: /^Build the export/ }).waitFor();
+  const again = (await text(".export")) ?? "";
+  includes(again, "Nothing to analyse", "tracks analysed for an earlier export are not analysed again");
+  includes(again, `${under("Hi-Res").filter(holdable).length} already analysed on this computer`, "the plan says how many analyses it reuses");
+  await page.locator('[data-act="library-export-close"]').click();
+
+  // Stopping a build says so at once and leaves no export behind.
+  await page.locator('[data-act="library-export-open"]').click();
+  await page.locator('.export-folder input[data-folder="Paula Temple"]').check();
+  await page.getByRole("button", { name: /^Build the export \(/ }).click();
+  await page.locator('[data-act="library-export-stop"]').click();
+  check((await text(".export")).includes("Stopping after this track.") || (await text(".export")).includes("Stopped."), "a stopped build says it is stopping");
+  await page.getByText("Stopped. Nothing was written to the export folder.").waitFor({ timeout: 10000 });
+  await at("library-export stopped");
+  check((await page.locator('.export-folder input[data-folder="Paula Temple"]').isChecked()), "a stopped build keeps the ticked folders");
+  await page.locator('[data-act="library-export-close"]').click();
+
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.getByRole("heading", { name: "Ready to copy onto a USB" }).waitFor();
+  const listed = (await text(".exports")) ?? "";
+  includes(listed, name, "the library lists the finished export");
+  includes(listed, `${count(picked.length, "track")} in 2 playlists`, "the listed export carries its counts");
+  same(await page.locator(".export-row").count(), 1, "a stopped build adds no export to the list");
+
+  // The USB tab: a prepared drive is offered the export, the copy runs
+  // through the usual confirmed flow, and verification follows.
+  await page.locator('.tab[data-act="home"]').click();
+  await page.locator('[data-act="demo-insert"][data-id="samsung-64"]').click();
+  await page.getByText("Scanned").waitFor({ timeout: 15000 });
+  await click("Yes, that's it");
+  await click("See detailed report");
+  await page.getByRole("table").waitFor();
+  await click("It's fine, go to the export step");
+  await page.getByText("Put your music on this USB").waitFor({ timeout: 15000 });
+  await at("export-handoff with a local export");
+  const offer = () => page.locator(`[data-copy-source="export:${name}"]`);
+  same(await offer().count(), 1, "the USB is offered the export built on this computer");
+  includes(await offer().textContent(), `Copy the export ${name}`, "the offer names the export");
+  // The Samsung still holds another library, so the export is never spliced into it.
+  check((await offer().getByRole("button", { name: "Erase this USB first" }).count()) === 1, "a USB with another library on it must be erased before the copy");
+  await offer().getByRole("button", { name: "Erase this USB first" }).click();
+  await page.getByText("You are about to erase:").waitFor();
+  await page.getByRole("button", { name: /^Erase and prepare/ }).click();
+  await offer().getByRole("button", { name: /^Copy \d+ files/ }).waitFor({ timeout: 20000 });
+  await at("export-handoff after the erase");
+  check((await offer().getByRole("button", { name: "Erase this USB first" }).count()) === 0, "a prepared USB needs no erase before the copy");
+  await offer().getByRole("button", { name: /^Copy \d+ files/ }).click();
+  await page.getByText(`Copying the export ${name}`).waitFor();
+  await at("copying a local export");
+  await page.getByText("Verify before the gig").waitFor({ timeout: 20000 });
+  check(true, "the copy of an export hands over to verification");
 }
 
 async function checkReport(page, text) {
@@ -478,6 +597,13 @@ try {
   await walk();
 } catch (e) {
   failures.push(`[${screen}] walkthrough stopped: ${e.message.split("\n")[0]}`);
+  // The screen it stopped on, for a look at what went wrong.
+  const open = browser.contexts().flatMap((c) => c.pages())[0];
+  if (open) {
+    mkdirSync("test-results", { recursive: true });
+    await open.screenshot({ path: "test-results/check-ui-failed.png", fullPage: true }).catch(() => {});
+    failures.push(`[${screen}] screen saved to test-results/check-ui-failed.png`);
+  }
 } finally {
   await browser.close();
   server.httpServer.close();

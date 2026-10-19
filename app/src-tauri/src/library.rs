@@ -79,6 +79,31 @@ pub struct LibrarySource {
     pub tags_read: bool,
 }
 
+/// One playlist of an export: a folder of the source and the tracks under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportPlaylist {
+    /// Relative to the source, forward slashes.
+    pub folder: String,
+    /// The folder's own name, which becomes the playlist's name.
+    pub name: String,
+    /// Relative paths of the tracks, in folder order.
+    pub paths: Vec<String>,
+}
+
+/// The tracks an export request covers, taken from a source's last scan.
+#[derive(Debug, Clone)]
+pub struct ExportSelection {
+    pub source: SourceRecord,
+    pub playlists: Vec<ExportPlaylist>,
+    /// Every track once, however many ticked folders hold it.
+    pub unique: u32,
+    pub bytes: u64,
+    pub cloud_only: u32,
+    pub cloud_only_bytes: u64,
+    /// Tracks left out: damaged, not audio, or a format a Device Library can't hold.
+    pub left_out: u32,
+}
+
 /// The tracks a collect request covers, taken from a source's last scan.
 #[derive(Debug, Clone)]
 pub struct Selection {
@@ -270,11 +295,17 @@ pub struct LibraryState {
     scans: HashMap<String, Arc<SourceScan>>,
     scanning: HashSet<String>,
     collecting: bool,
+    exporting: bool,
 }
 
 /// The name a source is listed under: its collection name or folder name.
 fn display_name(record: &SourceRecord) -> String {
     record.collection.as_ref().map(|c| c.name.clone()).unwrap_or_else(|| name_of(&record.path))
+}
+
+/// The name a source is listed under, for records that name their origin.
+pub fn name_of_source(record: &SourceRecord) -> String {
+    display_name(record)
 }
 
 fn name_of(path: &Path) -> String {
@@ -492,13 +523,77 @@ impl LibraryState {
         Ok(picked)
     }
 
-    /// A scan or a collect is running. Only one runs at a time.
+    /// A scan, a collect or an export is running. Only one runs at a time.
     pub fn is_busy(&self) -> bool {
-        self.collecting || !self.scanning.is_empty()
+        self.collecting || self.exporting || !self.scanning.is_empty()
     }
 
     pub fn set_collecting(&mut self, on: bool) {
         self.collecting = on;
+    }
+
+    pub fn set_exporting(&mut self, on: bool) {
+        self.exporting = on;
+    }
+
+    /// The tracks an export of the given folders covers: one playlist per
+    /// folder, named after it, holding every readable track below it that
+    /// a Device Library can store. Cloud-only tracks are included; reading
+    /// them makes the cloud client download them.
+    pub fn export_selection(&mut self, id: &str, folders: &[String]) -> Result<ExportSelection, String> {
+        let source = self.record(id)?;
+        let scan = self.scan(id).ok_or_else(|| "Scan this folder first.".to_string())?;
+        if folders.is_empty() {
+            return Err("Tick at least one folder to export.".to_string());
+        }
+        let mut picked = ExportSelection {
+            source,
+            playlists: Vec::new(),
+            unique: 0,
+            bytes: 0,
+            cloud_only: 0,
+            cloud_only_bytes: 0,
+            left_out: 0,
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut counted_out: HashSet<&str> = HashSet::new();
+        for folder in folders {
+            let folder = folder.trim_matches('/');
+            let relative = Path::new(folder);
+            if folder.is_empty() || !relative.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+                return Err("That isn't a folder in this source.".to_string());
+            }
+            if picked.playlists.iter().any(|p| p.folder == folder) {
+                continue;
+            }
+            let name = folder.rsplit('/').next().unwrap_or(folder).to_string();
+            let mut paths = Vec::new();
+            for track in scan.tracks.iter().filter(|t| in_folder(&t.path, folder)) {
+                let file_name = track.path.rsplit('/').next().unwrap_or(&track.path);
+                let usable = !matches!(track.probe, Some(TrackProbe::Unreadable(_)))
+                    && boothready_core::library::pdb_writer::file_type_for_path(file_name).is_some();
+                if !usable {
+                    if counted_out.insert(&track.path) {
+                        picked.left_out += 1;
+                    }
+                    continue;
+                }
+                paths.push(track.path.clone());
+                if seen.insert(&track.path) {
+                    picked.unique += 1;
+                    picked.bytes += track.size;
+                    if track.availability == Availability::CloudOnly {
+                        picked.cloud_only += 1;
+                        picked.cloud_only_bytes += track.size;
+                    }
+                }
+            }
+            if paths.is_empty() && !scan.tracks.iter().any(|t| in_folder(&t.path, folder)) {
+                return Err(format!("There is no folder \"{folder}\" in this source."));
+            }
+            picked.playlists.push(ExportPlaylist { folder: folder.to_string(), name, paths });
+        }
+        Ok(picked)
     }
 
     /// Forget a source and its saved scan. The folder itself is not touched.
@@ -1151,6 +1246,32 @@ mod tests {
         );
         assert!(library.selection("demo-archive", &targets, "all", "", "").is_ok());
         assert!(library.selection("missing", &targets, "all", "", "").is_err());
+    }
+
+    #[test]
+    fn an_export_selection_is_one_playlist_per_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let mut library = LibraryState::demo(root.path()).unwrap();
+        let picked = library.export_selection("demo-computer", &["Hi-Res".into(), "Kolsch/Speicher".into()]).unwrap();
+        assert_eq!(picked.playlists.len(), 2);
+        assert_eq!(picked.playlists[0].name, "Hi-Res");
+        assert_eq!(picked.playlists[0].paths.len(), 4);
+        assert_eq!(picked.playlists[1].name, "Speicher");
+        assert!(picked.playlists[1].paths.iter().all(|p| p.starts_with("Kolsch/Speicher/")));
+        assert_eq!(picked.unique, picked.playlists.iter().map(|p| p.paths.len() as u32).sum::<u32>());
+        assert!(picked.bytes > 0);
+        // A folder and one inside it count their shared tracks once.
+        let nested = library.export_selection("demo-computer", &["Kolsch".into(), "Kolsch/Speicher".into()]).unwrap();
+        assert_eq!(nested.unique, nested.playlists[0].paths.len() as u32);
+        // The damaged download is left out of the whole source.
+        let all = library.export_selection("demo-computer", &["Downloads".into()]).unwrap();
+        assert_eq!((all.unique, all.left_out), (0, 1));
+        let online = library.export_selection("demo-cloud", &["Label Promos".into()]).unwrap();
+        assert_eq!(online.cloud_only, 4);
+        assert!(library.export_selection("demo-computer", &[]).is_err());
+        assert!(library.export_selection("demo-computer", &["../Google Drive".into()]).is_err());
+        assert!(library.export_selection("demo-computer", &["Nope".into()]).is_err());
+        assert!(library.export_selection("missing", &["Hi-Res".into()]).is_err());
     }
 
     #[test]

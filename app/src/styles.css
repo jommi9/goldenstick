@@ -2048,6 +2048,87 @@ h1 {
   border-color: var(--ok);
 }
 
+/* Export to USB: ticked folders, the plan, the build and the finished export */
+.export {
+  margin-top: 16px;
+  border-color: var(--line-2);
+}
+
+.export .banner {
+  margin: 12px 0 0;
+}
+
+.export > .banner:first-child {
+  margin: 0;
+}
+
+.export-folders {
+  margin: 12px 0 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  max-height: 260px;
+  overflow: auto;
+}
+
+.export-folder {
+  margin: 4px 0;
+  padding-left: calc(var(--depth, 0) * 18px);
+  color: var(--text);
+}
+
+.export-folder b {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.export .search {
+  margin-top: 4px;
+}
+
+.export .bar {
+  margin-top: 12px;
+  height: 14px;
+}
+
+.export-current {
+  font-weight: 400;
+  font-size: 15px;
+}
+
+.export-warnings {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.export-warnings ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.exports {
+  margin-top: 16px;
+}
+
+.export-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.export-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
 /* ------------------------------------------------------------------
    Lettering tuned for M PLUS 1p, which is wider and lighter than the
    condensed faces the rules above were first written for.

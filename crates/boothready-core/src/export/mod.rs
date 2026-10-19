@@ -8,7 +8,11 @@
 //! a USB stays with the existing copy and verification flow.
 
 #[cfg(feature = "device-library-writer")]
+pub mod analysis_cache;
+#[cfg(feature = "device-library-writer")]
 pub mod device_library;
+#[cfg(feature = "device-library-writer")]
+pub mod playlists;
 
 #[cfg(all(test, feature = "device-library-writer"))]
 mod tests;

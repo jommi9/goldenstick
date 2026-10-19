@@ -15,6 +15,7 @@ import type {
   LibrarySource,
   FolderNode,
   LibraryTrack,
+  LocalExport,
   Preset,
   StateCounts,
   TrackState,
@@ -261,6 +262,61 @@ export async function createMockApi(): Promise<Api> {
       tracks,
     };
   };
+  /** Exports built in this session, newest first, and the tracks analysed for them. */
+  const exportsMade: LocalExport[] = [];
+  const analysed = new Set<string>();
+  const EXPORTS_DIR = "/Users/dj/Library/Application Support/app.boothready.desktop/exports";
+  const holdable = (t: LibraryTrack) => /\.(mp3|m4a|flac|wav|aif|aiff)$/i.test(t.name);
+  const exportPlan = (id: string, folders: string[], name: string) => {
+    const origin = listSources(targetsOf("unknown_club")).find((s) => s.id === id);
+    if (!origin) throw new Error("That music source was removed.");
+    if (!folders.length) throw new Error("Tick at least one folder to export.");
+    const all = tracksOf(id, []);
+    const seen = new Set<string>();
+    const out = new Set<string>();
+    const unique: LibraryTrack[] = [];
+    const playlists = folders.map((folder) => {
+      const below = all.filter((t) => inFolder(t.path, folder));
+      if (!below.length) throw new Error(`There is no folder "${folder}" in this source.`);
+      const usable = below.filter((t) => t.state !== "unreadable" && holdable(t));
+      for (const t of below) if (!usable.includes(t)) out.add(t.path);
+      for (const t of usable) if (!seen.has(t.path)) {
+        seen.add(t.path);
+        unique.push(t);
+      }
+      return { folder, name: folder.split("/").pop() ?? folder, tracks: usable.length };
+    });
+    if (!unique.length) throw new Error("no audio to export: the playlist folders hold no MP3, M4A, FLAC, WAV or AIFF files");
+    const sum = (list: LibraryTrack[]) => list.reduce((n, t) => n + t.size, 0);
+    const online = unique.filter((t) => t.state === "cloud_only");
+    const done = unique.filter((t) => analysed.has(`${id}|${t.path}`)).length;
+    const tidy = (n: string) => n.replace(/[^\p{L}\p{N} \-_().,&']/gu, "-").trim();
+    // An empty name asks for a suggestion, numbered past the exports that took it.
+    let clean = tidy(name.trim() || `${origin.name} 2026-09-21`);
+    if (!name.trim()) for (let n = 2; exportsMade.some((e) => e.name === clean); n++) clean = tidy(`${origin.name} 2026-09-21 ${n}`);
+    if (!clean) throw new Error("Give the export a name.");
+    return {
+      plan: {
+        playlists,
+        tracks: unique.length,
+        bytes: sum(unique),
+        cloud_only: online.length,
+        cloud_only_bytes: sum(online),
+        left_out: out.size,
+        analysed: done,
+        to_analyse: unique.length - done,
+        estimate_secs: (unique.length - done) * 6,
+        name: clean,
+        destination: `${EXPORTS_DIR}/${clean}`,
+        exists: exportsMade.some((e) => e.name === clean),
+        needed_bytes: sum(unique) + unique.length * 2_000_000 + 4 * 1024 * 1024,
+        free_bytes: 212_000_000_000,
+      },
+      origin,
+      unique,
+    };
+  };
+  const targetsOf = (presetId: string) => data.presets.find((p) => p.id === presetId)?.devices ?? [];
   const countStates = (tracks: LibraryTrack[]): StateCounts => {
     const counts: StateCounts = { ready: 0, cloud_only: 0, blocked: 0, unchecked: 0, unreadable: 0 };
     for (const t of tracks) counts[t.state as TrackState] += 1;
@@ -413,25 +469,31 @@ export async function createMockApi(): Promise<Api> {
       return report;
     },
     cancelVerify: async () => {},
-    copySources: async (id) =>
-      [...verified]
+    copySources: async (id) => {
+      const other = (stage.get(id) ?? "initial") !== "prepared" ? state(id).summary.content.files : 0;
+      const problems = other ? [`The destination already holds ${other} other files. Prepare it first so two libraries don't get mixed`] : [];
+      const made = exportsMade.map((e) => ({ device_id: `export:${e.name}`, display_name: e.name, role: null, files: e.tracks * 4 + 1, bytes: e.bytes, problems, needs_erase: other > 0, export: true }));
+      const drives = [...verified]
         .filter((src) => src !== id && inserted.has(src))
         .map((src) => {
           const s = state(src).summary;
-          const other = (stage.get(id) ?? "initial") !== "prepared" ? state(id).summary.content.files : 0;
-          const problems = other ? [`The destination already holds ${other} other files. Prepare it first so two libraries don't get mixed`] : [];
-          return { device_id: src, display_name: s.identification.display_name, role: roles.get(src) ?? null, files: s.tracks_scanned + 12, bytes: s.content.used_bytes, problems, needs_erase: other > 0 };
-        }),
+          return { device_id: src, display_name: s.identification.display_name, role: roles.get(src) ?? null, files: s.tracks_scanned + 12, bytes: s.content.used_bytes, problems, needs_erase: other > 0, export: false };
+        });
+      return [...made, ...drives];
+    },
     copyDrive: async (from, to) => {
       copyCancelled = false;
-      const s = state(from).summary;
-      const files = s.tracks_scanned + 12;
+      const made = from.startsWith("export:") ? exportsMade.find((e) => e.name === from.slice(7)) : null;
+      if (from.startsWith("export:") && !made) throw new Error("That export isn't on this computer any more.");
+      const s = state(made ? to : from).summary;
+      const files = made ? made.tracks * 4 + 1 : s.tracks_scanned + 12;
+      const bytes = made ? made.bytes : s.content.used_bytes;
       for (let i = 1; i <= 20; i++) {
         if (copyCancelled) return { files_copied: Math.round((files * i) / 20), bytes_copied: 0, files_skipped: 0, files_removed: 0, cancelled: true };
         await sleep(120);
         const p: VerifyProgress = {
-          bytes_done: Math.round((s.content.used_bytes * i) / 20),
-          bytes_total: s.content.used_bytes,
+          bytes_done: Math.round((bytes * i) / 20),
+          bytes_total: bytes,
           files_done: Math.round((files * i) / 20),
           files_total: files,
           current: "",
@@ -442,7 +504,7 @@ export async function createMockApi(): Promise<Api> {
       stage.set(to, "exported");
       verified.delete(to);
       deviceEvent({ kind: "changed", device: state(to).card.device });
-      return { files_copied: files, bytes_copied: s.content.used_bytes, files_skipped: 0, files_removed: 0, cancelled: false };
+      return { files_copied: files, bytes_copied: bytes, files_skipped: 0, files_removed: 0, cancelled: false };
     },
     cancelCopy: async () => {
       copyCancelled = true;
@@ -551,6 +613,50 @@ export async function createMockApi(): Promise<Api> {
       libraryCancelled = true;
     },
     onLibraryCollectProgress: on("library-collect-progress"),
+    libraryExportPlan: async (id, folders, name) => exportPlan(id, folders, name).plan,
+    libraryExport: async (id, folders, name) => {
+      const { plan, origin, unique } = exportPlan(id, folders, name);
+      if (!origin.connected) throw new Error("The source folder can't be reached.");
+      if (plan.exists) throw new Error("An export with this name is already there. Choose another name.");
+      libraryCancelled = false;
+      let fresh = 0;
+      const tick = async (phase: "analyze" | "copy" | "database" | "install", done: number, current: string) => {
+        if (libraryCancelled) throw new Error("Stopped. Nothing was written to the export folder.");
+        emit("library-export-progress", { source_id: id, phase, done, total: unique.length, current, analysed: fresh, to_analyse: plan.to_analyse });
+        await sleep(phase === "analyze" ? 140 : 40);
+      };
+      for (const [i, t] of unique.entries()) {
+        await tick("analyze", i, t.name);
+        if (!analysed.has(`${id}|${t.path}`)) fresh += 1;
+        await tick("copy", i, t.name);
+      }
+      await tick("database", unique.length, "");
+      await tick("install", unique.length, "");
+      for (const t of unique) analysed.add(`${id}|${t.path}`);
+      const made: LocalExport = {
+        name: plan.name,
+        path: plan.destination,
+        tracks: unique.length,
+        playlists: plan.playlists.length,
+        analysis_files: unique.length * 3,
+        bytes: plan.bytes + unique.length * 1_400_000,
+        created_unix: Math.floor(Date.now() / 1000),
+        source: origin.name,
+        warnings: plan.left_out ? [`${plan.left_out} files were left out: damaged, not audio, or a format a Device Library can't hold`] : [],
+      };
+      exportsMade.unshift(made);
+      return made;
+    },
+    libraryCancelExport: async () => {
+      libraryCancelled = true;
+    },
+    onLibraryExportProgress: on("library-export-progress"),
+    libraryExports: async () => [...exportsMade],
+    libraryExportRemove: async (name) => {
+      const at = exportsMade.findIndex((e) => e.name === name);
+      if (at < 0) throw new Error("That export isn't on this computer any more.");
+      exportsMade.splice(at, 1);
+    },
     libraryRemove: async (id) => {
       removedSources.add(id);
     },

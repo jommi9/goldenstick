@@ -179,6 +179,8 @@ function go(view: View) {
 const card = (id: string) => S.devices.find((d) => d.device.id === id);
 const summary = (id: string) => S.summaries.get(id);
 const nameOf = (id: string) => summary(id)?.identification.display_name ?? card(id)?.identification.display_name ?? "USB drive";
+/** The name of something a copy comes from: a drive, or an export built on this computer. */
+const copySourceName = (id: string) => (id.startsWith("export:") ? (S.copySources.find((c) => c.device_id === id)?.display_name ?? id.slice(7)) : nameOf(id));
 const preset = () => S.presets.find((p) => p.id === S.presetId) ?? null;
 const hwName = (id: string) => S.hardware.find((h) => h.id === id)?.model ?? id;
 const devEnabled = () => Boolean(S.info?.demo || !inTauri);
@@ -1488,23 +1490,28 @@ function exportView(id: string): Raw {
   const engine = formats.includes("engine_database") && !formats.some((f) => f.startsWith("rekordbox"));
   const legacy = role === "legacy_rescue";
   const label = s?.fs_label ?? "the USB";
-  const src = S.copySourcesFor === id ? S.copySources.find((c) => copyFits(c.role, role)) : undefined;
+  // Exports built on this computer come first, then verified drives; a
+  // Device Library export carries no OneLibrary, so an Engine DJ role gets no offer.
+  const offers = S.copySourcesFor === id ? S.copySources.filter((c) => copyFits(c.role, role) && !(c.export && engine)) : [];
   const software = engine ? "Engine DJ" : "rekordbox";
+  const offer = (src: CopySource) => html`<div class="copy-offer" data-copy-source="${src.device_id}">
+      <h2>${src.export ? `Copy the export ${src.display_name}` : `Copy from ${src.display_name}`}</h2>
+      <p class="muted">${src.export
+        ? "BoothReady built this rekordbox Device Library on this computer from your music. Copying it onto this USB puts the tracks, playlists and analysis in place, and every file is then checked against the original."
+        : `It passed verification${src.role ? ` as your ${ROLE_LABEL[src.role]}` : ""}. BoothReady can copy its whole export onto this USB instead of a second export from ${software}, then check every file against the original.`}</p>
+      ${src.problems.length ? html`<div class="banner ${src.needs_erase ? "warn" : "bad"}"><div>${src.problems.join(". ")}.</div></div>` : ""}
+      <div class="actions">${src.needs_erase
+        ? html`<button class="btn primary" data-act="go-confirm" data-fs="${S.assessments.get(id)?.recommended_format.filesystem ?? "fat32"}">Erase this USB first</button>`
+        : html`<button class="btn primary" data-act="copy-from" data-id="${src.device_id}" ${src.problems.length ? "disabled" : ""}>Copy ${plural(src.files, "file")}, ${gb(src.bytes)}</button>`}</div>
+    </div>`;
   return html`<section class="card" style="max-width:720px;margin:0 auto">
     <div class="eyebrow">${nameOf(id)}${role ? ` · ${ROLE_LABEL[role]}` : ""}</div>
-    ${src
+    ${offers.length
       ? html`<h1>Put your music on this USB</h1>
-        <div class="copy-offer">
-          <h2>Copy from ${src.display_name}</h2>
-          <p class="muted">It passed verification${src.role ? ` as your ${ROLE_LABEL[src.role]}` : ""}. BoothReady can copy its whole export onto this USB instead of a second export from ${software}, then check every file against the original.</p>
-          ${src.problems.length ? html`<div class="banner ${src.needs_erase ? "warn" : "bad"}"><div>${src.problems.join(". ")}.</div></div>` : ""}
-          <div class="actions">${src.needs_erase
-            ? html`<button class="btn primary" data-act="go-confirm" data-fs="${S.assessments.get(id)?.recommended_format.filesystem ?? "fat32"}">Erase this USB first</button>`
-            : html`<button class="btn primary" data-act="copy-from" data-id="${src.device_id}" ${src.problems.length ? "disabled" : ""}>Copy ${plural(src.files, "file")}, ${gb(src.bytes)}</button>`}</div>
-        </div>
+        ${offers.map(offer)}
         <h2>${engine ? "Or add your music in Engine DJ" : "Or export from rekordbox"}</h2>`
       : html`<h1>${engine ? "Now add your music in Engine DJ" : "Now export from rekordbox"}</h1>`}
-    <p class="muted">BoothReady doesn't write rekordbox databases itself. rekordbox does that part, then BoothReady checks the result.</p>
+    <p class="muted">${offers.some((o) => o.export) ? "rekordbox can also write this USB itself, and BoothReady checks the result either way." : "BoothReady builds rekordbox Device Libraries from the Library tab; otherwise rekordbox does that part, then BoothReady checks the result."}</p>
     ${engine
       ? html`<ol><li>Open Engine DJ and find <b>${label}</b> under Devices.</li><li>Drag the playlists you need onto it and wait for the sync to finish.</li></ol>`
       : html`<ol>
@@ -1529,7 +1536,7 @@ function copyingView(id: string, from: string): Raw {
   const stopped = S.copyError !== null || r?.cancelled;
   return html`<section class="card" style="max-width:720px;margin:0 auto">
     <div class="eyebrow">${nameOf(id)}</div>
-    <h1>${S.copyError ? "The copy stopped" : r?.cancelled ? "Copy paused" : `Copying from ${nameOf(from)}`}</h1>
+    <h1>${S.copyError ? "The copy stopped" : r?.cancelled ? "Copy paused" : `Copying ${from.startsWith("export:") ? "the export" : "from"} ${copySourceName(from)}`}</h1>
     ${S.copyRunning
       ? html`<p class="muted">Don't unplug either USB.</p>
         <div style="margin-top:16px"><div class="bar"><span style="width:${pct.toFixed(1)}%"></span></div>
@@ -1659,8 +1666,15 @@ function body(): Raw {
 export function render() {
   const active = document.activeElement as HTMLElement | null;
   const focusId = active?.id;
+  // Scrolling boxes inside a screen keep their place across a re-render,
+  // so ticking a folder deep in a long list doesn't jump back to the top.
+  const scrolled = [...root().querySelectorAll<HTMLElement>("[data-keep-scroll]")].map((el) => [el.dataset.keepScroll, el.scrollTop] as const);
   root().innerHTML = shell(body()).s;
-  if (focusId) document.getElementById(focusId)?.focus();
+  for (const [key, top] of scrolled) {
+    const el = root().querySelector<HTMLElement>(`[data-keep-scroll="${key}"]`);
+    if (el) el.scrollTop = top;
+  }
+  if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
   const search = document.getElementById("hwsearch") as HTMLInputElement | null;
   if (search && focusId === "hwsearch") {
     search.setSelectionRange(search.value.length, search.value.length);
