@@ -55,6 +55,7 @@ fn export_without_analysis_reads_back_through_the_library_scanner() {
             PlaylistSpec { name: "Warm-up ☀".into(), tracks: vec![1] },
         ],
         analysis: Analysis::Skip,
+        analysis_cache: None,
     };
     let mut phases = Vec::new();
     let report = export_device_library(&request, |p| phases.push(p.phase)).unwrap();
@@ -113,6 +114,7 @@ fn export_with_analysis_points_the_anlz_files_at_the_media_path() {
         tracks,
         playlists: vec![PlaylistSpec { name: "Set".into(), tracks: vec![0] }],
         analysis: Analysis::Normal,
+        analysis_cache: None,
     };
     let report = export_device_library(&request, |_| {}).unwrap();
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -157,8 +159,13 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
     for occupant in ["Contents", "PIONEER", ".boothready-export-stale"] {
         let occupied = tmp.path().join(format!("occupied-{occupant}"));
         fs::create_dir_all(occupied.join(occupant)).unwrap();
-        let request =
-            ExportRequest { root: occupied, tracks: tracks.clone(), playlists: vec![], analysis: Analysis::Skip };
+        let request = ExportRequest {
+            root: occupied,
+            tracks: tracks.clone(),
+            playlists: vec![],
+            analysis: Analysis::Skip,
+            analysis_cache: None,
+        };
         assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Target(_))), "{occupant}");
     }
 
@@ -168,14 +175,20 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         tracks: vec![tracks[0].clone(), src.join("missing.wav")],
         playlists: vec![],
         analysis: Analysis::Skip,
+        analysis_cache: None,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Io { .. })));
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "staging must be removed and nothing installed");
 
     let unsupported = src.join("odd.ogg");
     fs::write(&unsupported, b"OggS").unwrap();
-    let request =
-        ExportRequest { root: root.clone(), tracks: vec![unsupported], playlists: vec![], analysis: Analysis::Skip };
+    let request = ExportRequest {
+        root: root.clone(),
+        tracks: vec![unsupported],
+        playlists: vec![],
+        analysis: Analysis::Skip,
+        analysis_cache: None,
+    };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Track(_))));
 
     let request = ExportRequest {
@@ -183,6 +196,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         tracks: vec![tracks[0].clone(), tracks[0].clone()],
         playlists: vec![],
         analysis: Analysis::Skip,
+        analysis_cache: None,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Request(_))));
     let request = ExportRequest {
@@ -190,6 +204,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         tracks: tracks.clone(),
         playlists: vec![PlaylistSpec { name: "Bad".into(), tracks: vec![1] }],
         analysis: Analysis::Skip,
+        analysis_cache: None,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Request(_))));
 }
@@ -211,4 +226,61 @@ fn civil_dates_match_the_calendar() {
     assert_eq!(civil_date(19_782), "2024-02-29");
     assert_eq!(civil_date(19_783), "2024-03-01");
     assert_eq!(civil_date(20_744), "2026-10-18");
+}
+
+#[test]
+fn a_cached_analysis_is_reused_and_repointed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("music");
+    fs::create_dir(&src).unwrap();
+    let tracks = source_tracks(&src, &[("clicks.wav", "Clicks", "Metronome")], 20);
+    let cache = tmp.path().join("cache");
+    let request = ExportRequest {
+        root: tmp.path().join("first"),
+        tracks: tracks.clone(),
+        playlists: vec![PlaylistSpec { name: "Set".into(), tracks: vec![0] }],
+        analysis: Analysis::Normal,
+        analysis_cache: Some(cache.clone()),
+    };
+    let mut analysed = 0;
+    let first = export_device_library(&request, |p| analysed = analysed.max(p.analysed)).unwrap();
+    assert_eq!(analysed, 1);
+    let store = super::analysis_cache::AnalysisCache::new(&cache);
+    assert!(store.has(&tracks[0], djbooth_analyzer::RhythmMode::Normal));
+    assert!(!store.has(&tracks[0], djbooth_analyzer::RhythmMode::Dynamic));
+
+    // The second export reads the cache and still points the files at
+    // their own media path, which differs because the file is track 2.
+    let again = ExportRequest {
+        root: tmp.path().join("second"),
+        tracks: vec![source_tracks(&src, &[("other.wav", "Other", "Metronome")], 2)[0].clone(), tracks[0].clone()],
+        playlists: vec![PlaylistSpec { name: "Set".into(), tracks: vec![1, 0] }],
+        ..request.clone()
+    };
+    let mut analysed = 0;
+    let second = export_device_library(&again, |p| analysed = analysed.max(p.analysed)).unwrap();
+    assert_eq!(analysed, 1, "only the new track is analysed");
+    assert_eq!(second.tracks[1].tempo_bpm, first.tracks[0].tempo_bpm);
+    assert_eq!(second.tracks[1].key, first.tracks[0].key);
+    let path = |root: &Path, t: &ExportedTrack| {
+        let dat = fs::read(root.join("PIONEER/USBANLZ").join(usb_analysis_dir(t)).join("ANLZ0000.DAT")).unwrap();
+        DatAnalysis::parse(&AnlzFile::parse(&dat).unwrap()).unwrap().path
+    };
+    assert_eq!(path(&first.root, &first.tracks[0]), "/Contents/00000001/clicks.wav");
+    assert_eq!(path(&second.root, &second.tracks[1]), "/Contents/00000002/clicks.wav");
+
+    // Stopping leaves the target untouched.
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let stopped =
+        export_device_library_cancellable(&ExportRequest { root: tmp.path().join("third"), ..again }, &cancel, |_| {});
+    assert!(matches!(stopped, Err(ExportError::Cancelled)));
+    assert!(!tmp.path().join("third/Contents").exists());
+    assert!(fs::read_dir(tmp.path().join("third")).unwrap().next().is_none());
+}
+
+/// The USBANLZ folder of a track, from its analysis path.
+fn usb_analysis_dir(t: &ExportedTrack) -> PathBuf {
+    let path = crate::library::pdb_writer::usb_analysis_path(&t.usb_path).unwrap();
+    let dir = path.trim_start_matches("/PIONEER/USBANLZ/").rsplit_once('/').map(|(d, _)| d).unwrap().to_string();
+    PathBuf::from(dir)
 }

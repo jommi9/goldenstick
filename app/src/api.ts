@@ -14,6 +14,7 @@ import type {
   DriveAssessment,
   DriveSummary,
   EjectResult,
+  ExportPlan,
   ExportStatus,
   Filesystem,
   GigProfile,
@@ -24,9 +25,11 @@ import type {
   FolderNode,
   KnownMedia,
   LibraryCollectProgress,
+  LibraryExportProgress,
   LibraryPage,
   LibraryScanProgress,
   LibrarySource,
+  LocalExport,
   Preset,
   Role,
   VerifyProgress,
@@ -95,6 +98,16 @@ export interface Api {
   libraryCollect(id: string, targets: string[], filter: string, query: string, name: string, folder?: string): Promise<string>;
   libraryCancelCollect(): Promise<void>;
   onLibraryCollectProgress(cb: (p: LibraryCollectProgress) => void): void;
+  /** What exporting these folders of a source as playlists would involve. An empty name asks for the suggested one. */
+  libraryExportPlan(id: string, folders: string[], name: string): Promise<ExportPlan>;
+  /** Builds the Device Library export into a fresh folder on this computer. Nothing is written to a USB. */
+  libraryExport(id: string, folders: string[], name: string): Promise<LocalExport>;
+  libraryCancelExport(): Promise<void>;
+  onLibraryExportProgress(cb: (p: LibraryExportProgress) => void): void;
+  /** The finished exports on this computer, newest first. */
+  libraryExports(): Promise<LocalExport[]>;
+  /** Deletes a finished export from this computer. */
+  libraryExportRemove(name: string): Promise<void>;
   onDeviceEvent(cb: (e: DeviceEvent) => void): void;
   onScanProgress(cb: (p: { device_id: string; files: number; total: number; bytes: number; current: string }) => void): void;
   onPrepareProgress(cb: (p: { step: string; detail: string }) => void): void;
@@ -165,6 +178,12 @@ async function tauriApi(): Promise<Api> {
     libraryCollect: (id, targets, filter, query, name, folder) => invoke("library_collect", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),
     libraryCancelCollect: () => invoke("library_cancel_collect"),
     onLibraryCollectProgress: on("library-collect-progress"),
+    libraryExportPlan: (id, folders, name) => invoke("library_export_plan", { request: { id, folders, name } }),
+    libraryExport: (id, folders, name) => invoke("library_export", { request: { id, folders, name } }),
+    libraryCancelExport: () => invoke("library_cancel_export"),
+    onLibraryExportProgress: on("library-export-progress"),
+    libraryExports: () => invoke("library_exports"),
+    libraryExportRemove: (name) => invoke("library_export_remove", { name }),
     onDeviceEvent: on("device-event"),
     onScanProgress: on("scan-progress"),
     onPrepareProgress: on("prepare-progress"),
