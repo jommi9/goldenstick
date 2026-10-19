@@ -44,6 +44,10 @@ The compatibility report becomes a compact matrix in the stick inspector: player
 - Type: M PLUS 1p stays for the player strip's numbers and labels, where it echoes the CDJ screen (PR jommi9/goldenstick#16). The tree, list and inspector use the system UI face at 12 px with tabular numerals, because density matters more there. Section labels are 10.5 px uppercase with letter spacing.
 - No cards inside cards, no centred columns, no page headings. Borders are 1 px lines between regions.
 
+## Size and screens
+
+The window is designed at 1900 px wide with 13.5 px text, 32 px rows and a 176 px player strip, and it scales with the screen instead of leaving empty space: on a 2560 x 1440 display everything draws about 35% larger, and on a laptop panel slightly smaller, never below 90%. The app opens maximised and has a full-screen toggle (F). When the list gets narrow it drops columns in a fixed order (plays on, then the preview waveform, then state), and below 1700 px of layout width the inspector starts hidden and opens by itself when a stick is selected or a playlist is queued.
+
 ## Keyboard
 
 Arrow keys move the selection, Return loads into the player, Space plays, Cmd+F searches, Cmd+E exports the selection to the selected stick, Cmd+I toggles the inspector, Cmd+1/2/3 jump to Collection, Playlists and Devices.

@@ -21,3 +21,11 @@ The stick inspector replaces the old report page: capacity, the sync queue built
 Fixes made while looking at the captures: the state column clipped at 1440 px, the track number column was too narrow, the inspector's full-width artwork pushed the details below the fold, the queue row's dot stretched into a bar, and the matrix verdicts clipped.
 
 Open: the mockup has no light theme yet, drag and drop is wired but untested with a real pointer, and the Kingston stick's playlists show without artwork or keys because only the exported playlist has analysis.
+
+## 19 October 2026: bigger, and filling the screen
+
+Feedback on the first mockup: too tight and too small, and it should use the whole screen. The first pass copied rekordbox's laptop density (12 px text, 24 px rows) and was captured at 1440 x 900, which leaves a small window on a 2560 x 1440 display.
+
+The base size went up throughout: 13.5 px text, 32 px rows, a 176 px player strip with 136 px artwork, a 104 px overview waveform and 44 px BPM digits, and wider tree and inspector panels. The window now scales with the screen from a 1900 px design width, so a 2560 px display draws everything about 35% larger, and there is a full-screen toggle on F. On a laptop-sized window the list first overflowed under the inspector; it now drops the plays-on and preview columns when narrow, and the inspector starts hidden there and opens when a stick is selected or a playlist is queued. The screenshots in this folder are now 2560 x 1440.
+
+![Playlist at 2560 x 1440](screenshots/01-playlist-loaded.png)
