@@ -88,51 +88,78 @@ const server = await preview({ preview: { port, strictPort: true, host: "127.0.0
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const browserErrors = [];
 
+// Camelot neighbours, mirrored from keysMix in src/library.ts.
+const keysMix = (a, b) => {
+  if (!a || !b) return false;
+  const na = parseInt(a, 10);
+  const nb = parseInt(b, 10);
+  return na === nb || (a.slice(-1) === b.slice(-1) && ((na % 12) + 1 === nb || (nb % 12) + 1 === na));
+};
+
 async function walk() {
-  const page = await browser.newPage({ viewport: { width: 1180, height: 860 }, colorScheme: "dark" });
+  // Wide enough that the inspector shows by itself (1700 px of layout width at 90%).
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, colorScheme: "dark" });
   page.on("pageerror", (e) => browserErrors.push(e.message));
   page.on("console", (m) => m.type() === "error" && browserErrors.push(m.text()));
   const text = async (selector) => (await page.locator(selector).first().textContent()) ?? "";
-  const click = (name) => page.getByRole("button", { name, exact: false }).first().click();
+  const click = (name) => page.locator(".sheet-body").getByRole("button", { name, exact: false }).first().click();
+  /** The open sheet's text, or the window's when no sheet is open. */
+  const view = async () => ((await page.locator(".sheet-body").count()) ? text(".sheet-body") : text("#main"));
 
-  // Every screen is checked for the notice the README promises, the ruleset
-  // version the engine reports, and for rendering slips.
+  // Every screen is checked for the ruleset version and review status in the
+  // status bar, and for rendering slips anywhere in the window.
   const at = async (name) => {
     screen = name;
     screens.push(name);
     await page.waitForTimeout(150);
-    const foot = await text("footer.foot");
-    includes(foot, `Compatibility rules v${data.rules.version}`, "footer names the ruleset version");
-    includes(foot, RULES_STATUS[data.rules.review_status], "footer carries the ruleset's review note");
-    includes(foot, "not yet tested on hardware", "footer says the rules are not yet tested on hardware");
-    const main = await text("main#main");
-    check(!/\bundefined\b|\[object Object\]|\bNaN\b/.test(main), "no undefined, NaN or [object Object] rendered");
+    const foot = page.locator("footer.status");
+    includes(await foot.textContent(), `Compatibility rules v${data.rules.version}`, "status bar names the ruleset version");
+    const note = (await foot.locator("[title^='Compatibility rules']").getAttribute("title")) ?? "";
+    includes(note, RULES_STATUS[data.rules.review_status], "status bar carries the ruleset's review note");
+    includes(await foot.textContent(), "not yet tested on hardware", "status bar says the rules are not yet tested on hardware");
+    check(!/\bundefined\b|\[object Object\]|\bNaN\b/.test(await text(".app")), "no undefined, NaN or [object Object] rendered");
     console.log(`  ${name}`);
   };
 
   await page.goto(`http://127.0.0.1:${port}/`);
-  await page.getByText("Plug in a USB").waitFor();
-  await at("home");
-  includes(await text("main#main"), "BoothReady does two things.", "home says what the app is for");
-  includes(await text("main#main"), "Connect a USB drive and it appears here.", "home says where a connected USB will show up");
+  await page.locator("#list-title").waitFor();
+  await at("window");
+  await checkShell(page, text);
   for (const s of data.demo_sticks) {
-    check(await page.locator(`[data-act="demo-insert"][data-id="${s.name}"]`).count(), `the demo panel offers ${s.title}`);
-    includes(await text("main#main"), s.description, `the demo panel describes ${s.title}`);
+    check(await page.locator(`[data-act="demo-insert"][data-id="${s.name}"]`).count(), `the Devices section offers ${s.title}`);
+    same(await page.locator(`.sim .nm[title="${s.description}"]`).count(), 1, `the Devices section describes ${s.title}`);
   }
+  includes(await text(".tree"), "Plug in a USB stick and it appears here.", "the tree says where a connected stick will show up");
 
-  // The 128 GB SanDisk: GPT + exFAT with only a Device Library.
+  // The 128 GB SanDisk: GPT + exFAT with only a Device Library. It appears in
+  // the tree and is read in the background; nothing takes over the window.
   await page.locator(`[data-act="demo-insert"][data-id="${demoName(DRIVE)}"]`).click();
-  await page.getByText("We think this is").waitFor();
-  await page.getByText("Scanned").waitFor({ timeout: 10000 });
+  const dev = page.locator(`.dev[data-dev="${DRIVE}"]`);
+  await dev.waitFor();
+  same(await page.locator(".sheet").count(), 0, "plugging in a stick opens no sheet");
+  includes(await text(".toast"), "is listed under Devices", "a toast says where the new stick is");
+  await dev.locator(".badge.y").first().waitFor({ timeout: 15000 });
+  await at("stick in the tree");
+  const devText = (await dev.textContent()) ?? "";
+  includes(devText, sandisk.summary.fs_label, "the stick shows its volume label");
+  includes(devText, gb(data.drives[DRIVE].initial.card?.device?.size_bytes ?? sandisk.summary.size_bytes), "the stick shows its capacity");
+  same((await dev.locator(".badge.y").allTextContents()).join(","), "RB", "the stick's badges show only the rekordbox Device Library the engine found");
+  includes(await text(".titlebar"), "1 stick connected", "the title bar counts the stick");
+  includes(await text("footer.status"), "1 stick connected", "the status bar counts the stick");
+
+  await dev.click();
+  await page.locator(".sheet").getByText("We think this is").waitFor();
+  await page.locator(".sheet").getByText("Scanned").waitFor({ timeout: 10000 });
   await at("identify");
-  const idText = await text("main#main");
+  const idText = await view();
   includes(idText, sandisk.summary.identification.display_name, "identification names the drive");
   includes(idText, sandisk.summary.scheme, "identification shows the partition scheme the engine read");
   includes(idText, sandisk.summary.filesystem, "identification shows the filesystem the engine read");
+  includes(await text(".sheet-head"), sandisk.summary.identification.display_name, "the sheet's path names the drive");
   await click("Yes, that's it");
-  await page.getByText("Prepare this USB").waitFor();
+  await page.locator(".sheet").getByText("Prepare this USB").waitFor();
   await at("assessment");
-  includes(await text("main#main"), sandisk.summary.headline, "assessment shows the engine's headline");
+  includes(await view(), sandisk.summary.headline, "assessment shows the engine's headline");
 
   await click("Prepare this USB");
   await page.getByText("What are you preparing for?").waitFor();
@@ -151,7 +178,7 @@ async function walk() {
 
   await page.locator(`[data-act="preset"][data-id="${PRESET}"]`).click();
   await click("Continue");
-  await page.getByRole("table").waitFor();
+  await page.locator(".sheet").getByRole("table").waitFor();
   await at("report");
   await checkReport(page, text);
 
@@ -159,7 +186,7 @@ async function walk() {
   await page.getByText("You are about to erase:").waitFor();
   await at("confirm-erase");
   const c = sandisk.confirmation;
-  const confirmText = await text("main#main");
+  const confirmText = await view();
   includes(confirmText, c.display_name, "confirmation names the drive about to be erased");
   includes(confirmText, gb(c.size_bytes), "confirmation shows the drive's capacity");
   includes(confirmText, `${c.files.toLocaleString("en-US")} file`, "confirmation counts the files that will be deleted");
@@ -169,6 +196,7 @@ async function walk() {
   await page.getByRole("button", { name: /^Erase and prepare/ }).click();
   await page.getByText("Preparing your USB").waitFor();
   await at("preparing");
+  same(await page.locator(".sheet-close").count(), 0, "the preparing sheet can't be closed while the drive is rebuilt");
   await page.getByText("Now export from rekordbox").waitFor({ timeout: 15000 });
   await at("export-handoff");
   await click("Simulate the rekordbox export");
@@ -178,30 +206,84 @@ async function walk() {
   await page.getByText(/^Verified \d+ files?/).waitFor({ timeout: 10000 });
   await at("verified");
   const exported = data.drives[DRIVE].exported.summary;
-  includes(await text("main#main"), `Verified ${Math.max(exported.tracks_scanned, 1)} file`, "verification reports the engine's file count");
+  includes(await view(), `Verified ${Math.max(exported.tracks_scanned, 1)} file`, "verification reports the engine's file count");
 
   await click("Continue");
   await page.getByText("Almost there").waitFor();
   await at("kit-progress");
-  const progress = await text("main#main");
+  const progress = await view();
   includes(progress, `1 of ${plan.roles.length} USBs ready`, "kit progress counts the plan's roles");
   const next = plan.roles[1];
   includes(progress, `Next: ${ROLE_LABEL[next.role]}`, "kit progress names the next role in the plan");
   includes(progress, gb(next.ideal_capacity[0]), "kit progress asks for the next role's capacity");
   includes(progress, ROLE_LABEL[plan.roles[0].role], "the verified drive is listed under its role");
   for (const d of A.devices) includes(progress, d.model, `the verified drive lists ${d.model}`);
+  includes(await text("#tree-kit ~ .node"), "verified", "the Gig kit section marks the verified stick");
+  includes(await text(".titlebar"), "1 ready", "the title bar offers the gig kit");
 
   await page.getByRole("button", { name: `Prepare the ${ROLE_LABEL[next.role]} USB` }).click();
   await page.getByText(`Next: ${ROLE_LABEL[next.role]}`).waitFor();
   await at("next-usb");
-  includes(await text("main#main"), `Preparing ${plan.roles.length} USBs`, "the next-USB screen counts the plan's roles");
-  await checkLibrary(page, text, at, click);
+  includes(await view(), `Preparing ${plan.roles.length} USBs`, "the next-USB screen counts the plan's roles");
+  await page.keyboard.press("Escape");
+  same(await page.locator(".sheet").count(), 0, "Escape closes the sheet");
+  await checkLibrary(page, text, at, view);
   await page.close();
+  await checkSizes();
+}
+
+// The four regions, the rail pages and the inspector toggle.
+async function checkShell(page, text) {
+  const lib = data.library[PRESET];
+  for (const sel of [".titlebar", ".player", ".rail", ".tree", "#list", "#insp", "footer.status"]) same(await page.locator(sel).count(), 1, `the window has ${sel}`);
+  const everything = lib.sources.reduce((n, s) => n + lib.tracks[s.id].length, 0);
+  same((await text("#list-title")).trim(), "All tracks", "the window opens on the whole collection");
+  includes(await text(".lhead .meta"), `${everything.toLocaleString("en-US")} tracks`, "the list header counts every track");
+  same(await page.locator(".player-empty").count(), 1, "the player strip says nothing is loaded");
+  for (const s of lib.sources) check((await page.locator(`.tree [data-act="library-folder"][data-id="${s.id}|"]`).count()) === 1, `the Playlists section lists ${s.name}`);
+  await page.locator('[data-act="toggle-inspector"]').click();
+  same(await page.locator("#insp").count(), 0, "the inspector button hides the inspector");
+  await page.keyboard.press("Meta+i");
+  same(await page.locator("#insp").count(), 1, "Cmd+I shows it again");
+  await page.locator('[data-act="open-test-lab"]').click();
+  await page.getByRole("heading", { name: "Test lab" }).waitFor();
+  same(await page.locator(".tree").count(), 0, "Test lab takes the place of the library");
+  same(await page.locator('[data-act="open-test-lab"][aria-current="page"]').count(), 1, "the rail marks Test lab");
+  await page.locator('[data-act="open-devtools"]').click();
+  await page.getByRole("heading", { name: "Developer tools" }).waitFor();
+  check(true, "Dev tools opens from the rail");
+  await page.locator('[data-act="panel-library"]').click();
+  await page.locator("#list-title").waitFor();
+  await page.locator('[data-act="open-library"]').first().click();
+  await page.getByRole("heading", { name: "Your music" }).waitFor();
+  await page.locator(".sheet-close").click();
+  same(await page.locator(".sheet").count(), 0, "the close button closes a sheet");
+}
+
+// The window scales with the screen and gives up the inspector and columns when narrow.
+async function checkSizes() {
+  screen = "sizes";
+  const big = await browser.newPage({ viewport: { width: 2560, height: 1440 }, colorScheme: "dark" });
+  await big.goto(`http://127.0.0.1:${port}/`);
+  await big.locator("#list-title").waitFor();
+  const zoom = Number(await big.evaluate(() => document.documentElement.style.zoom));
+  check(Math.abs(zoom - 2560 / 1900) < 0.01, `a 2560 px window draws about 35% larger (zoom ${zoom})`);
+  same(await big.locator("#insp").count(), 1, "a wide window shows the inspector");
+  await big.close();
+  const small = await browser.newPage({ viewport: { width: 1180, height: 860 }, colorScheme: "dark" });
+  small.on("pageerror", (e) => browserErrors.push(e.message));
+  await small.goto(`http://127.0.0.1:${port}/`);
+  await small.locator("#list-title").waitFor();
+  same(Number(await small.evaluate(() => document.documentElement.style.zoom)), 0.9, "a small window draws no smaller than 90%");
+  same(await small.locator("#insp").count(), 0, "a laptop-sized window starts without the inspector");
+  same(await small.locator("th.c-plays").evaluate((el) => getComputedStyle(el).display), "none", "a narrow list drops the plays-on column first");
+  check((await small.locator("th.c-title").evaluate((el) => el.getBoundingClientRect().width)) > 120, "the title column keeps its room in a narrow list");
+  await small.close();
 }
 
 // The music library: every source and every track shows what the engine's
 // scan and its per-player verdicts say, for the preset selected above.
-async function checkLibrary(page, text, at, click) {
+async function checkLibrary(page, text, at, view) {
   const lib = data.library[PRESET];
   const STATE_LABEL = { ready: "Ready", cloud_only: "In the cloud", blocked: "Won't play everywhere", unchecked: "No data", unreadable: "Unreadable" };
   const count = (n, one) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
@@ -218,7 +300,7 @@ async function checkLibrary(page, text, at, click) {
 
   await page.locator('[data-act="open-library"]').first().click();
   await page.getByRole("heading", { name: "Your music" }).waitFor();
-  await at("library");
+  await at("library sources");
   const cards = page.locator(".source");
   same(await cards.count(), lib.sources.length, "a card per music source");
   for (const s of lib.sources) {
@@ -235,15 +317,17 @@ async function checkLibrary(page, text, at, click) {
     if (!s.connected) check(await card.locator('[data-act="library-scan"]').isDisabled(), `source ${s.name} can't be scanned while unplugged`);
   }
   const cloudTotal = lib.sources.reduce((n, s) => n + s.states.cloud_only, 0);
-  includes(await text("main#main"), `${count(cloudTotal, "track")} are still in the cloud`, "the library says how many tracks are still online");
+  includes(await view(), `${count(cloudTotal, "track")} are still in the cloud`, "the library says how many tracks are still online");
 
   for (const id of ["demo-computer", "demo-cloud"]) {
     const s = byId[id];
     const tracks = lib.tracks[id];
-    await page.locator('[data-act="open-library"]').first().click();
-    await page.locator(`[data-act="library-open"][data-id="${id}"]`).click();
-    await page.getByRole("table").waitFor();
+    if (!(await page.locator(".sheet").count())) await page.locator('[data-act="open-library"]').first().click();
+    await page.locator(`.sheet [data-act="library-open"][data-id="${id}"]`).click();
+    await page.locator("#list").getByRole("table").waitFor();
     await at(`library-source ${id}`);
+    same(await page.locator(".sheet").count(), 0, "opening a source closes the sources sheet");
+    same((await text("#list-title")).trim(), s.name, `the list is titled ${s.name}`);
     const rows = page.locator(".tracks tbody tr");
     same(await rows.count(), tracks.length, `${s.name} lists every scanned track`);
     for (const [i, t] of tracks.entries()) {
@@ -253,12 +337,18 @@ async function checkLibrary(page, text, at, click) {
       if (t.camelot) includes(row, t.camelot, `${t.name} shows its key on the Camelot wheel`);
       if (t.bpm !== null) includes(row, String(Math.round(t.bpm * 100) / 100), `${t.name} shows its tempo`);
       includes(row, STATE_LABEL[t.state], `${t.name} shows the engine's state`);
-      for (const issue of t.issues.slice(0, 3)) {
-        includes(row, issue.model, `${t.name} names the player that rejects it`);
-        includes(row, issue.reason, `${t.name} gives the engine's reason for ${issue.model}`);
-      }
-      if (t.note) includes(row, t.note, `${t.name} shows why it is unreadable`);
       if (t.state === "cloud_only") includes(row, "not checked", `${t.name} is shown as not checked`);
+      // The reasons are in the inspector for the selected row.
+      await rows.nth(i).locator("td.c-title").click();
+      same(await rows.nth(i).getAttribute("class").then((c) => c?.includes("sel")), true, `selecting ${t.name} highlights its row`);
+      const insp = (await text("#insp")) ?? "";
+      includes(insp, t.title ?? t.name, `the inspector shows ${t.name}`);
+      for (const issue of t.issues) {
+        includes(insp, issue.model, `the inspector names the player that rejects ${t.name}`);
+        includes(insp, issue.reason, `the inspector gives the engine's reason for ${issue.model}`);
+      }
+      if (t.note) includes(insp, t.note, `the inspector says why ${t.name} is unreadable`);
+      if (t.detail) includes(insp, t.detail, `the inspector shows the format of ${t.name}`);
     }
     for (const [state, n] of Object.entries(s.states)) {
       if (!n) continue;
@@ -268,24 +358,35 @@ async function checkLibrary(page, text, at, click) {
     }
   }
 
-  // The browser: a folder in the tree narrows the list to that folder, and
-  // the collection holds every source's tracks.
-  await page.locator('[data-act="open-library"]').first().click();
-  await page.locator('[data-act="library-open"][data-id="demo-computer"]').click();
-  await page.getByRole("table").waitFor();
-  check((await page.locator(".rb-tree").count()) === 1, "the source opens in the browser with its tree");
+  // The tree: a folder narrows the list to that folder, the collection holds
+  // every source's tracks, and its entries narrow it to one state.
+  await page.locator('.tree [data-act="library-folder"][data-id="demo-computer|"]').click();
+  await page.locator("#list").getByRole("table").waitFor();
   const hiRes = lib.tracks["demo-computer"].filter((t) => t.folder === "Hi-Res");
   await page.locator('[data-act="library-folder"][data-id="demo-computer|Hi-Res"]').click();
   await page.waitForTimeout(150);
   await at("library-folder Hi-Res");
   same(await page.locator(".tracks tbody tr").count(), hiRes.length, "a folder in the tree lists only its tracks");
-  includes(await text("main#main h1"), "Hi-Res", "the selected folder names the view");
+  includes(await text("#list-title"), "Hi-Res", "the selected folder names the list");
+  same(await page.locator(".tree .node.on").count(), 1, "the tree marks one node");
   await page.locator('[data-act="library-open"][data-id="*"]').click();
-  await page.getByRole("table").waitFor();
+  await page.locator("#list").getByRole("table").waitFor();
   await page.waitForTimeout(150);
   await at("library-collection-all");
   const everything = lib.sources.reduce((n, s) => n + lib.tracks[s.id].length, 0);
   includes(await text(".tracks-foot"), `of ${everything.toLocaleString("en-US")}`, "the collection holds every source's tracks");
+  const blocked = lib.sources.reduce((n, s) => n + s.states.blocked, 0);
+  await page.locator('.tree [data-act="library-collection"][data-id="blocked"]').click();
+  await page.waitForTimeout(200);
+  same((await text("#list-title")).trim(), STATE_LABEL.blocked, "a Collection entry names the list after its state");
+  same(await page.locator(".tracks tbody tr").count(), Math.min(100, blocked), "the Won't play everywhere entry lists the blocked tracks of every source");
+  await page.locator('[data-act="library-open"][data-id="*"]').click();
+  await page.waitForTimeout(200);
+  await page.locator("#list-scroller").evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await page.waitForFunction((n) => document.querySelectorAll(".tracks tbody tr").length === n, everything, { timeout: 4000 }).catch(() => {});
+  same(await page.locator(".tracks tbody tr").count(), everything, "scrolling to the end of the list loads the rest");
+  await page.locator('[data-act="library-folder"][data-id="demo-computer|"]').click();
+  await page.locator("#list").getByRole("table").waitFor();
 
   // Tags: the engine read them, search finds an artist, and a heading
   // orders the list with untagged tracks last.
@@ -295,6 +396,7 @@ async function checkLibrary(page, text, at, click) {
   await page.waitForTimeout(400);
   const klock = lib.tracks["demo-computer"].filter((t) => t.artist === "Ben Klock").length;
   same(await page.locator(".tracks tbody tr").count(), klock, "searching an artist finds that artist's tracks");
+  same(await page.evaluate(() => document.activeElement?.id), "library-search", "the search box keeps focus while the list updates");
   await page.locator("#library-search").fill("");
   await page.waitForTimeout(400);
   await page.locator('[data-act="library-sort"][data-id="bpm"]').click();
@@ -312,39 +414,51 @@ async function checkLibrary(page, text, at, click) {
   await page.locator('[data-act="library-sort"][data-id=""]').click();
   await page.waitForTimeout(200);
 
-  // Playing: a row's number is its play key, the bar along the bottom
-  // follows the track across screens, and unreadable files can't be started.
+  // Playing: a row's number is its play key, the strip along the top
+  // follows the track across pages, and unreadable files can't be started.
   for (const s of lib.sources) check(lib.tracks[s.id].every((t) => t.source === s.id), `every track of ${s.name} names its source`);
-  const unreadable = lib.tracks["demo-computer"].filter((t) => t.state === "unreadable").length;
+  const tracks = lib.tracks["demo-computer"];
+  const unreadable = tracks.filter((t) => t.state === "unreadable").length;
   same(await page.locator("tbody tr.unreadable .rb-play").count(), 0, "an unreadable track has no play key");
   check(unreadable === 0 || (await page.locator("tbody tr.unreadable").count()) > 0, "an unreadable track is listed");
   const second = page.locator(".rb-play").nth(1);
   const secondName = (await second.getAttribute("aria-label"))?.replace(/^Play /, "");
   await second.click();
-  await page.locator(".player").waitFor();
   await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
   await at("library-player");
   check((await text(".player-name")).trim().startsWith(secondName), "the player shows the track that was clicked");
-  same((await text("tr.playing td b")).trim(), secondName, "the playing row is marked");
+  same((await text("tr.playing td.c-title")).trim(), secondName, "the playing row is marked");
+  const loaded = tracks.find((t) => (t.title ?? t.name) === secondName);
+  if (loaded?.camelot) includes(await text(".player .readout"), loaded.camelot, "the strip shows the loaded track's key");
+  const mixing = tracks.filter((t) => t !== loaded && keysMix(loaded?.camelot, t.camelot)).length;
+  same(await page.locator("td.c-key.match").count(), mixing, "keys that mix with the loaded track are marked");
   await page.waitForFunction(() => document.getElementById("player-elapsed")?.textContent !== "0:00", null, { timeout: 4000 });
   check(true, "the clock runs while the track plays");
   await page.locator('[data-act="library-next"]').click();
-  await page.waitForFunction((name) => document.querySelector("tr.playing td b")?.textContent?.trim() !== name, secondName);
+  await page.waitForFunction((name) => document.querySelector("tr.playing td.c-title")?.textContent?.trim() !== name, secondName);
   check(!(await text(".player-name")).trim().startsWith(secondName), "next moves to the following track");
-  await page.keyboard.press("Escape");
-  await page.locator("main#main h1").click();
+  await page.locator("#list-title").click();
   await page.keyboard.press(" ");
   await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Play");
   check(true, "the space bar pauses");
-  await page.locator('.tab[data-act="home"]').click();
-  check((await page.locator(".player").count()) === 1, "the player stays on other screens");
+  // The keyboard: arrows move the selection and Return loads it; a double-click loads a row too.
+  await page.locator(".tracks tbody tr").nth(0).locator("td.c-title").click();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  same(await page.locator(".tracks tbody tr.sel").getAttribute("data-row"), "2", "the down arrow moves the selection");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction((name) => document.querySelector(".player-name")?.textContent?.trim().startsWith(name), tracks[2].title ?? tracks[2].name);
+  check(true, "Return loads the selected track");
+  await page.locator(".tracks tbody tr").nth(3).locator("td.c-title").dblclick();
+  await page.waitForFunction((name) => document.querySelector(".player-name")?.textContent?.trim().startsWith(name), tracks[3].title ?? tracks[3].name);
+  check(true, "a double-click loads the row");
+  await page.locator('[data-act="open-test-lab"]').click();
+  check((await page.locator(".player:not(.player-empty)").count()) === 1, "the player stays loaded on other pages");
   await page.locator('[data-act="library-stop-play"]').click();
-  same(await page.locator(".player").count(), 0, "stop closes the player");
-  await page.locator('[data-act="open-library"]').first().click();
-  await page.locator('[data-act="library-open"][data-id="*"]').click();
-  await page.getByRole("table").waitFor();
+  same(await page.locator(".player-empty").count(), 1, "stop unloads the player");
+  await page.locator('[data-act="panel-library"]').click();
   await page.locator('[data-act="library-folder"][data-id="demo-cloud|"]').click();
-  await page.getByRole("table").waitFor();
+  await page.locator("#list").getByRole("table").waitFor();
 
   // Collecting the cloud folder: the plan matches the scan, and the new
   // collection shows what the engine read once the tracks were local.
@@ -368,34 +482,36 @@ async function checkLibrary(page, text, at, click) {
   await page.getByRole("button", { name: `Collect ${count(made.tracks.length, "track")}` }).click();
   await page.getByText(`Collected and verified ${count(made.tracks.length, "track")}.`).waitFor({ timeout: 15000 });
   await page.getByRole("button", { name: "Open the collection" }).click();
-  await page.getByRole("table").waitFor();
+  await page.locator("#list").getByRole("table").waitFor();
   await at("library-collection");
   const rows = page.locator(".tracks tbody tr");
   same(await rows.count(), made.tracks.length, "the collection lists every collected track");
   for (const [i, t] of made.tracks.entries()) {
     const row = (await rows.nth(i).textContent()) ?? "";
-    includes(row, t.name, `collected row ${i + 1} is ${t.name}`);
+    includes(row, t.title ?? t.name, `collected row ${i + 1} is ${t.name}`);
     includes(row, STATE_LABEL[t.state], `${t.name} shows the state the engine found after collecting`);
     includes(row, t.detail, `${t.name} shows the format the engine read`);
     check(!row.includes("not checked") && !row.includes(STATE_LABEL.cloud_only), `${t.name} is no longer shown as online`);
-    for (const issue of t.issues.slice(0, 3)) includes(row, issue.reason, `${t.name} gives the engine's reason for ${issue.model}`);
+    await rows.nth(i).locator("td.c-title").click();
+    for (const issue of t.issues) includes(await text("#insp"), issue.reason, `${t.name} gives the engine's reason for ${issue.model}`);
   }
   check((await page.locator('[data-act="library-collect-open"]').count()) === 0, "a collection doesn't offer to be collected again");
   const next = (await text(".nextstep")) ?? "";
   includes(next, "Export this collection to your USB", "a collection says what to do next");
   check((await page.locator('.nextstep [data-act="library-export-open"]').count()) === 1, "the next step offers to build the export here");
   check((await page.locator('.nextstep [data-act="open-rekordbox"]').count()) === 1, "the next step still offers rekordbox");
+  same(await page.locator('.tree [data-act="library-folder"][data-id$="|"]').count(), lib.sources.length + 1, "the new collection appears in the tree");
   await page.locator('[data-act="open-library"]').first().click();
   const card = (await page.locator(".source").last().textContent()) ?? "";
   includes(card, "Local collection", "the library marks the new source as a local collection");
   includes(card, `A verified copy of tracks from ${cloud.name}.`, "the collection card names its origin");
-  await checkExport(page, text, at, click);
+  await checkExport(page, text, at, view);
 }
 
 // Export to USB: ticked folders become playlists, the plan counts the
 // tracks and estimates the analysis, the build reports progress, and the
 // finished export is offered to a prepared USB by the copy flow.
-async function checkExport(page, text, at, click) {
+async function checkExport(page, text, at, view) {
   const lib = data.library[PRESET];
   const count = (n, one) => `${n.toLocaleString("en-US")} ${n === 1 ? one : `${one}s`}`;
   const computer = lib.sources.find((s) => s.id === "demo-computer");
@@ -404,10 +520,11 @@ async function checkExport(page, text, at, click) {
   const under = (folder) => tracks.filter((t) => t.folder === folder || t.folder.startsWith(`${folder}/`));
   const picked = [...under("Ben Klock"), ...under("Hi-Res")].filter(holdable);
   const leftOut = [...under("Ben Klock"), ...under("Hi-Res")].length - picked.length;
+  const exportButton = () => page.locator('.lhead [data-act="library-export-open"]');
 
-  await page.locator('[data-act="library-open"][data-id="demo-computer"]').click();
-  await page.getByRole("table").waitFor();
-  await page.locator('[data-act="library-export-open"]').click();
+  await page.locator('.sheet [data-act="library-open"][data-id="demo-computer"]').click();
+  await page.locator("#list").getByRole("table").waitFor();
+  await exportButton().click();
   await page.getByRole("heading", { name: `Build a rekordbox Device Library from ${computer.name}` }).waitFor();
   await at("library-export open");
   const folders = page.locator(".export-folder");
@@ -418,6 +535,7 @@ async function checkExport(page, text, at, click) {
   await page.addStyleTag({ content: ".export-folders { max-height: 100px !important; }" });
   const box = page.locator('[data-keep-scroll="export-folders"]');
   await box.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await page.locator('.export-folder input[data-folder="Kolsch"]').scrollIntoViewIfNeeded();
   const scrolled = await box.evaluate((el) => el.scrollTop);
   await page.locator('.export-folder input[data-folder="Kolsch"]').check();
   await page.getByRole("button", { name: /^Build the export \(/ }).waitFor();
@@ -434,7 +552,7 @@ async function checkExport(page, text, at, click) {
   includes(plan, `${count(picked.length, "track")} to analyse`, "the plan counts the tracks to analyse");
   includes(plan, picked.length * 6 < 45 ? "under a minute" : `about ${Math.round((picked.length * 6) / 60)} min`, "the plan estimates the analysis at six seconds a track");
   includes(plan, "/exports/", "the plan shows the export's own folder on this computer");
-  includes(plan, "Device Library only", "the panel says the export holds a Device Library only");
+  includes(plan, "Device Library only", "the sheet says the export holds a Device Library only");
   check(leftOut === 0 || plan.includes(`${count(leftOut, "file")} left out`), "the plan counts the files left out");
   const name = (await page.locator("#library-export-name").inputValue()) ?? "";
   includes(name, computer.name, "the export is named after the source");
@@ -444,6 +562,8 @@ async function checkExport(page, text, at, click) {
   await at("library-export building");
   includes(await text(".export"), `of ${count(picked.length, "track")}`, "the build counts the tracks as it goes");
   check((await page.locator('[data-act="library-export-stop"]').count()) === 1, "the build can be stopped");
+  same(await page.locator(".sheet-close").count(), 0, "the export sheet can't be closed while it builds");
+  includes(await text("footer.status"), `Building ${name}`, "the status bar shows the build");
   await page.getByText(`Export built: ${count(picked.length, "track")} in 2 playlists`).waitFor({ timeout: 20000 });
   await at("library-export done");
   const done = (await text(".export")) ?? "";
@@ -451,27 +571,29 @@ async function checkExport(page, text, at, click) {
   includes(done, "with beat grids and waveforms for all of them", "the finished export says every track was analysed");
   check(!done.includes("couldn't be analysed"), "a fully analysed export raises no analysis warning");
   includes(done, `/exports/${name}`, "the finished export names its folder");
-  check((await page.locator('.export [data-act="home"]').count()) === 1, "the finished export points at the USB tab");
+  includes(done, "select it under Devices", "the finished export says where to put it on a stick");
 
   // A second plan for the same folders has nothing left to analyse.
   await page.locator('[data-act="library-export-close"]').click();
-  await page.locator('[data-act="library-export-open"]').click();
+  await exportButton().click();
   await page.locator('.export-folder input[data-folder="Hi-Res"]').check();
   await page.getByRole("button", { name: /^Build the export/ }).waitFor();
   const again = (await text(".export")) ?? "";
   includes(again, "Nothing to analyse", "tracks analysed for an earlier export are not analysed again");
   includes(again, `${under("Hi-Res").filter(holdable).length} already analysed on this computer`, "the plan says how many analyses it reuses");
-  await page.locator('[data-act="library-export-close"]').click();
+  await page.keyboard.press("Escape");
+  same(await page.locator(".sheet").count(), 0, "Escape closes the export sheet before a build");
 
   // Stopping a build says so at once and leaves no export behind.
-  await page.locator('[data-act="library-export-open"]').click();
+  await page.keyboard.press("Meta+e");
   await page.locator('.export-folder input[data-folder="Paula Temple"]').check();
+  check(true, "Cmd+E opens the export sheet");
   await page.getByRole("button", { name: /^Build the export \(/ }).click();
   await page.locator('[data-act="library-export-stop"]').click();
   check((await text(".export")).includes("Stopping after this track.") || (await text(".export")).includes("Stopped."), "a stopped build says it is stopping");
   await page.getByText("Stopped. Nothing was written to the export folder.").waitFor({ timeout: 10000 });
   await at("library-export stopped");
-  check((await page.locator('.export-folder input[data-folder="Paula Temple"]').isChecked()), "a stopped build keeps the ticked folders");
+  check(await page.locator('.export-folder input[data-folder="Paula Temple"]').isChecked(), "a stopped build keeps the ticked folders");
   await page.locator('[data-act="library-export-close"]').click();
 
   await page.locator('[data-act="open-library"]').first().click();
@@ -480,16 +602,20 @@ async function checkExport(page, text, at, click) {
   includes(listed, name, "the library lists the finished export");
   includes(listed, `${count(picked.length, "track")} in 2 playlists`, "the listed export carries its counts");
   same(await page.locator(".export-row").count(), 1, "a stopped build adds no export to the list");
+  await page.keyboard.press("Escape");
 
-  // The USB tab: a prepared drive is offered the export, the copy runs
-  // through the usual confirmed flow, and verification follows.
-  await page.locator('.tab[data-act="home"]').click();
+  // A stick: a prepared drive is offered the export, the copy runs through
+  // the usual confirmed flow, and verification follows.
   await page.locator('[data-act="demo-insert"][data-id="samsung-64"]').click();
-  await page.getByText("Scanned").waitFor({ timeout: 15000 });
-  await click("Yes, that's it");
-  await click("See detailed report");
-  await page.getByRole("table").waitFor();
-  await click("It's fine, go to the export step");
+  const samsung = page.locator('.dev[data-dev="demo:samsung-64"]');
+  await samsung.waitFor();
+  await samsung.locator(".badge.y").first().waitFor({ timeout: 15000 });
+  await samsung.click();
+  await page.locator(".sheet").getByText("Scanned").waitFor({ timeout: 15000 });
+  await page.locator(".sheet").getByRole("button", { name: "Yes, that's it" }).click();
+  await page.locator(".sheet").getByRole("button", { name: "See detailed report" }).click();
+  await page.locator(".sheet").getByRole("table").waitFor();
+  await page.locator(".sheet").getByRole("button", { name: "It's fine, go to the export step" }).click();
   await page.getByText("Put your music on this USB").waitFor({ timeout: 15000 });
   await at("export-handoff with a local export");
   const offer = () => page.locator(`[data-copy-source="export:${name}"]`);
@@ -508,12 +634,17 @@ async function checkExport(page, text, at, click) {
   await at("copying a local export");
   await page.getByText("Verify before the gig").waitFor({ timeout: 20000 });
   check(true, "the copy of an export hands over to verification");
+  await page.keyboard.press("Escape");
+  await samsung.click();
+  includes(await text("#insp"), "Samsung", "a checked stick opens in the inspector");
+  same(await page.locator(".sheet").count(), 0, "a stick that was already identified opens no sheet");
+  check((await page.locator('#insp [data-act="device-report"]').count()) === 1, "the stick inspector offers its report");
 }
 
 async function checkReport(page, text) {
-  const main = await text("main#main");
-  includes(await text("main .eyebrow"), sandisk.summary.identification.display_name, "report names the drive");
-  same((await text("main h1")).trim().replace(/\s+/g, " "), `${VERDICT_LABEL[A.overall]}. ${A.headline}`, "report headline is the engine's verdict and headline");
+  const main = await text(".sheet-body");
+  includes(await text(".sheet-body .eyebrow"), sandisk.summary.identification.display_name, "report names the drive");
+  same((await text(".sheet-body h1")).trim().replace(/\s+/g, " "), `${VERDICT_LABEL[A.overall]}. ${A.headline}`, "report headline is the engine's verdict and headline");
   includes(main, `For ${preset.title.toLowerCase()}`, "report names the chosen preset");
 
   // The matrix: one row per device the engine assessed, each cell labelled
@@ -565,7 +696,7 @@ async function checkReport(page, text) {
   check((await rebuild.count()) >= 1, `the report offers "Rebuild as ${formatLabel(A.recommended_format)}"`);
   includes(main, "Rebuild as MBR + FAT32", "the report recommends MBR and FAT32");
   await page.getByRole("button", { name: "Why?" }).click();
-  includes(await text("main#main"), A.recommended_format.why, "Why? shows the engine's reasoning for the layout");
+  includes(await text(".sheet-body"), A.recommended_format.why, "Why? shows the engine's reasoning for the layout");
 
   // The kit plan: a card per role with its layout and capacity; the Legacy
   // Rescue is its own drive, and this one is the Main.

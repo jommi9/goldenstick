@@ -1,11 +1,32 @@
 // The BoothReady UI: one state object, one render function, and actions
-// wired through data-act attributes. Screens follow PRD §11-§43 and the
-// prototype flow in §99.
+// wired through data-act attributes. The window follows
+// docs/design/LIBRARY-REDESIGN.md: a player strip, an icon rail, a tree of
+// playlists and sticks, the track list, an inspector and a status bar. The
+// check, erase, copy and verify flows (PRD §11-§43) open as sheets over it.
 
 import { inTauri } from "./api";
 import type { Api } from "./api";
-import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus, waveArt } from "./art";
-import { initLibrary, libraryAct, libraryChange, libraryHomeRow, libraryInput, libraryPlayerBar, librarySourceName, librarySourceView, libraryView, refreshLibrary } from "./library";
+import { hardwareArt, statusIcon, usbArt, VERDICT_LABEL, verdictStatus } from "./art";
+import {
+  closeLibrarySheet,
+  focusSearch,
+  initLibrary,
+  libraryAct,
+  libraryChange,
+  libraryInput,
+  libraryInspector,
+  libraryList,
+  libraryListKey,
+  libraryPlayKey,
+  libraryScrolled,
+  librarySelection,
+  librarySelectionIndex,
+  librarySheet,
+  libraryStatus,
+  libraryTree,
+  playerStrip,
+  refreshLibrary,
+} from "./library";
 import type {
   AppInfo,
   Candidate,
@@ -38,6 +59,7 @@ import {
   EVIDENCE_LABEL,
   FS_LABEL,
   gb,
+  esc,
   html,
   LIB_LABEL,
   num,
@@ -65,11 +87,10 @@ type View =
   | { v: "copying"; id: string; from: string }
   | { v: "verify"; id: string }
   | { v: "ready" }
-  | { v: "kit-next"; role: Role }
-  | { v: "testlab" }
-  | { v: "devtools" }
-  | { v: "library" }
-  | { v: "library-source"; id: string };
+  | { v: "kit-next"; role: Role };
+
+/** What fills the window behind the rail: the library, or one of the two tool pages. */
+type Panel = "library" | "testlab" | "devtools";
 
 interface Done {
   role: Role | null;
@@ -87,7 +108,15 @@ interface Done {
 const S = {
   api: null as unknown as Api,
   info: null as AppInfo | null,
+  /** The open sheet; "home" means none. */
   view: { v: "home" } as View,
+  panel: "library" as Panel,
+  /** The stick selected in the tree, if any. A library node is selected otherwise. */
+  node: null as string | null,
+  /** The inspector shown or hidden by hand; null follows the window width. */
+  insp: null as boolean | null,
+  /** Every player BoothReady knows, for names; `hardware` holds the current search. */
+  allHardware: [] as HardwareCard[],
   devices: [] as DeviceCard[],
   summaries: new Map<string, DriveSummary>(),
   scanning: new Map<string, { files: number; total?: number; bytes: number }>(),
@@ -169,11 +198,12 @@ function go(view: View) {
     S.verifyProgress = null;
     S.verifyFor = view.id;
   }
+  const opened = S.view.v !== view.v || ("id" in S.view && "id" in view && S.view.id !== view.id);
   S.view = view;
   S.cell = null;
   render();
-  window.scrollTo({ top: 0 });
-  document.getElementById("main")?.focus({ preventScroll: true });
+  // A new step starts at the top of its sheet.
+  if (opened) document.querySelector(".sheet-body")?.scrollTo({ top: 0 });
 }
 
 const card = (id: string) => S.devices.find((d) => d.device.id === id);
@@ -182,7 +212,7 @@ const nameOf = (id: string) => summary(id)?.identification.display_name ?? card(
 /** The name of something a copy comes from: a drive, or an export built on this computer. */
 const copySourceName = (id: string) => (id.startsWith("export:") ? (S.copySources.find((c) => c.device_id === id)?.display_name ?? id.slice(7)) : nameOf(id));
 const preset = () => S.presets.find((p) => p.id === S.presetId) ?? null;
-const hwName = (id: string) => S.hardware.find((h) => h.id === id)?.model ?? id;
+const hwName = (id: string) => S.allHardware.find((h) => h.id === id)?.model ?? S.hardware.find((h) => h.id === id)?.model ?? id;
 const devEnabled = () => Boolean(S.info?.demo || !inTauri);
 
 function devLog(message: string) {
@@ -372,10 +402,22 @@ async function scan(id: string) {
   render();
 }
 
+/** Opens a stick's check as a sheet, picking up a scan that already ran in the background. */
 async function openDevice(id: string) {
   S.alert = null;
   S.showTracks = false;
+  S.node = id;
+  if (S.summaries.has(id) && S.confirmedId.has(id)) {
+    go({ v: "assessment", id });
+    return;
+  }
   go({ v: "identify", id });
+  if (!S.summaries.has(id) && !S.scanning.has(id)) await scan(id);
+}
+
+/** Reads a stick that was plugged in, so the tree can show its space, libraries and readiness. */
+async function scanQuietly(id: string) {
+  if (S.summaries.has(id) || S.scanning.has(id)) return;
   await scan(id);
 }
 
@@ -403,15 +445,21 @@ async function onDeviceEvent(e: { kind: string; id?: string; device?: { id: stri
   const viewId = "id" in view ? view.id : null;
   if (e.kind === "appeared") {
     const c = card(id);
-    if (c?.is_usb && (view.v === "home" || view.v === "kit-next")) {
-      if (view.v === "kit-next") S.role = view.role;
+    // The next stick of a kit is what that sheet waits for; any other stick
+    // appears in the tree with a toast and never takes over the window.
+    if (c?.is_usb && view.v === "kit-next") {
+      S.role = view.role;
       await openDevice(id);
       return;
     }
-    if (c?.is_usb) toast(`${c.identification.display_name} connected.`);
+    if (c?.is_usb) {
+      toast(`${c.identification.display_name} connected. It is listed under Devices.`);
+      void scanQuietly(id);
+    }
   } else if (e.kind === "disappeared") {
     S.summaries.delete(id);
     S.assessments.delete(id);
+    if (S.node === id) S.node = null;
     if (viewId === id) {
       if (view.v === "preparing" && !S.prepareError) {
         S.alert = { kind: "bad", text: "USB disconnected before preparation finished. Don't use this USB for a gig yet. Plug it back in to rebuild it." };
@@ -608,15 +656,82 @@ async function act(el: HTMLElement) {
   switch (a) {
     case "home":
       S.role = null;
+      S.panel = "library";
       go({ v: "home" });
       await refreshDevices();
       render();
       break;
+    case "close-sheet":
+      closeSheet();
+      break;
     case "open-devtools":
-      if (devEnabled()) go({ v: "devtools" });
+      if (devEnabled()) {
+        S.panel = "devtools";
+        go({ v: "home" });
+      }
       break;
     case "open-test-lab":
-      go({ v: "testlab" });
+      S.panel = "testlab";
+      go({ v: "home" });
+      break;
+    case "panel-library":
+      S.panel = "library";
+      render();
+      break;
+    case "focus-search":
+      S.panel = "library";
+      render();
+      focusSearch();
+      break;
+    case "toggle-inspector":
+      S.insp = !inspectorOpen();
+      render();
+      break;
+    case "rail-devices": {
+      S.panel = "library";
+      const first = S.devices.find((d) => d.is_usb);
+      if (first && !S.node) S.node = first.device.id;
+      render();
+      document.getElementById("tree-devices")?.scrollIntoView({ block: "start" });
+      break;
+    }
+    case "rail-kit":
+      if (S.done.length) go({ v: "ready" });
+      else {
+        S.panel = "library";
+        render();
+        document.getElementById("tree-kit")?.scrollIntoView({ block: "start" });
+        toast("No stick of this kit is verified yet. Select a stick under Devices to check it.");
+      }
+      break;
+    case "fullscreen":
+      await toggleFullscreen();
+      break;
+    case "device-select":
+      S.panel = "library";
+      S.node = id;
+      S.insp = true;
+      // A stick that hasn't been identified yet opens its check; a known one just shows in the inspector.
+      if (!S.confirmedId.has(id)) await openDevice(id);
+      else render();
+      break;
+    case "device-check":
+      await openDevice(id);
+      break;
+    case "device-report":
+      S.node = id;
+      await reassess(id);
+      go({ v: "report", id });
+      break;
+    case "device-export":
+      S.node = id;
+      go({ v: "export", id });
+      await startExportWatch(id);
+      break;
+    case "device-verify":
+      S.node = id;
+      S.verifyFor = null;
+      go({ v: "verify", id });
       break;
     case "run-virtual-tests":
       await runVirtualTests();
@@ -896,8 +1011,9 @@ async function act(el: HTMLElement) {
       S.testLabError = null;
       S.testLabBaselinePath = null;
       S.testLabScenario = "all";
+      S.node = null;
       await refreshDevices();
-      go(S.view.v === "devtools" ? { v: "devtools" } : { v: "home" });
+      go({ v: "home" });
       break;
     case "dismiss-alert":
       S.alert = null;
@@ -947,93 +1063,287 @@ async function doFix(id: string, kind: string) {
 
 // ------------------------------------------------------------------ views
 
-/** Where the current screen sits, shown like a player's browse path. */
-const CRUMB: Record<View["v"], string[]> = {
-  home: ["USB"],
-  buying: ["USB", "Buying guide"],
-  identify: ["USB", "Identify"],
-  "looks-different": ["USB", "Identify"],
-  assessment: ["USB", "Check"],
-  targets: ["USB", "Players"],
-  hardware: ["USB", "Players", "Search"],
-  report: ["USB", "Report"],
-  confirm: ["USB", "Erase"],
-  preparing: ["USB", "Preparing"],
-  export: ["USB", "Export"],
-  copying: ["USB", "Copy"],
-  verify: ["USB", "Verify"],
-  ready: ["Gig kit"],
-  "kit-next": ["Gig kit", "Next USB"],
-  testlab: ["Test lab"],
-  devtools: ["Dev tools"],
-  library: ["Library"],
-  "library-source": ["Library", "Source"],
+/** Where each sheet sits, shown like a player's browse path after the stick's name. */
+const SHEET: Record<Exclude<View["v"], "home">, { step: string; narrow: boolean; closable: boolean }> = {
+  buying: { step: "Buying guide", narrow: false, closable: true },
+  identify: { step: "Identify", narrow: false, closable: true },
+  "looks-different": { step: "Identify", narrow: false, closable: true },
+  assessment: { step: "Check", narrow: true, closable: true },
+  targets: { step: "Players", narrow: true, closable: true },
+  hardware: { step: "Players", narrow: false, closable: true },
+  report: { step: "Report", narrow: false, closable: true },
+  confirm: { step: "Erase", narrow: true, closable: true },
+  preparing: { step: "Preparing", narrow: true, closable: false },
+  export: { step: "Export", narrow: true, closable: true },
+  copying: { step: "Copy", narrow: true, closable: true },
+  verify: { step: "Verify", narrow: true, closable: true },
+  ready: { step: "Gig kit", narrow: false, closable: true },
+  "kit-next": { step: "Next USB", narrow: true, closable: true },
 };
 
-function shell(content: Raw): Raw {
-  const info = S.info;
-  const v = S.view.v;
-  const section = v === "library" || v === "library-source" ? "library" : v === "testlab" || v === "devtools" ? v : "usb";
-  const tab = (id: string, act: string, label: string) => html`<button class="tab" data-act="${act}" ${section === id ? raw('aria-current="page"') : ""}>${label}</button>`;
-  const usbs = S.devices.filter((d) => d.is_usb).length;
-  const crumbs = S.view.v === "library-source" ? ["Library", librarySourceName(S.view.id)] : CRUMB[v];
-  return html`<div class="app">
-    <header class="topbar">
-      <button class="btn link brand" data-act="home" aria-label="BoothReady home"><span class="brand-mark">BR</span><span class="brand-name">BoothReady</span></button>
-      <nav class="tabs" aria-label="Sections">
-        ${tab("usb", "home", "USB")}
-        ${tab("library", "open-library", "Library")}
-        ${tab("testlab", "open-test-lab", "Test lab")}
-        ${devEnabled() ? tab("devtools", "open-devtools", "Dev tools") : ""}
-      </nav>
-      <span class="spacer"></span>
-      ${info?.demo ? html`<span class="pill accent">Demo mode: simulated USB drives</span>` : ""}
-      ${S.done.length ? html`<button class="btn" data-act="to-ready">Gig kit (${S.done.length})</button>` : ""}
-    </header>
-    <div class="pathbar" aria-hidden="true">
-      <span class="crumbs">${crumbs.map((c, i) => html`${i ? html`<i>▸</i>` : ""}<span>${c}</span>`)}</span>
-      <span class="spacer"></span>
-      <span class="lamp ${usbs ? "on" : ""}"></span><span>${usbs ? `${plural(usbs, "USB drive")} connected` : "No USB connected"}</span>
+/** Ruleset review status in a few words for the status bar; the full note is its tooltip. */
+const RULES_SHORT: Record<string, string> = {
+  seed: "seed data, not reviewed",
+  desk_reviewed: "desk reviewed, not yet tested on hardware",
+};
+
+const ICON = {
+  library: '<svg class="i" viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16.5 5.5l3.5 1-3 13-3.5-1z"/></svg>',
+  search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>',
+  sources: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/><path d="M12 12v5M9.5 14.5h5"/></svg>',
+  usb: '<svg class="i" viewBox="0 0 24 24"><rect x="7" y="9" width="10" height="12" rx="2"/><path d="M9 9V4h6v5M10.5 6h0M13.5 6h0"/></svg>',
+  kit: '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2"/></svg>',
+  lab: '<svg class="i" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/></svg>',
+  dev: '<svg class="i" viewBox="0 0 24 24"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/></svg>',
+  full: '<svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  close: '<svg class="i" viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  folder: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
+};
+
+// The window scales with the screen: it is designed at 1900 px wide, so a
+// 2560 px display draws everything about 35% larger instead of leaving empty
+// space, and a laptop panel draws it slightly smaller, never below 90%.
+const DESIGN_WIDTH = 1900;
+let zoom = 1;
+
+function applyZoom() {
+  zoom = Math.min(1.4, Math.max(0.9, window.innerWidth / DESIGN_WIDTH));
+  document.documentElement.style.setProperty("zoom", String(zoom));
+}
+
+/** The inspector follows the window until it is toggled: hidden below 1700 px of layout width. */
+function inspectorOpen(): boolean {
+  return S.insp ?? window.innerWidth / zoom >= 1700;
+}
+
+let fullscreen = false;
+
+async function toggleFullscreen() {
+  if (inTauri) {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const w = getCurrentWindow();
+    fullscreen = !(await w.isFullscreen());
+    await w.setFullscreen(fullscreen);
+  } else if (document.fullscreenElement) {
+    await document.exitFullscreen();
+    fullscreen = false;
+  } else {
+    await document.documentElement.requestFullscreen().catch(() => {});
+    fullscreen = !!document.fullscreenElement;
+  }
+  render();
+}
+
+function closeSheet() {
+  if (S.view.v !== "home") {
+    if (!SHEET[S.view.v].closable) return;
+    if (S.view.v === "kit-next") S.role = null;
+    go({ v: "home" });
+    return;
+  }
+  if (closeLibrarySheet()) render();
+}
+
+const usbCount = () => S.devices.filter((d) => d.is_usb).length;
+
+function titleBar(): Raw {
+  const n = usbCount();
+  const p = preset();
+  return html`<header class="titlebar">
+    <div class="brand"><b>BOOTH</b>READY</div>
+    <span class="pill"><i class="dot ${n ? "ok" : ""}"></i>${n ? `${plural(n, "stick")} connected` : "No stick connected"}</span>
+    ${S.info?.demo ? html`<span class="pill accent">Demo mode: simulated USB drives</span>` : ""}
+    <span class="spacer"></span>
+    <span class="pill">Judging against <b>${p?.title ?? plural(S.targets.length, "player")}</b></span>
+    ${S.done.length ? html`<button class="pill" data-act="to-ready">Gig kit <b>${S.done.length} ready</b></button>` : ""}
+    <span class="pill" title="Nothing about your music leaves this computer.">Runs locally</span>
+    <button class="pill" data-act="fullscreen" title="Full screen (F)">${raw(ICON.full)}${fullscreen ? "Exit full screen" : "Full screen"}</button>
+  </header>`;
+}
+
+function rail(): Raw {
+  const btn = (act: string, label: string, ic: string, on = false, extra: Raw | string = "") =>
+    html`<button data-act="${act}" title="${label}" aria-label="${label}" ${on ? raw('aria-current="page"') : ""}>${raw(ic)}${extra}</button>`;
+  return html`<nav class="rail" aria-label="Sections">
+    ${btn("panel-library", "Library", ICON.library, S.panel === "library")}
+    ${btn("focus-search", "Search (Cmd+F)", ICON.search)}
+    ${btn("open-library", "Music sources", ICON.sources)}
+    ${btn("rail-devices", "Devices (Cmd+3)", ICON.usb, false, usbCount() ? html`<span class="badge-n">${usbCount()}</span>` : "")}
+    ${btn("rail-kit", "Gig kit", ICON.kit)}
+    <div class="grow"></div>
+    ${btn("open-test-lab", "Test lab", ICON.lab, S.panel === "testlab")}
+    ${devEnabled() ? btn("open-devtools", "Dev tools", ICON.dev, S.panel === "devtools") : ""}
+  </nav>`;
+}
+
+/** The label a player would show for a stick: its volume name, else the product. */
+function stickLabel(d: DeviceCard): string {
+  const s = summary(d.device.id);
+  return s?.fs_label ?? primaryVolume(d.device)?.label ?? d.identification.display_name;
+}
+
+const BADGES: [string, (f: string[]) => boolean][] = [
+  ["RB", (f) => f.includes("rekordbox_device_library")],
+  ["ONELIB", (f) => f.includes("rekordbox_one_library")],
+  ["ENGINE", (f) => f.includes("engine_database") || f.includes("engine_prime_legacy")],
+  ["SERATO", (f) => f.includes("serato_library")],
+];
+
+const STATUS_DOT: Record<string, string> = { pass: "ok", warn: "warn", fail: "bad", unknown: "", info: "" };
+
+function deviceNode(d: DeviceCard): Raw {
+  const id = d.device.id;
+  const s = summary(id);
+  const a = S.assessments.get(id);
+  const v = primaryVolume(d.device);
+  const used = s?.content.used_bytes ?? null;
+  const pct = used === null ? 0 : Math.min(100, (100 * used) / Math.max(1, d.device.size_bytes));
+  const fs = s?.filesystem ?? (v?.filesystem ? FS_LABEL[v.filesystem] : null);
+  const scanning = S.scanning.get(id);
+  const verdict = a ? VERDICT_LABEL[a.overall] : null;
+  const on = S.node === id && S.panel === "library";
+  const playlists = s?.playlists.filter((p) => !p.is_folder) ?? [];
+  return html`<button class="dev ${on ? "on" : ""}" data-act="device-select" data-id="${id}" data-dev="${id}">
+      <div class="row1">${raw(ICON.usb)}<span class="lab">${stickLabel(d)}</span>${scanning ? raw('<span class="spinner" aria-hidden="true"></span>') : html`<i class="dot ${a ? STATUS_DOT[verdictStatus(a.overall)] : ""}" title="${verdict ?? "Not checked yet"}"></i>`}</div>
+      <div class="mdl">${[d.identification.display_name, s?.scheme, fs].filter(Boolean).join(" · ")}</div>
+      <div class="cap"><i style="width:${used === null ? 0 : Math.max(pct, 1.5)}%"></i></div>
+      <div class="minicap num"><span>${used === null ? `${gb(d.device.size_bytes)}` : `${gb(used)} of ${gb(d.device.size_bytes)}`}</span><span>${scanning ? `reading${scanning.files ? `, ${plural(scanning.files, "track")}` : ""}` : s ? plural(s.library_tracks || s.tracks_scanned, "track") : "not read yet"}</span></div>
+      <div class="badges">${BADGES.map(([l, has]) => html`<span class="badge ${s && has(s.formats) ? "y" : ""}">${l}</span>`)}</div>
+    </button>
+    ${on && playlists.length ? html`<div class="kids">${playlists.slice(0, 40).map((p) => html`<div class="node dim" style="--depth:1"><span class="caret"></span><span class="label">${raw(ICON.folder)}<span class="nm">${p.name}</span><span class="ct">${num(p.tracks)}</span></span></div>`)}</div>` : ""}`;
+}
+
+function devicesSection(): Raw {
+  const usbs = S.devices.filter((d) => d.is_usb);
+  const others = S.devices.filter((d) => !d.is_usb);
+  return html`<div class="sec" id="tree-devices"><span class="lbl">Devices</span>${usbs.length ? "" : html`<button class="btn link" data-act="buying">Buying a stick</button>`}</div>
+    ${usbs.length ? usbs.map(deviceNode) : html`<div class="hint">Plug in a USB stick and it appears here.</div>`}
+    ${S.info?.demo
+      ? html`<div class="sec"><span class="lbl">Simulated sticks</span>${inTauri ? html`<button class="btn link" data-act="demo-off">Use real drives</button>` : ""}</div>
+        ${S.demoSticks.map((d) => html`<div class="sim"><span class="nm" title="${d.description}">${d.title} · ${d.size_gb} GB</span>${d.inserted ? html`<button class="btn small" data-act="demo-remove" data-id="${d.name}">Pull out</button>` : html`<button class="btn small" data-act="demo-insert" data-id="${d.name}">Plug in</button>`}</div>`)}`
+      : html`<div class="hint">No stick handy? <button class="btn link" data-act="demo-on">Try simulated drives</button></div>`}
+    ${others.length ? html`<div class="hint" title="${others.map((d) => `${d.identification.display_name}: ${d.eligibility.reasons.join(" ")}`).join("\n")}">${plural(others.length, "other disk")} hidden. They are not USB sticks and are never offered for erasing.</div>` : ""}`;
+}
+
+function kitSectionTree(): Raw {
+  const roles = S.plan?.roles ?? [];
+  return html`<div class="sec" id="tree-kit"><span class="lbl">Gig kit</span>${S.done.length ? html`<button class="btn link" data-act="to-ready">Open</button>` : ""}</div>
+    ${roles.map((r) => {
+      const done = S.done.find((d) => d.role === r.role);
+      const assigned = r.assigned_drive ? card(r.assigned_drive) : undefined;
+      const name = done?.name ?? (assigned ? stickLabel(assigned) : "not assigned");
+      return html`<div class="node ${done ? "" : "dim"}"><span class="caret"></span><button class="label" ${done ? raw('data-act="to-ready"') : assigned ? raw(`data-act="switch-device" data-id="${esc(assigned.device.id)}" data-role="${r.role}"`) : ""}>${raw(ICON.usb)}<span class="nm">${ROLE_LABEL[r.role]}</span><span class="ct">${done ? "verified" : name}</span></button></div>`;
+    })}
+    ${S.profiles.map((p) => html`<div class="node"><span class="caret"></span><button class="label" data-act="load-profile" data-id="${p.id}" title="${plural(p.targets.length, "player")}${p.redundancy ? ", with backup" : ""}">${raw(ICON.kit)}<span class="nm">${p.name}</span><span class="ct">use</span></button></div>`)}
+    ${S.known.length ? html`<div class="hint">Known sticks: ${S.known.map((k) => k.nickname ?? k.display_name).join(", ")}</div>` : ""}`;
+}
+
+function tree(): Raw {
+  return html`<aside class="tree" aria-label="Library and devices" data-keep-scroll="tree">
+    ${libraryTree()}
+    ${devicesSection()}
+    ${kitSectionTree()}
+  </aside>`;
+}
+
+/** The stick inspector. Step 2 of the redesign adds the readiness matrix and the sync queue here. */
+function deviceInspector(id: string): Raw {
+  const d = card(id);
+  if (!d) return html`<div class="empty">That stick was removed.</div>`;
+  const s = summary(id);
+  const a = S.assessments.get(id);
+  const used = s?.content.used_bytes ?? 0;
+  const libs = s?.formats.map((f) => LIB_LABEL[f] ?? f) ?? [];
+  const scanning = S.scanning.get(id);
+  return html`<div class="hd"><div class="lbl">Stick</div><h2 class="stick">${stickLabel(d)}</h2><div class="by">${d.identification.display_name}</div>
+      ${s ? html`<div class="cap" style="height:8px;margin-top:12px"><i style="width:${Math.min(100, (100 * used) / Math.max(1, d.device.size_bytes))}%"></i></div>
+        <div class="minicap num"><span>${gb(used)} used</span><span>${gb(Math.max(0, d.device.size_bytes - used))} free</span></div>` : ""}
     </div>
-    <main id="main" tabindex="-1">
-      ${S.alert ? html`<div class="banner ${S.alert.kind}" role="alert" style="margin-bottom:18px"><div style="flex:1">${S.alert.text}</div><button class="btn link" data-act="dismiss-alert">Dismiss</button></div>` : ""}
-      ${content}
-    </main>
-    ${libraryPlayerBar()}
-    <footer class="foot">
-      <span>BoothReady ${info?.version ?? ""}</span>
-      <span>Compatibility rules v${info?.rules_version ?? "?"}${RULES_STATUS[info?.rules_review_status ?? ""] ?? ""}</span>
-      <span>Runs locally. Nothing about your music leaves this computer.</span>
-      <button class="btn link small" data-act="save-diagnostics" title="Saves how BoothReady reads your drives to a file in Downloads, for bug reports. No file names.">Save diagnostics</button>
-    </footer>
-    <div aria-live="polite" class="sr-only" id="live">${S.toast ?? ""}</div>
-    ${S.toast ? html`<div class="toast" role="status">${S.toast}</div>` : ""}
+    ${a ? html`<section><span class="lbl">Readiness</span><div><span class="verdict ${verdictStatus(a.overall)}">${VERDICT_LABEL[a.overall]}.</span> ${a.headline}</div>
+        <div class="hint" style="margin-top:6px">For ${preset()?.title.toLowerCase() ?? S.targets.map(hwName).join(", ")}.</div></section>` : ""}
+    <section><dl class="kv">
+      <dt>Device</dt><dd><code>${id}</code></dd>
+      <dt>Size</dt><dd class="num">${gb(d.device.size_bytes)}</dd>
+      <dt>Layout</dt><dd>${s ? [s.scheme, s.filesystem].filter(Boolean).join(" + ") : (d.device.partition_scheme?.toUpperCase() ?? "not read yet")}</dd>
+      <dt>Libraries</dt><dd>${s ? (libs.length ? libs.join(", ") : "none") : "not read yet"}</dd>
+      ${s ? html`<dt>Tracks</dt><dd class="num">${num(s.tracks_scanned)} scanned${s.library_tracks ? `, ${num(s.library_tracks)} in rekordbox` : ""}</dd>` : ""}
+      ${s ? html`<dt>Connection</dt><dd>${s.connection}</dd>` : ""}
+    </dl>
+    ${scanning ? html`<div class="hint" style="margin-top:8px"><span class="spinner" aria-hidden="true"></span> Reading the stick${scanning.files ? `: ${plural(scanning.files, "track")}` : ""}.</div>` : ""}
+    </section>
+    <section><div class="actions" style="margin-top:0">
+      <button class="btn primary" data-act="device-check" data-id="${id}">Check this stick</button>
+      ${s ? html`<button class="btn" data-act="device-report" data-id="${id}">Report</button><button class="btn" data-act="device-export" data-id="${id}">Put music on it</button><button class="btn" data-act="device-verify" data-id="${id}">Verify</button>` : ""}
+    </div></section>`;
+}
+
+function inspector(): Raw {
+  return html`<aside class="insp" id="insp" aria-label="Inspector" data-keep-scroll="insp">${S.node && card(S.node) ? deviceInspector(S.node) : libraryInspector()}</aside>`;
+}
+
+function statusBar(): Raw {
+  const info = S.info;
+  const scanning = [...S.scanning.entries()][0];
+  const sel = S.panel === "library" && !S.node ? librarySelection() : "";
+  return html`<footer class="status foot">
+    ${libraryStatus()}
+    ${scanning ? html`<span><span class="spinner" aria-hidden="true"></span>Reading ${nameOf(scanning[0])}${scanning[1].files ? `: ${plural(scanning[1].files, "track")}` : ""}</span>` : html`<span>${plural(usbCount(), "stick")} connected</span>`}
+    <span class="spacer"></span>
+    ${sel ? html`<span>${sel}</span>` : ""}
+    <span title="Compatibility rules v${info?.rules_version ?? "?"}${RULES_STATUS[info?.rules_review_status ?? ""] ?? ""}">Compatibility rules v${info?.rules_version ?? "?"}, ${RULES_SHORT[info?.rules_review_status ?? ""] ?? info?.rules_review_status ?? ""}</span>
+    <button class="btn link" data-act="save-diagnostics" title="Saves how BoothReady reads your drives to a file in Downloads, for bug reports. No file names.">Save diagnostics</button>
+    <span>BoothReady ${info?.version ?? ""}</span>
+  </footer>`;
+}
+
+function sheet(): Raw {
+  let crumbs: string[];
+  let content: Raw;
+  let narrow: boolean;
+  let closable: boolean;
+  if (S.view.v !== "home") {
+    const meta = SHEET[S.view.v];
+    const id = "id" in S.view ? S.view.id : null;
+    crumbs = id ? [nameOf(id), meta.step] : S.view.v === "kit-next" || S.view.v === "ready" ? ["Gig kit", meta.step] : ["USB", meta.step];
+    if (S.view.v === "ready") crumbs = ["Gig kit"];
+    content = body();
+    narrow = meta.narrow;
+    closable = meta.closable;
+  } else {
+    const lib = librarySheet();
+    if (!lib) return html``;
+    ({ crumbs, narrow, closable } = lib);
+    content = lib.body;
+  }
+  const dedup = crumbs.filter((c, i) => c !== crumbs[i - 1]);
+  return html`<div class="veil" data-veil>
+    <div class="sheet ${narrow ? "narrow" : ""}" role="dialog" aria-modal="true" aria-label="${dedup.join(", ")}">
+      <div class="sheet-head"><span class="crumbs">${dedup.map((c, i) => html`${i ? html`<i>▸</i>` : ""}<span>${c}</span>`)}</span>${closable ? html`<button class="sheet-close" data-act="close-sheet" aria-label="Close" title="Close (Esc)">${raw(ICON.close)}</button>` : ""}</div>
+      <div class="sheet-body" id="sheet-body" data-keep-scroll="sheet-${S.view.v}">
+        ${S.alert ? html`<div class="banner ${S.alert.kind}" role="alert" style="margin-bottom:16px"><div>${S.alert.text}</div><button class="btn link" data-act="dismiss-alert">Dismiss</button></div>` : ""}
+        ${content}
+      </div>
+    </div>
   </div>`;
 }
 
-function homeView(): Raw {
-  const usbs = S.devices.filter((d) => d.is_usb);
-  const others = S.devices.filter((d) => !d.is_usb);
-  return html`
-    <section class="hero">
-      <div class="wave">${raw(waveArt())}</div>
-      <div class="plug-art">${raw(usbArt("stick-slider", "#d9d9de", 150, "A USB drive"))}</div>
-      ${usbs.length
-        ? html`<h1>${usbs.length === 1 ? "USB connected" : `${usbs.length} USBs connected`}</h1>
-            <p class="muted" style="max-width:520px">Pick it below to see what's on it and where it will work.</p>`
-        : html`<h1>Plug in a USB</h1>
-            <p class="muted" style="max-width:520px">We'll identify it, check what's on it and tell you where it will work.</p>
-            <button class="btn link" data-act="buying">I don't have a USB yet</button>`}
-    </section>
-    <div class="stack">
-      <p class="home-intro">BoothReady does two things. It checks a USB you already have, and it helps you build one from your music.</p>
-      <section><div class="eyebrow">1 · Check a USB</div>${usbs.length ? html`<div class="devlist">${usbs.map(deviceRow)}</div>` : html`<div class="home-wait">Connect a USB drive and it appears here.</div>`}</section>
-      ${libraryHomeRow()}
-      ${S.info?.demo ? demoPanel() : html`<p class="small faint" style="text-align:center">No USB handy? <button class="btn link" data-act="demo-on">Try it with simulated drives</button></p>`}
-      ${S.profiles.length ? html`<section><div class="eyebrow">My gig kits</div><div class="devlist">${S.profiles.map((p) => html`<button class="devrow" data-act="load-profile" data-id="${p.id}"><div class="grow"><b>${p.name}</b><div class="small muted">${plural(p.targets.length, "player")}${p.redundancy ? ", with backup" : ""}</div></div><span class="pill">Use</span></button>`)}</div></section>` : ""}
-      ${S.known.length ? html`<section><div class="eyebrow">Known USBs</div><div class="small muted">${S.known.map((k) => k.nickname ?? k.display_name).join(", ")}</div></section>` : ""}
-      ${others.length ? html`<details class="small faint"><summary>${plural(others.length, "other disk")} hidden (not USB drives, never offered for erasing)</summary><ul>${others.map((d) => html`<li>${d.identification.display_name}: ${d.eligibility.reasons.join(" ")}</li>`)}</ul></details>` : ""}
-    </div>`;
+function shell(): Raw {
+  const open = inspectorOpen();
+  const page = S.panel !== "library";
+  return html`<div class="app">
+    ${titleBar()}
+    ${playerStrip()}
+    <div class="main ${page ? "page" : open ? "" : "noinsp"}" id="main">
+      ${rail()}
+      ${page
+        ? html`<div class="pagewrap" data-keep-scroll="page-${S.panel}">${S.alert && S.view.v === "home" ? html`<div class="banner ${S.alert.kind}" role="alert" style="margin:16px 28px 0"><div>${S.alert.text}</div><button class="btn link" data-act="dismiss-alert">Dismiss</button></div>` : ""}${S.panel === "testlab" ? testLabView() : developerView()}</div>`
+        : html`${tree()}${libraryList(open)}${open ? inspector() : ""}`}
+    </div>
+    ${statusBar()}
+    ${sheet()}
+    <div aria-live="polite" class="sr-only" id="live">${S.toast ?? ""}</div>
+    ${S.toast ? html`<div class="toast" role="status">${S.toast}</div>` : ""}
+  </div>`;
 }
 
 function developerView(): Raw {
@@ -1134,14 +1444,6 @@ function testLabView(): Raw {
       <div class="test-catalog">${S.testScenarios.map((s) => html`<div><b>${s.title}</b><div class="small muted"><code>${s.id}</code> · ${s.description}</div></div>`)}</div>
     </section>
   </div>`;
-}
-
-function deviceRow(d: DeviceCard): Raw {
-  const v = primaryVolume(d.device);
-  return html`<button class="devrow" data-act="open-device" data-id="${d.device.id}">
-    ${raw(usbArt(d.identification.image, d.identification.color, 48, d.identification.display_name))}
-    <div class="grow"><b>${d.identification.display_name}</b><div class="small muted">${gb(d.device.size_bytes)}${v?.label ? ` · ${v.label}` : ""}${v?.filesystem ? ` · ${FS_LABEL[v.filesystem]}` : ""}</div></div>
-    <span class="pill">Check</span></button>`;
 }
 
 function demoPanel(): Raw {
@@ -1511,7 +1813,7 @@ function exportView(id: string): Raw {
         ${offers.map(offer)}
         <h2>${engine ? "Or add your music in Engine DJ" : "Or export from rekordbox"}</h2>`
       : html`<h1>${engine ? "Now add your music in Engine DJ" : "Now export from rekordbox"}</h1>`}
-    <p class="muted">${offers.some((o) => o.export) ? "rekordbox can also write this USB itself, and BoothReady checks the result either way." : "BoothReady builds rekordbox Device Libraries from the Library tab; otherwise rekordbox does that part, then BoothReady checks the result."}</p>
+    <p class="muted">${offers.some((o) => o.export) ? "rekordbox can also write this USB itself, and BoothReady checks the result either way." : "BoothReady builds rekordbox Device Libraries with Export to USB in the library; otherwise rekordbox does that part, then BoothReady checks the result."}</p>
     ${engine
       ? html`<ol><li>Open Engine DJ and find <b>${label}</b> under Devices.</li><li>Drag the playlists you need onto it and wait for the sync to finish.</li></ol>`
       : html`<ol>
@@ -1623,7 +1925,7 @@ function body(): Raw {
   const v = S.view;
   switch (v.v) {
     case "home":
-      return homeView();
+      return html``;
     case "buying":
       return buyingView();
     case "identify":
@@ -1652,33 +1954,106 @@ function body(): Raw {
       return readyView();
     case "kit-next":
       return kitNextView(v.role);
-    case "testlab":
-      return testLabView();
-    case "devtools":
-      return developerView();
-    case "library":
-      return libraryView();
-    case "library-source":
-      return librarySourceView(v.id);
   }
 }
 
 export function render() {
+  applyZoom();
   const active = document.activeElement as HTMLElement | null;
   const focusId = active?.id;
-  // Scrolling boxes inside a screen keep their place across a re-render,
-  // so ticking a folder deep in a long list doesn't jump back to the top.
+  const caret = active instanceof HTMLInputElement && active.type !== "checkbox" && active.type !== "range" ? [active.selectionStart, active.selectionEnd] : null;
+  // Scrolling regions keep their place across a re-render, so ticking a
+  // folder deep in a long list or selecting a row doesn't jump to the top.
   const scrolled = [...root().querySelectorAll<HTMLElement>("[data-keep-scroll]")].map((el) => [el.dataset.keepScroll, el.scrollTop] as const);
-  root().innerHTML = shell(body()).s;
+  root().innerHTML = shell().s;
   for (const [key, top] of scrolled) {
     const el = root().querySelector<HTMLElement>(`[data-keep-scroll="${key}"]`);
     if (el) el.scrollTop = top;
   }
-  if (focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
-  const search = document.getElementById("hwsearch") as HTMLInputElement | null;
-  if (search && focusId === "hwsearch") {
-    search.setSelectionRange(search.value.length, search.value.length);
+  if (focusId) {
+    const el = document.getElementById(focusId);
+    el?.focus({ preventScroll: true });
+    if (caret && el instanceof HTMLInputElement) {
+      try {
+        el.setSelectionRange(caret[0], caret[1]);
+      } catch {
+        // Some input types have no caret.
+      }
+    }
   }
+}
+
+/** Selecting a row redraws only the row highlight, the inspector and the status bar, so a double-click lands on the same row. */
+function refreshSelection() {
+  const list = document.getElementById("list");
+  if (!list) return render();
+  const rows = list.querySelectorAll<HTMLElement>("tr[data-row]");
+  rows.forEach((r) => r.classList.remove("sel"));
+  const t = document.createElement("template");
+  const sel = librarySelectionIndex();
+  if (sel !== null) rows[sel]?.classList.add("sel");
+  const insp = document.getElementById("insp");
+  if (insp && !S.node) {
+    t.innerHTML = inspector().s;
+    insp.replaceWith(t.content.firstElementChild!);
+  }
+  const status = root().querySelector("footer.status");
+  if (status) {
+    t.innerHTML = statusBar().s;
+    status.replaceWith(t.content.firstElementChild!);
+  }
+}
+
+function onKey(ev: KeyboardEvent) {
+  const mod = ev.metaKey || ev.ctrlKey;
+  const target = ev.target as HTMLElement | null;
+  const typing = !!target?.closest("input, textarea, select, [contenteditable]");
+  if (S.view.v !== "home" || librarySheet()) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeSheet();
+    }
+    return;
+  }
+  if (ev.key === "Escape" && typing) {
+    target?.blur();
+    return;
+  }
+  if (mod && ev.key.toLowerCase() === "f") {
+    ev.preventDefault();
+    void act(actionEl("focus-search"));
+  } else if (mod && ev.key.toLowerCase() === "i") {
+    ev.preventDefault();
+    void act(actionEl("toggle-inspector"));
+  } else if (mod && ev.key.toLowerCase() === "e") {
+    ev.preventDefault();
+    void act(actionEl("library-export-open"));
+  } else if (mod && ev.key === "1") {
+    ev.preventDefault();
+    void act(actionEl("library-open", "*"));
+  } else if (mod && ev.key === "2") {
+    ev.preventDefault();
+    const first = document.querySelector<HTMLElement>('.tree [data-act="library-folder"]');
+    if (first) void act(first);
+  } else if (mod && ev.key === "3") {
+    ev.preventDefault();
+    void act(actionEl("rail-devices"));
+  } else if (!mod && !typing && (ev.key === "f" || ev.key === "F") && !ev.altKey) {
+    ev.preventDefault();
+    void toggleFullscreen();
+  } else if (S.panel === "library" && !S.node && libraryListKey(ev)) {
+    return;
+  } else {
+    libraryPlayKey(ev);
+  }
+}
+
+/** A detached element carrying an action, for keyboard shortcuts that do what a button does. */
+function actionEl(a: string, id = ""): HTMLElement {
+  const el = document.createElement("button");
+  el.dataset.act = a;
+  if (id) el.dataset.id = id;
+  return el;
 }
 
 let searchTimer = 0;
@@ -1688,9 +2063,11 @@ export async function start(api: Api) {
   S.info = await api.appInfo();
   S.presets = await api.presets();
   S.hardware = await api.hardware();
+  S.allHardware = S.hardware;
   S.testScenarios = await api.testLabScenarios().catch(() => []);
   setPreset("unknown_club");
   [S.known, S.profiles] = await Promise.all([api.knownMedia(), api.profiles()]);
+  S.plan = await api.plan(S.targets, S.redundancy).catch(() => null);
   await refreshDevices();
   await initLibrary({
     api,
@@ -1700,15 +2077,19 @@ export async function start(api: Api) {
     presets: () => S.presets,
     presetId: () => S.presetId,
     setPreset,
-    showing: () => (S.view.v === "library" || S.view.v === "library-source" ? S.view : null),
-    openSource: (id) => go({ v: "library-source", id }),
-    openLibrary: () => go({ v: "library" }),
+    players: () => S.targets.map((id) => ({ id, model: hwName(id) })),
+    deviceSelected: () => S.node !== null,
+    selectLibrary: () => {
+      S.node = null;
+      S.panel = "library";
+    },
+    refreshSelection,
   });
   api.onDeviceEvent((e) => void onDeviceEvent(e as never));
   api.onScanProgress((p) => {
     if (S.scanning.has(p.device_id)) {
       S.scanning.set(p.device_id, { files: p.files, total: p.total, bytes: p.bytes });
-      if (S.view.v === "identify") render();
+      renderSoon();
     }
   });
   api.onPrepareProgress((p) => {
@@ -1729,9 +2110,18 @@ export async function start(api: Api) {
     const el = (ev.target as HTMLElement).closest<HTMLElement>("[data-act]");
     if (el && !(el as HTMLButtonElement).disabled) {
       ev.preventDefault();
+      // A double-click on a row loads it into the player.
+      if (el.dataset.act === "library-select" && ev.detail >= 2) {
+        void libraryAct("library-play-row", el.dataset.id ?? "").catch((e) => toast(String(e)));
+        return;
+      }
       void act(el).catch((e) => toast(String(e)));
+      return;
     }
+    // A click on the dimmed window around a sheet closes it, as Escape does.
+    if ((ev.target as HTMLElement).matches("[data-veil]")) closeSheet();
   });
+  root().addEventListener("scroll", (ev) => libraryScrolled(ev.target as HTMLElement), true);
   root().addEventListener("input", (ev) => {
     const t = ev.target as HTMLInputElement;
     if (libraryInput(t)) return;
@@ -1758,8 +2148,24 @@ export async function start(api: Api) {
       S.testLabKeepFixtures = (t as HTMLInputElement).checked;
     }
   });
+  document.addEventListener("keydown", onKey);
+  window.addEventListener("resize", () => render());
+  document.addEventListener("fullscreenchange", () => {
+    fullscreen = !!document.fullscreenElement;
+    render();
+  });
   render();
-  // A drive that's already plugged in when the app opens goes straight to its check.
-  const first = S.devices.find((d) => d.is_usb);
-  if (first && S.devices.filter((d) => d.is_usb).length === 1) await openDevice(first.device.id);
+  // Sticks already plugged in are read in the background, so the tree shows
+  // their space, libraries and readiness without opening anything.
+  for (const d of S.devices.filter((x) => x.is_usb)) await scanQuietly(d.device.id);
+}
+
+/** Scan progress can arrive per file, so it redraws at most every 100 ms. */
+let renderPending = 0;
+function renderSoon() {
+  if (renderPending) return;
+  renderPending = window.setTimeout(() => {
+    renderPending = 0;
+    render();
+  }, 100);
 }
