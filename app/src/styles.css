@@ -307,7 +307,7 @@ button.pill:hover {
   grid-template-columns: minmax(260px, 400px) minmax(0, 1fr) auto;
   align-items: center;
   gap: 22px;
-  height: 64px;
+  height: 140px;
   padding: 0 20px;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(#121316, #0e0f11);
@@ -2511,4 +2511,160 @@ input.search:focus,
 
 .kids {
   margin: -2px 12px 6px;
+}
+
+/* ------------------------------------------------------------------ folding tree */
+.tree .sec .sec-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  margin-left: -4px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree .sec .sec-toggle:hover .lbl {
+  color: var(--text);
+}
+
+.fold-caret {
+  width: 10px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+}
+
+.fold-caret::before {
+  content: "";
+  border-left: 4.5px solid transparent;
+  border-right: 4.5px solid transparent;
+  border-top: 5.5px solid var(--text-3);
+  transition: transform 0.12s ease;
+}
+
+.shut > .sec-toggle .fold-caret::before,
+.dev.shut .fold-caret::before {
+  transform: rotate(-90deg);
+}
+
+.dev .row1 .fold-caret {
+  margin-left: -2px;
+}
+
+.dev.shut {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+/* ------------------------------------------------------------------ waveforms */
+.player-wavebox {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 0 8px;
+}
+
+.player-wavewrap {
+  position: relative;
+  height: 74px;
+}
+
+.player-wave {
+  display: block;
+  width: 100%;
+  height: 74px;
+  background: #121317;
+  border-radius: 3px;
+}
+
+.player-wave.flat {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(transparent calc(50% - 0.5px), var(--line-2) calc(50% - 0.5px), var(--line-2) calc(50% + 0.5px), transparent calc(50% + 0.5px)), #121317;
+}
+
+.player-head {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--bad);
+  pointer-events: none;
+}
+
+.player-seek.over {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.player-phrase {
+  display: block;
+  width: 100%;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.player-phrase.flat {
+  background: var(--raised);
+}
+
+.player-wavebox .player-time {
+  justify-content: space-between;
+  align-items: center;
+  height: 24px;
+}
+
+.player-wavebox .player-time > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.player-phrasename {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.player-phrasename .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.player-key.small {
+  width: 24px;
+  height: 24px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+td.c-wave canvas.pv {
+  display: block;
+  width: 100%;
+  height: 22px;
+}
+
+.c-wave .base.busy {
+  background: linear-gradient(90deg, var(--line-2), var(--accent), var(--line-2));
+  background-size: 200% 100%;
+  animation: busy 1.2s linear infinite;
+}
+
+@keyframes busy {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }

@@ -147,7 +147,17 @@ async function walk() {
   includes(await text(".titlebar"), "1 stick connected", "the title bar counts the stick");
   includes(await text("footer.status"), "1 stick connected", "the status bar counts the stick");
 
+  // Tree sections and sticks fold like folders in a file explorer.
+  await page.locator('[data-act="fold"][data-id="sec:collection"]').click();
+  check((await page.locator('.tree [data-act="library-open"]').count()) === 0, "folding Collection hides its entries");
+  await page.locator('[data-act="fold"][data-id="sec:collection"]').click();
+  check((await page.locator('.tree [data-act="library-open"]').count()) > 0, "unfolding Collection shows them again");
   await dev.click();
+  check((await page.locator(".dev.shut").count()) === 1, "clicking a stick folds it like a drawer");
+  includes(await text("#insp"), "Check this stick", "the folded stick still shows in the inspector");
+  await page.locator(".dev").first().click();
+  check((await page.locator(".dev.shut").count()) === 0, "clicking the stick again unfolds it");
+  await page.locator('#insp [data-act="device-check"]').click();
   await page.locator(".sheet").getByText("We think this is").waitFor();
   await page.locator(".sheet").getByText("Scanned").waitFor({ timeout: 10000 });
   await at("identify");
@@ -611,6 +621,7 @@ async function checkExport(page, text, at, view) {
   await samsung.waitFor();
   await samsung.locator(".badge.y").first().waitFor({ timeout: 15000 });
   await samsung.click();
+  await page.locator('#insp [data-act="device-check"]').click();
   await page.locator(".sheet").getByText("Scanned").waitFor({ timeout: 15000 });
   await page.locator(".sheet").getByRole("button", { name: "Yes, that's it" }).click();
   await page.locator(".sheet").getByRole("button", { name: "See detailed report" }).click();

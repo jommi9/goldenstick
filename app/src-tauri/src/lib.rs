@@ -1162,6 +1162,26 @@ fn library_play(app: AppHandle, state: State<'_, AppState>, id: String, path: St
     Ok(file.display().to_string())
 }
 
+/// One track's analysis for the list and the player: from the cache the
+/// exports share, or analysed now when `analyze` is set. The window asks with
+/// `analyze` only for tracks already on this computer, so nothing is downloaded.
+#[tauri::command]
+async fn library_analysis(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+    analyze: bool,
+) -> Res<Option<boothready_core::export::analysis_view::AnalysisView>> {
+    let file = state.with_library(&app, |library| library.playable_path(&id, &path))??;
+    let cache = boothready_core::export::analysis_cache::AnalysisCache::new(export::analysis_cache_dir(&app, &state)?);
+    tauri::async_runtime::spawn_blocking(move || {
+        boothready_core::export::analysis_view::cached_or_analyzed(&cache, &file, analyze)
+    })
+    .await
+    .map_err(e2s)?
+}
+
 /// The folders inside a source, for the browser's tree.
 #[tauri::command]
 fn library_folders(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<Vec<library::FolderNode>> {
@@ -1320,6 +1340,7 @@ pub fn run() {
             library_tracks,
             library_folders,
             library_play,
+            library_analysis,
             library_collect_plan,
             library_collect,
             library_cancel_collect,

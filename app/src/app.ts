@@ -26,6 +26,7 @@ import {
   libraryTree,
   playerStrip,
   refreshLibrary,
+  paintWaveforms,
 } from "./library";
 import type {
   AppInfo,
@@ -70,6 +71,10 @@ import {
   ROLE_LABEL,
   RULES_STATUS,
   when,
+  isFolded,
+  secHead,
+  toggleFold,
+  unfold,
 } from "./ui";
 
 type View =
@@ -689,6 +694,7 @@ async function act(el: HTMLElement) {
       break;
     case "rail-devices": {
       S.panel = "library";
+      unfold("sec:devices");
       const first = S.devices.find((d) => d.is_usb);
       if (first && !S.node) S.node = first.device.id;
       render();
@@ -707,13 +713,19 @@ async function act(el: HTMLElement) {
     case "fullscreen":
       await toggleFullscreen();
       break;
+    case "fold":
+      toggleFold(id);
+      render();
+      break;
     case "device-select":
+      // A stick card works like a drawer: each click folds or unfolds it,
+      // and it becomes the stick the inspector shows.
+      toggleFold(`dev:${id}`);
       S.panel = "library";
       S.node = id;
       S.insp = true;
-      // A stick that hasn't been identified yet opens its check; a known one just shows in the inspector.
-      if (!S.confirmedId.has(id)) await openDevice(id);
-      else render();
+      // The inspector offers "Check this stick"; folding never opens a sheet.
+      render();
       break;
     case "device-check":
       await openDevice(id);
@@ -1202,21 +1214,29 @@ function deviceNode(d: DeviceCard): Raw {
   const scanning = S.scanning.get(id);
   const verdict = a ? VERDICT_LABEL[a.overall] : null;
   const on = S.node === id && S.panel === "library";
+  const shut = isFolded(`dev:${id}`);
   const playlists = s?.playlists.filter((p) => !p.is_folder) ?? [];
-  return html`<button class="dev ${on ? "on" : ""}" data-act="device-select" data-id="${id}" data-dev="${id}">
-      <div class="row1">${raw(ICON.usb)}<span class="lab">${stickLabel(d)}</span>${scanning ? raw('<span class="spinner" aria-hidden="true"></span>') : html`<i class="dot ${a ? STATUS_DOT[verdictStatus(a.overall)] : ""}" title="${verdict ?? "Not checked yet"}"></i>`}</div>
+  if (shut) {
+    return html`<button class="dev shut ${on ? "on" : ""}" data-act="device-select" data-id="${id}" data-dev="${id}" aria-expanded="false" title="Show this stick">
+      <div class="row1"><span class="fold-caret" aria-hidden="true"></span>${raw(ICON.usb)}<span class="lab">${stickLabel(d)}</span>${scanning ? raw('<span class="spinner" aria-hidden="true"></span>') : html`<i class="dot ${a ? STATUS_DOT[verdictStatus(a.overall)] : ""}" title="${verdict ?? "Not checked yet"}"></i>`}</div>
+    </button>`;
+  }
+  return html`<button class="dev ${on ? "on" : ""}" data-act="device-select" data-id="${id}" data-dev="${id}" aria-expanded="true" title="Hide this stick">
+      <div class="row1"><span class="fold-caret" aria-hidden="true"></span>${raw(ICON.usb)}<span class="lab">${stickLabel(d)}</span>${scanning ? raw('<span class="spinner" aria-hidden="true"></span>') : html`<i class="dot ${a ? STATUS_DOT[verdictStatus(a.overall)] : ""}" title="${verdict ?? "Not checked yet"}"></i>`}</div>
       <div class="mdl">${[d.identification.display_name, s?.scheme, fs].filter(Boolean).join(" · ")}</div>
       <div class="cap"><i style="width:${used === null ? 0 : Math.max(pct, 1.5)}%"></i></div>
       <div class="minicap num"><span>${used === null ? `${gb(d.device.size_bytes)}` : `${gb(used)} of ${gb(d.device.size_bytes)}`}</span><span>${scanning ? `reading${scanning.files ? `, ${plural(scanning.files, "track")}` : ""}` : s ? plural(s.library_tracks || s.tracks_scanned, "track") : "not read yet"}</span></div>
       <div class="badges">${BADGES.map(([l, has]) => html`<span class="badge ${s && has(s.formats) ? "y" : ""}">${l}</span>`)}</div>
     </button>
-    ${on && playlists.length ? html`<div class="kids">${playlists.slice(0, 40).map((p) => html`<div class="node dim" style="--depth:1"><span class="caret"></span><span class="label">${raw(ICON.folder)}<span class="nm">${p.name}</span><span class="ct">${num(p.tracks)}</span></span></div>`)}</div>` : ""}`;
+    ${playlists.length ? html`<div class="kids">${playlists.slice(0, 40).map((p) => html`<div class="node dim" style="--depth:1"><span class="caret"></span><span class="label">${raw(ICON.folder)}<span class="nm">${p.name}</span><span class="ct">${num(p.tracks)}</span></span></div>`)}</div>` : ""}`;
 }
 
 function devicesSection(): Raw {
   const usbs = S.devices.filter((d) => d.is_usb);
   const others = S.devices.filter((d) => !d.is_usb);
-  return html`<div class="sec" id="tree-devices"><span class="lbl">Devices</span>${usbs.length ? "" : html`<button class="btn link" data-act="buying">Buying a stick</button>`}</div>
+  const head = secHead("devices", "Devices", usbs.length ? "" : html`<button class="btn link" data-act="buying">Buying a stick</button>`, 'id="tree-devices"');
+  if (isFolded("sec:devices")) return head;
+  return html`${head}
     ${usbs.length ? usbs.map(deviceNode) : html`<div class="hint">Plug in a USB stick and it appears here.</div>`}
     ${S.info?.demo
       ? html`<div class="sec"><span class="lbl">Simulated sticks</span>${inTauri ? html`<button class="btn link" data-act="demo-off">Use real drives</button>` : ""}</div>
@@ -1227,7 +1247,9 @@ function devicesSection(): Raw {
 
 function kitSectionTree(): Raw {
   const roles = S.plan?.roles ?? [];
-  return html`<div class="sec" id="tree-kit"><span class="lbl">Gig kit</span>${S.done.length ? html`<button class="btn link" data-act="to-ready">Open</button>` : ""}</div>
+  const head = secHead("kit", "Gig kit", S.done.length ? html`<button class="btn link" data-act="to-ready">Open</button>` : "", 'id="tree-kit"');
+  if (isFolded("sec:kit")) return head;
+  return html`${head}
     ${roles.map((r) => {
       const done = S.done.find((d) => d.role === r.role);
       const assigned = r.assigned_drive ? card(r.assigned_drive) : undefined;
@@ -1966,6 +1988,7 @@ export function render() {
   // folder deep in a long list or selecting a row doesn't jump to the top.
   const scrolled = [...root().querySelectorAll<HTMLElement>("[data-keep-scroll]")].map((el) => [el.dataset.keepScroll, el.scrollTop] as const);
   root().innerHTML = shell().s;
+  paintWaveforms();
   for (const [key, top] of scrolled) {
     const el = root().querySelector<HTMLElement>(`[data-keep-scroll="${key}"]`);
     if (el) el.scrollTop = top;
@@ -2089,7 +2112,7 @@ export async function start(api: Api) {
   api.onScanProgress((p) => {
     if (S.scanning.has(p.device_id)) {
       S.scanning.set(p.device_id, { files: p.files, total: p.total, bytes: p.bytes });
-      renderSoon();
+      scanProgressSoon(p.device_id);
     }
   });
   api.onPrepareProgress((p) => {
@@ -2161,11 +2184,34 @@ export async function start(api: Api) {
 }
 
 /** Scan progress can arrive per file, so it redraws at most every 100 ms. */
-let renderPending = 0;
-function renderSoon() {
-  if (renderPending) return;
-  renderPending = window.setTimeout(() => {
-    renderPending = 0;
-    render();
-  }, 100);
+/** Scan progress redraws only the stick's card, an open identify sheet and the
+ *  status bar, so reading a stick never re-renders the window under the pointer. */
+let scanTick = 0;
+function scanProgressSoon(id: string) {
+  if (scanTick) return;
+  scanTick = window.setTimeout(() => {
+    scanTick = 0;
+    if (S.view.v !== "home" && "id" in S.view && S.view.id === id) return render();
+    const t = document.createElement("template");
+    const dev = root().querySelector<HTMLElement>(`.dev[data-dev="${CSS.escape(id)}"]`);
+    const d = card(id);
+    if (dev && d) {
+      t.innerHTML = deviceNode(d).s.trim();
+      const fresh = t.content.querySelector(".dev");
+      if (fresh) dev.replaceWith(fresh);
+    }
+    const status = root().querySelector("footer.status");
+    if (status) {
+      t.innerHTML = statusBar().s;
+      status.replaceWith(t.content.firstElementChild!);
+    }
+    if (S.node === id && inspectorOpen()) {
+      const insp = document.getElementById("insp");
+      if (insp) {
+        t.innerHTML = inspector().s;
+        insp.replaceWith(t.content.firstElementChild!);
+      }
+    }
+  }, 400);
 }
+

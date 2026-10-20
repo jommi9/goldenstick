@@ -555,3 +555,15 @@ export interface LocalExport {
   source: string;
   warnings: string[];
 }
+
+/** One track's analysis, as the window draws it. Waveform columns are [low, mid, high], 0 to 127. */
+export interface TrackAnalysis {
+  tempo_bpm: number;
+  key: string;
+  camelot: string | null;
+  duration_secs: number;
+  preview: [number, number, number][];
+  overview: [number, number, number][];
+  phrases: { start_secs: number; kind: string }[];
+  mood: string | null;
+}

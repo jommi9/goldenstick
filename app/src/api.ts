@@ -2,42 +2,7 @@
 // screenshots) the same interface is served by a mock built from real
 // engine output, loaded lazily so the desktop build never fetches it.
 
-import type {
-  AppInfo,
-  Candidate,
-  ConfirmationDetails,
-  CopyReport,
-  CopySource,
-  DemoStickInfo,
-  DeviceCard,
-  DeviceEvent,
-  DriveAssessment,
-  DriveSummary,
-  EjectResult,
-  ExportPlan,
-  ExportStatus,
-  Filesystem,
-  GigProfile,
-  HardwareCard,
-  Identification,
-  KitPlan,
-  CollectPlan,
-  FolderNode,
-  KnownMedia,
-  LibraryCollectProgress,
-  LibraryExportProgress,
-  LibraryPage,
-  LibraryScanProgress,
-  LibrarySource,
-  LocalExport,
-  Preset,
-  Role,
-  VerifyProgress,
-  VerifyReport,
-  RealTestResult,
-  TestScenario,
-  VirtualTestSuite,
-} from "./types";
+import type { AppInfo, Candidate, ConfirmationDetails, CopyReport, CopySource, DemoStickInfo, DeviceCard, DeviceEvent, DriveAssessment, DriveSummary, EjectResult, ExportPlan, ExportStatus, Filesystem, GigProfile, HardwareCard, Identification, KitPlan, CollectPlan, FolderNode, KnownMedia, LibraryCollectProgress, LibraryExportProgress, LibraryPage, LibraryScanProgress, LibrarySource, LocalExport, Preset, Role, VerifyProgress, VerifyReport, RealTestResult, TestScenario, VirtualTestSuite, TrackAnalysis } from "./types";
 
 export interface Api {
   appInfo(): Promise<AppInfo>;
@@ -91,6 +56,8 @@ export interface Api {
   libraryFolders(id: string): Promise<FolderNode[]>;
   /** A URL the webview can play one track from. The path is relative to the source. */
   libraryPlayUrl(id: string, path: string): Promise<string>;
+  /** A track's analysis from the cache, or analysed now when `analyze` is set; null when there is none. */
+  libraryAnalysis(id: string, path: string, analyze: boolean): Promise<TrackAnalysis | null>;
   onLibraryScanProgress(cb: (p: LibraryScanProgress) => void): void;
   /** What collecting the tracks shown for this filter and search would copy. An empty name asks for the suggested one. */
   libraryCollectPlan(id: string, targets: string[], filter: string, query: string, name: string, folder?: string): Promise<CollectPlan>;
@@ -173,6 +140,7 @@ async function tauriApi(): Promise<Api> {
     libraryTracks: (id, targets, filter, query, offset, limit, folder, sort, desc) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit, folder: folder ?? "", sort: sort ?? "", desc: desc ?? false } }),
     libraryFolders: (id) => invoke("library_folders", { id }),
     libraryPlayUrl: async (id, path) => convertFileSrc(await invoke<string>("library_play", { id, path })),
+    libraryAnalysis: (id, path, analyze) => invoke("library_analysis", { id, path, analyze }),
     onLibraryScanProgress: on("library-scan-progress"),
     libraryCollectPlan: (id, targets, filter, query, name, folder) => invoke("library_collect_plan", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),
     libraryCollect: (id, targets, filter, query, name, folder) => invoke("library_collect", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),

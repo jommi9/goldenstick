@@ -5,8 +5,8 @@
 // actions to this module.
 
 import type { Api } from "./api";
-import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState } from "./types";
-import { gb, html, num, plural, raw, Raw, when } from "./ui";
+import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState, TrackAnalysis } from "./types";
+import { gb, html, isFolded, num, plural, raw, Raw, secHead, when } from "./ui";
 
 type Filter = "all" | TrackState;
 
@@ -197,6 +197,149 @@ const P = {
 
 const trackKey = (t: { source: string; path: string }) => `${t.source}|${t.path}`;
 
+// ------------------------------------------------------------------ analysis
+// Waveforms, tempo, key and phrases come from BoothReady's own analysis,
+// the one exports write to sticks. Cached analyses are read for the tracks in
+// view; tracks on this computer without one are analysed one at a time in the
+// background. Tracks still in the cloud are never analysed, so nothing is
+// downloaded behind the user's back.
+
+const AN = new Map<string, TrackAnalysis | null>();
+const analysing = new Set<string>();
+let anGeneration = 0;
+let anRepaint = 0;
+const BAND = ["#2a6bff", "#e39a3c", "#f4f1ea"];
+const PHRASE_COLOR: Record<string, string> = { Intro: "#d9534f", Up: "#e8973a", Down: "#3f7fd8", Chorus: "#41c26a", Outro: "#8f5bd6", Verse: "#d9c04a", Bridge: "#3bb7c4" };
+
+const analysisOf = (t: LibraryTrack): TrackAnalysis | null => AN.get(trackKey(t)) ?? null;
+
+function repaintSoon() {
+  if (anRepaint) return;
+  anRepaint = window.setTimeout(() => {
+    anRepaint = 0;
+    L.host.render();
+  }, 700);
+}
+
+/** Redraw one track's row in place, and the player or inspector when they show it,
+ *  so analyses arriving in the background never re-render the window under the pointer. */
+function trackUpdated(t: LibraryTrack) {
+  const k = trackKey(t);
+  if (P.now && trackKey(P.now) === k) return repaintSoon();
+  const i = L.tracks.findIndex((x) => trackKey(x) === k);
+  const row = i >= 0 ? document.querySelector<HTMLElement>(`#list tr[data-row="${i}"]`) : null;
+  if (!row) return;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = trackRow(L.tracks[i], i).s.trim();
+  const fresh = tpl.content.firstElementChild as HTMLElement | null;
+  if (!fresh) return;
+  row.replaceWith(fresh);
+  const c = fresh.querySelector<HTMLCanvasElement>("canvas[data-pv]");
+  const a = analysisOf(L.tracks[i]);
+  if (c && a) drawBands(c, a.preview, false);
+  if (L.sel === i) L.host.refreshSelection();
+}
+
+async function analyseNow(t: LibraryTrack) {
+  const k = trackKey(t);
+  if (analysing.has(k) || AN.get(k)) return;
+  analysing.add(k);
+  trackUpdated(t);
+  try {
+    AN.set(k, await L.host.api.libraryAnalysis(t.source, t.path, t.state === "ready"));
+  } catch {
+    AN.set(k, null);
+  } finally {
+    analysing.delete(k);
+    trackUpdated(t);
+  }
+}
+
+/** Read cached analyses for the tracks in view, then analyse the local ones that have none. */
+async function readAnalyses() {
+  const generation = ++anGeneration;
+  const tracks = L.tracks.filter((t) => t.state !== "unreadable");
+  const unknown = tracks.filter((t) => !AN.has(trackKey(t)));
+  for (let i = 0; i < unknown.length; i += 8) {
+    if (generation !== anGeneration) return;
+    await Promise.all(
+      unknown.slice(i, i + 8).map(async (t) => {
+        try {
+          AN.set(trackKey(t), await L.host.api.libraryAnalysis(t.source, t.path, false));
+        } catch {
+          AN.set(trackKey(t), null);
+        }
+        if (AN.get(trackKey(t))) trackUpdated(t);
+      }),
+    );
+  }
+  for (const t of tracks) {
+    if (generation !== anGeneration) return;
+    if (t.state === "ready" && !AN.get(trackKey(t))) await analyseNow(t);
+  }
+}
+
+function drawBands(c: HTMLCanvasElement, cols: [number, number, number][], mirrored: boolean, played = 0) {
+  const w = c.clientWidth;
+  const h = c.clientHeight;
+  if (!w || !h || !cols.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(w * dpr);
+  c.height = Math.round(h * dpr);
+  const g = c.getContext("2d");
+  if (!g) return;
+  g.scale(dpr, dpr);
+  const bw = w / cols.length;
+  const mid = mirrored ? h / 2 : h;
+  for (let b = 0; b < 3; b++) {
+    g.fillStyle = BAND[b];
+    for (let i = 0; i < cols.length; i++) {
+      const x = i * bw;
+      g.globalAlpha = played && x < played * w ? 0.42 : 1;
+      const v = (cols[i][b] / 127) * (b === 2 ? 0.8 : 1);
+      const y = v * (mirrored ? mid - 1 : h);
+      if (mirrored) g.fillRect(x, mid - y, Math.max(1, bw + 0.3), y * 2);
+      else g.fillRect(x, h - y, Math.max(1, bw - 0.15), y);
+    }
+  }
+  g.globalAlpha = 1;
+}
+
+function drawPhrases(c: HTMLCanvasElement, a: TrackAnalysis) {
+  const w = c.clientWidth;
+  const h = c.clientHeight;
+  if (!w || !h) return;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(w * dpr);
+  c.height = Math.round(h * dpr);
+  const g = c.getContext("2d");
+  if (!g) return;
+  g.scale(dpr, dpr);
+  const total = a.duration_secs || 1;
+  a.phrases.forEach((p, i) => {
+    const x0 = (p.start_secs / total) * w;
+    const x1 = ((i + 1 < a.phrases.length ? a.phrases[i + 1].start_secs : total) / total) * w;
+    g.fillStyle = PHRASE_COLOR[p.kind] ?? "#666";
+    g.fillRect(x0, 0, Math.max(1, x1 - x0 - 1), h);
+  });
+}
+
+/** Draw every waveform canvas in the window; called after each render. */
+export function paintWaveforms() {
+  document.querySelectorAll<HTMLCanvasElement>("canvas[data-pv]").forEach((c) => {
+    const t = L.tracks[Number(c.dataset.pv)];
+    const a = t && analysisOf(t);
+    if (a) drawBands(c, a.preview, false);
+  });
+  const now = P.now && analysisOf(P.now);
+  const wave = document.getElementById("player-wave") as HTMLCanvasElement | null;
+  const band = document.getElementById("player-phrase") as HTMLCanvasElement | null;
+  if (now && wave) drawBands(wave, now.overview, true);
+  if (now && band) drawPhrases(band, now);
+  updateClock();
+}
+
+
 function audio(): HTMLAudioElement {
   if (P.audio) return P.audio;
   const a = new Audio();
@@ -233,6 +376,15 @@ function updateClock() {
     seek.max = String(Number.isFinite(a.duration) ? a.duration : 0);
     seek.value = String(a.currentTime);
   }
+  const head = document.getElementById("player-head");
+  const total = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : 0;
+  if (head) head.style.left = `${total ? (100 * a.currentTime) / total : 0}%`;
+  const phrase = document.getElementById("player-phrase-name");
+  const an = P.now && analysisOf(P.now);
+  if (phrase && an) {
+    const cur = [...an.phrases].reverse().find((p) => p.start_secs <= a.currentTime);
+    phrase.innerHTML = cur ? `<i class="dot" style="background:${PHRASE_COLOR[cur.kind] ?? "#666"}"></i>${cur.kind}` : "";
+  }
 }
 
 async function play(t: LibraryTrack) {
@@ -243,6 +395,7 @@ async function play(t: LibraryTrack) {
     return;
   }
   P.now = t;
+  void analyseNow(t);
   P.queue = L.tracks.filter((x) => x.state !== "unreadable");
   P.error = null;
   P.loading = true;
@@ -321,12 +474,16 @@ export function playerStrip(): Raw {
         </div>
         <div class="player-track"><span class="player-name">Nothing loaded</span><span class="small faint">Double-click a track to load it.</span></div>
       </div>
-      <div class="player-time"><span class="player-clock faint">0:00</span><span class="player-seek idle"></span><span class="player-clock faint">--:--</span></div>
+      <div class="player-wavebox"><div class="player-wavewrap"><div class="player-wave flat"></div></div><div class="player-phrase flat"></div><div class="player-time"><span class="player-clock faint">0:00</span><span></span><span class="player-clock faint">--:--</span></div></div>
       <div class="readout"><div><div class="big num faint">---.-</div><div class="sub">BPM</div></div><div>${keyChip(null, true)}</div></div>
     </section>`;
   }
   const a = P.audio;
   const playing = !!a && !a.paused;
+  const an = analysisOf(t);
+  const bpm = an?.tempo_bpm ?? t.bpm;
+  const key = an?.key ?? t.key;
+  const camelot = an?.camelot ?? t.camelot;
   const s = source(t.source);
   const cloud = t.state === "cloud_only" ? (s?.location.kind === "cloud" ? s.location.provider : "your cloud app") : null;
   const at = P.queue.findIndex((x) => trackKey(x) === trackKey(t));
@@ -351,15 +508,23 @@ export function playerStrip(): Raw {
               : html`<span class="small faint">${[where, t.detail ? `${t.format}, ${t.detail}` : t.format].filter(Boolean).join(" · ")}</span>`}
       </div>
     </div>
-    <div class="player-time">
-      <span id="player-elapsed" class="player-clock">${clock(a?.currentTime ?? 0)}</span>
-      <input id="library-seek" class="player-seek" type="range" min="0" step="0.1" max="${duration}" value="${a?.currentTime ?? 0}" aria-label="Position" ${duration ? "" : "disabled"}>
-      <span id="player-remain" class="player-clock">${duration ? `-${clock(duration - (a?.currentTime ?? 0))}` : "--:--"}</span>
-      <button class="player-key" data-act="library-stop-play" aria-label="Stop and unload the track" title="Unload">${icon(ICON.stop, 12)}</button>
+    <div class="player-wavebox">
+      <div class="player-wavewrap">
+        ${an ? html`<canvas id="player-wave" class="player-wave"></canvas>` : html`<div class="player-wave flat">${analysing.has(trackKey(t)) ? html`<span class="small faint">Analysing beat grid, key and waveform.</span>` : t.state === "cloud_only" ? html`<span class="small faint">No waveform until the track is on this computer.</span>` : ""}</div>`}
+        <span id="player-head" class="player-head"></span>
+        <input id="library-seek" class="player-seek over" type="range" min="0" step="0.1" max="${duration}" value="${a?.currentTime ?? 0}" aria-label="Position" ${duration ? "" : "disabled"}>
+      </div>
+      ${an?.phrases.length ? html`<canvas id="player-phrase" class="player-phrase"></canvas>` : html`<div class="player-phrase flat"></div>`}
+      <div class="player-time">
+        <span><span id="player-elapsed" class="player-clock">${clock(a?.currentTime ?? 0)}</span> <span class="faint small">elapsed</span></span>
+        <span id="player-phrase-name" class="player-phrasename small"></span>
+        <span><span class="faint small">remaining</span> <span id="player-remain" class="player-clock">${duration ? `-${clock(duration - (a?.currentTime ?? 0))}` : "--:--"}</span>
+        <button class="player-key small" data-act="library-stop-play" aria-label="Stop and unload the track" title="Unload">${icon(ICON.stop, 12)}</button></span>
+      </div>
     </div>
-    <div class="readout" title="${t.key ? `Key: ${t.key}` : "Key not read"}">
-      <div><div class="big num">${t.bpm === null ? "---.-" : t.bpm.toFixed(1)}</div><div class="sub">BPM</div></div>
-      <div>${keyChip(t.camelot, true)}</div>
+    <div class="readout" title="${key ? `Key: ${key}` : "Key not read"}">
+      <div><div class="big num">${bpm === null ? "---.-" : bpm.toFixed(1)}</div><div class="sub">BPM</div></div>
+      <div>${keyChip(camelot, true)}<div class="sub">${an?.mood ? `${an.mood.toUpperCase()} MOOD` : "KEY"}</div></div>
     </div>
   </section>`;
 }
@@ -401,6 +566,7 @@ async function loadTracks(id: string, more = false) {
     const offset = more && L.tracksFor === id ? L.tracks.length : 0;
     const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE, L.folder, L.sort, L.desc);
     L.tracks = offset ? [...L.tracks, ...page.tracks] : page.tracks;
+    void readAnalyses();
     if (!offset) L.sel = null;
     L.total = page.total;
     L.states = page.states;
@@ -967,13 +1133,15 @@ export function libraryTree(): Raw {
     return html`${node(s.id, s.name, s.totals?.tracks ?? 0, 0, !!s.states && (folders.length > 0 || !L.folders.has(s.id)), here && !L.folder, sourceIcon(s), !s.connected)}
       ${L.open.has(s.id) ? visible.map((f) => node(`${s.id}|${f.path}`, f.name, f.tracks, f.depth + 1, hasKids(f), here && L.folder === f.path, TREE_ICON.folder)) : ""}`;
   });
-  return html`<div class="sec"><span class="lbl">Collection</span></div>
-    ${coll("library-open", ALL, "All tracks", all, TREE_ICON.all, onAll && L.filter === "all")}
-    ${counts.blocked || (onAll && L.filter === "blocked") ? coll("library-collection", "blocked", STATE_LABEL.blocked, counts.blocked, TREE_ICON.smart, onAll && L.filter === "blocked") : ""}
-    ${counts.cloud_only || (onAll && L.filter === "cloud_only") ? coll("library-collection", "cloud_only", STATE_LABEL.cloud_only, counts.cloud_only, TREE_ICON.smart, onAll && L.filter === "cloud_only") : ""}
-    ${counts.unreadable || (onAll && L.filter === "unreadable") ? coll("library-collection", "unreadable", STATE_LABEL.unreadable, counts.unreadable, TREE_ICON.smart, onAll && L.filter === "unreadable") : ""}
-    <div class="sec"><span class="lbl">Playlists</span><button class="btn link" data-act="open-library" title="Add, scan or remove music folders">Manage</button></div>
-    ${L.sources.length ? sourceNodes : html`<div class="hint">No music folders yet. <button class="btn link" data-act="library-pick">Add a folder</button></div>`}`;
+  const collOpen = !isFolded("sec:collection");
+  const listsOpen = !isFolded("sec:playlists");
+  return html`${secHead("collection", "Collection")}
+    ${collOpen ? coll("library-open", ALL, "All tracks", all, TREE_ICON.all, onAll && L.filter === "all") : ""}
+    ${collOpen && (counts.blocked || (onAll && L.filter === "blocked")) ? coll("library-collection", "blocked", STATE_LABEL.blocked, counts.blocked, TREE_ICON.smart, onAll && L.filter === "blocked") : ""}
+    ${collOpen && (counts.cloud_only || (onAll && L.filter === "cloud_only")) ? coll("library-collection", "cloud_only", STATE_LABEL.cloud_only, counts.cloud_only, TREE_ICON.smart, onAll && L.filter === "cloud_only") : ""}
+    ${collOpen && (counts.unreadable || (onAll && L.filter === "unreadable")) ? coll("library-collection", "unreadable", STATE_LABEL.unreadable, counts.unreadable, TREE_ICON.smart, onAll && L.filter === "unreadable") : ""}
+    ${secHead("playlists", "Playlists", html`<button class="btn link" data-act="open-library" title="Add, scan or remove music folders">Manage</button>`)}
+    ${!listsOpen ? "" : L.sources.length ? sourceNodes : html`<div class="hint">No music folders yet. <button class="btn link" data-act="library-pick">Add a folder</button></div>`}`;
 }
 
 // ------------------------------------------------------------------ list
@@ -1000,7 +1168,12 @@ function trackRow(t: LibraryTrack, i: number): Raw {
   const loaded = !!P.now && trackKey(P.now) === trackKey(t);
   const playing = isPlaying(t);
   const where = [t.folder, t.name].filter(Boolean).join("/");
-  const match = !!P.now && !loaded && keysMix(P.now.camelot, t.camelot);
+  const an = analysisOf(t);
+  const bpm = an?.tempo_bpm ?? t.bpm;
+  const camelot = an?.camelot ?? t.camelot;
+  const keyName = an?.key ?? t.key;
+  const nowAn = P.now && analysisOf(P.now);
+  const match = !!P.now && !loaded && keysMix(nowAn?.camelot ?? P.now.camelot, camelot);
   const plays = playsOn(t);
   const glyph = { ok: "", w: "w", b: "b", u: "u" };
   return html`<tr class="${t.state} ${loaded ? "playing" : ""} ${L.sel === i ? "sel" : ""}" data-act="library-select" data-id="${i}" data-row="${i}">
@@ -1008,11 +1181,11 @@ function trackRow(t: LibraryTrack, i: number): Raw {
       ? html`<span class="idx">${n}</span>`
       : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${titleOf(t)}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
     <td class="c-art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
-    <td class="c-wave" title="${t.state === "cloud_only" ? "Not analysed: the file is still online" : "The waveform appears once the analysis is read"}"><span class="base"></span></td>
+    <td class="c-wave" title="${an ? "" : t.state === "cloud_only" ? "Not analysed: the file is still online" : analysing.has(trackKey(t)) ? "Analysing" : "Not analysed yet"}">${an ? html`<canvas class="pv" data-pv="${i}"></canvas>` : analysing.has(trackKey(t)) ? html`<span class="base busy"></span>` : html`<span class="base"></span>`}</td>
     <td class="c-title" title="${where}">${titleOf(t)}</td>
     <td class="c-artist">${t.artist ?? (t.title ? "" : html`<span class="faint">${t.folder}</span>`)}</td>
-    <td class="r num c-bpm bpm">${t.bpm === null ? html`<span class="faint">·</span>` : bpmText(t.bpm)}</td>
-    <td class="c-key ${match ? "match" : ""}" title="${t.key ?? ""}">${t.camelot ? keyChip(t.camelot) : html`<span class="faint">·</span>`}</td>
+    <td class="r num c-bpm bpm">${bpm === null ? html`<span class="faint">·</span>` : bpmText(Math.round(bpm * 10) / 10)}</td>
+    <td class="c-key ${match ? "match" : ""}" title="${keyName ?? ""}">${camelot ? keyChip(camelot) : html`<span class="faint">·</span>`}</td>
     <td class="r num dim c-time">${t.duration === null ? html`<span class="faint">·</span>` : clock(t.duration)}</td>
     <td class="c-fmt fmt">${t.format}${t.detail ? html`<small>${t.detail}</small>` : t.state === "cloud_only" ? html`<small>not checked</small>` : ""}</td>
     <td class="c-plays"><span class="plays" title="${plays.map((p) => `${p.model}: ${p.why}`).join("\n")}">${plays.map((p) => html`<i class="${glyph[p.g]}"></i>`)}</span></td>
@@ -1168,8 +1341,9 @@ function trackInspector(t: LibraryTrack): Raw {
       <div style="min-width:0"><div class="lbl">Track</div><h2>${titleOf(t)}</h2><div class="by">${t.artist ?? ""}</div></div>
     </div>
     <section><span class="lbl">Analysis</span><dl class="kv">
-      <dt>BPM</dt><dd class="num">${t.bpm === null ? "not read" : bpmText(t.bpm)}</dd>
-      <dt>Key</dt><dd>${t.camelot ? html`${keyChip(t.camelot)} ${t.key ?? ""}` : "not read"}</dd>
+      <dt>BPM</dt><dd class="num">${(() => { const an = analysisOf(t); return an ? html`${bpmText(Math.round(an.tempo_bpm * 100) / 100)} <span class="faint small">analysed</span>` : t.bpm === null ? (analysing.has(trackKey(t)) ? "analysing" : t.state === "cloud_only" ? "not analysed, online" : "not read") : html`${bpmText(t.bpm)} <span class="faint small">tag</span>`; })()}</dd>
+      <dt>Key</dt><dd>${(() => { const an = analysisOf(t); const c = an?.camelot ?? t.camelot; const k = an?.key ?? t.key; return c ? html`${keyChip(c)} ${k ?? ""}` : analysing.has(trackKey(t)) ? "analysing" : "not read"; })()}</dd>
+      ${(() => { const an = analysisOf(t); return an?.phrases.length ? html`<dt>Phrases</dt><dd>${an.phrases.length}${an.mood ? `, ${an.mood.toLowerCase()} mood` : ""}</dd>` : ""; })()}
       <dt>Length</dt><dd class="num">${t.duration === null ? "-" : clock(t.duration)}</dd>
       ${t.album ? html`<dt>Album</dt><dd>${t.album}</dd>` : ""}
       ${t.genre ? html`<dt>Genre</dt><dd>${t.genre}</dd>` : ""}

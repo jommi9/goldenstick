@@ -684,6 +684,7 @@ export async function createMockApi(): Promise<Api> {
       return { total: matching.length, tracks: matching.slice(offset, offset + limit), states: countStates(scoped) };
     },
     libraryFolders: async (id) => foldersOf(id),
+    libraryAnalysis: async () => null,
     libraryPlayUrl: async (id, path) => {
       const t = tracksOf(id, []).find((x) => x.path === path);
       if (!t || t.state === "unreadable") throw new Error("That isn't a track in this source.");

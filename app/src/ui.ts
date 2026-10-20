@@ -108,3 +108,45 @@ export const FS_LABEL: Record<string, string> = {
   ext: "ext4",
   unknown: "Unknown",
 };
+
+// ------------------------------------------------------------------ folding
+// Tree sections and stick cards fold like folders in a file explorer. What is
+// folded is remembered per viewer; storage may be unavailable, so every access
+// is guarded and the tree simply starts unfolded then.
+
+const FOLD_KEY = "boothready.folded";
+const folded: Set<string> = (() => {
+  try {
+    return new Set<string>(JSON.parse(localStorage.getItem(FOLD_KEY) ?? "[]") as string[]);
+  } catch {
+    return new Set<string>();
+  }
+})();
+
+export const isFolded = (id: string) => folded.has(id);
+
+export function toggleFold(id: string) {
+  if (folded.has(id)) folded.delete(id);
+  else folded.add(id);
+  try {
+    localStorage.setItem(FOLD_KEY, JSON.stringify([...folded]));
+  } catch {
+    /* not persisted */
+  }
+}
+
+export function unfold(id: string) {
+  if (folded.delete(id)) {
+    try {
+      localStorage.setItem(FOLD_KEY, JSON.stringify([...folded]));
+    } catch {
+      /* not persisted */
+    }
+  }
+}
+
+/** A tree section header that folds its section. `extra` sits on the right (a link button). */
+export function secHead(key: string, label: string, extra: Raw | string = "", attrs = ""): Raw {
+  const shut = isFolded(`sec:${key}`);
+  return raw(`<div class="sec ${shut ? "shut" : ""}" ${attrs}><button class="sec-toggle" data-act="fold" data-id="sec:${esc(key)}" aria-expanded="${!shut}" title="${shut ? "Show" : "Hide"} ${esc(label)}"><span class="fold-caret" aria-hidden="true"></span><span class="lbl">${esc(label)}</span></button>${extra instanceof Raw ? extra.s : esc(extra)}</div>`);
+}
