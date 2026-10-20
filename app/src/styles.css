@@ -2668,3 +2668,27 @@ td.c-wave canvas.pv {
   from { background-position: 100% 0; }
   to { background-position: -100% 0; }
 }
+
+/* The player set the window judges against, as a pill with a real picker. */
+.judge-pill {
+  gap: 8px;
+  padding-right: 4px;
+  cursor: pointer;
+}
+
+.judge-pill .select {
+  height: 26px;
+  padding: 0 26px 0 10px;
+  border: 0;
+  border-radius: 12px;
+  background-color: var(--hover);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.judge-pill .select:hover,
+.judge-pill .select:focus-visible {
+  background-color: var(--line-2);
+}

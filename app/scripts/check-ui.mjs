@@ -147,6 +147,21 @@ async function walk() {
   includes(await text(".titlebar"), "1 stick connected", "the title bar counts the stick");
   includes(await text("footer.status"), "1 stick connected", "the status bar counts the stick");
 
+  // The title bar's player set is a real picker, the only one outside sheets.
+  const picker = page.locator(".titlebar select#library-preset-title");
+  same(await picker.count(), 1, "the title bar's Judging against is a picker");
+  same(await page.locator("#list select").count(), 0, "the list header has no second player picker");
+  includes(await text("footer.status"), "Runs locally", "the status bar says the app runs locally");
+  const before = await picker.inputValue();
+  const other = (await picker.locator("option").evaluateAll((os) => os.map((o) => o.value))).find((v) => v && v !== before);
+  if (other) {
+    await picker.selectOption(other);
+    await page.waitForTimeout(300);
+    same(await page.locator(".titlebar select#library-preset-title").inputValue(), other, "picking another player set in the title bar applies it");
+    await page.locator(".titlebar select#library-preset-title").selectOption(before);
+    await page.waitForTimeout(300);
+  }
+
   // Tree sections and sticks fold like folders in a file explorer.
   await page.locator('[data-act="fold"][data-id="sec:collection"]').click();
   check((await page.locator('.tree [data-act="library-open"]').count()) === 0, "folding Collection hides its entries");

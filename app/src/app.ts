@@ -27,6 +27,7 @@ import {
   playerStrip,
   refreshLibrary,
   paintWaveforms,
+  playersControl,
 } from "./library";
 import type {
   AppInfo,
@@ -1160,15 +1161,13 @@ const usbCount = () => S.devices.filter((d) => d.is_usb).length;
 
 function titleBar(): Raw {
   const n = usbCount();
-  const p = preset();
   return html`<header class="titlebar">
     <div class="brand"><b>BOOTH</b>READY</div>
     <span class="pill"><i class="dot ${n ? "ok" : ""}"></i>${n ? `${plural(n, "stick")} connected` : "No stick connected"}</span>
     ${S.info?.demo ? html`<span class="pill accent">Demo mode: simulated USB drives</span>` : ""}
     <span class="spacer"></span>
-    <span class="pill">Judging against <b>${p?.title ?? plural(S.targets.length, "player")}</b></span>
+    <label class="pill judge-pill" title="Every track and stick is checked against these players. Pick the gear you expect at the booth.">Judging against ${playersControl("library-preset-title")}</label>
     ${S.done.length ? html`<button class="pill" data-act="to-ready">Gig kit <b>${S.done.length} ready</b></button>` : ""}
-    <span class="pill" title="Nothing about your music leaves this computer.">Runs locally</span>
     <button class="pill" data-act="fullscreen" title="Full screen (F)">${raw(ICON.full)}${fullscreen ? "Exit full screen" : "Full screen"}</button>
   </header>`;
 }
@@ -1313,6 +1312,7 @@ function statusBar(): Raw {
     <span class="spacer"></span>
     ${sel ? html`<span>${sel}</span>` : ""}
     <span title="Compatibility rules v${info?.rules_version ?? "?"}${RULES_STATUS[info?.rules_review_status ?? ""] ?? ""}">Compatibility rules v${info?.rules_version ?? "?"}, ${RULES_SHORT[info?.rules_review_status ?? ""] ?? info?.rules_review_status ?? ""}</span>
+    <span title="Nothing about your music leaves this computer.">Runs locally</span>
     <button class="btn link" data-act="save-diagnostics" title="Saves how BoothReady reads your drives to a file in Downloads, for bug reports. No file names.">Save diagnostics</button>
     <span>BoothReady ${info?.version ?? ""}</span>
   </footer>`;

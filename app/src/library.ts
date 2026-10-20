@@ -1223,7 +1223,7 @@ function trackTable(): Raw {
     <div class="tracks-foot"><span>Showing ${num(L.tracks.length)} of ${num(L.total)}</span>${L.tracks.length < L.total ? html`<button class="btn small" data-act="library-more" ${L.loadingTracks ? "disabled" : ""}>Show more</button>` : ""}</div>`;
 }
 
-function playersControl(id: string): Raw {
+export function playersControl(id: string): Raw {
   const host = L.host;
   const current = host.presetId();
   const count = host.targets().length;
@@ -1304,8 +1304,6 @@ export function libraryList(inspectorOpen: boolean): Raw {
         ? html`<button class="chip ${L.filter === "all" ? "on" : ""}" data-act="library-filter" data-id="all">All <b>${num(total)}</b></button>
           ${STATE_ORDER.filter((k) => c[k] || L.filter === k).map((k) => html`<button class="chip ${k} ${L.filter === k ? "on" : ""}" data-act="library-filter" data-id="${k}" title="${STATE_HELP[k]}"><i class="dot ${k}"></i>${STATE_LABEL[k]} <b>${num(c[k])}</b></button>`)}`
         : ""}
-      <span class="spacer"></span>
-      <label class="judge">Judged against ${playersControl("library-preset-list")}</label>
     </div>
     ${notices(s, all, scanning)}
     <div class="scroller" id="list-scroller" data-keep-scroll="list">
