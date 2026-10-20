@@ -11,7 +11,7 @@
 
 ### Demo mode in the desktop window
 
-The DJ Library demo source was exported with three ticked folders: Ben Klock, Kolsch and Downloads. The plan listed the empty Downloads playlist and counted its damaged file as left out. The build finished, and the copy offer appeared on the simulated Kingston once it had been rebuilt as MBR and FAT32. Copying five files was followed by a full verification that read the Device Library back ([34-demo-export-verified.png](screenshots/34-demo-export-verified.png)).
+The DJ Library demo source was exported with three ticked folders: Ben Klock, Kolsch and Downloads. The plan listed the empty Downloads playlist and counted its damaged file as left out. The build finished, and the copy offer appeared on the simulated Kingston once it had been rebuilt as MBR and FAT32. Copying five files was followed by a full verification that read the Device Library back ([34-demo-export-verified.png](screenshots/before-redesign/34-demo-export-verified.png)).
 
 The demo tracks are synthetic files under a second long, so the analyser declined every one ("beat analysis requires at least four seconds of audio"). The finished panel only listed this in its notes. It now says plainly when some or all tracks could not be analysed.
 
@@ -31,4 +31,4 @@ The real app ran against the Google Drive `Music` source. It exported `DJ/Techno
 
 ### Screenshots
 
-These come from the browser mock: [30-export-plan.png](screenshots/30-export-plan.png), [31-export-building.png](screenshots/31-export-building.png), [32-export-done.png](screenshots/32-export-done.png), [33-export-copy-offer.png](screenshots/33-export-copy-offer.png). [34-demo-export-verified.png](screenshots/34-demo-export-verified.png) is from the desktop app in demo mode. Captures from the real run show private track names and stay out of the repository.
+These come from the browser mock: [30-export-plan.png](screenshots/before-redesign/30-export-plan.png), [31-export-building.png](screenshots/before-redesign/31-export-building.png), [32-export-done.png](screenshots/before-redesign/32-export-done.png), [33-export-copy-offer.png](screenshots/before-redesign/33-export-copy-offer.png). [34-demo-export-verified.png](screenshots/before-redesign/34-demo-export-verified.png) is from the desktop app in demo mode. Captures from the real run show private track names and stay out of the repository.
