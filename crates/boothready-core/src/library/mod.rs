@@ -5,6 +5,7 @@
 //! 0) because the database is encrypted, Engine DJ databases are read and
 //! validated, Serato crates are detected.
 
+pub mod compare;
 mod engine;
 #[cfg(feature = "sqlite")]
 pub mod onelibrary;

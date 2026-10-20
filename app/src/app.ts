@@ -28,6 +28,9 @@ import {
   refreshLibrary,
   paintWaveforms,
   playersControl,
+  compareSection,
+  setCompareTarget,
+  compareTarget,
 } from "./library";
 import type {
   AppInfo,
@@ -406,6 +409,11 @@ async function scan(id: string) {
     return;
   }
   render();
+  // A selected stick, or the one already compared, is compared again with what it now holds.
+  if (S.summaries.has(id) && (S.node === id || compareTarget() === id)) {
+    const d = card(id);
+    void setCompareTarget(id, d ? stickLabel(d) : id);
+  }
 }
 
 /** Opens a stick's check as a sheet, picking up a scan that already ran in the background. */
@@ -727,6 +735,10 @@ async function act(el: HTMLElement) {
       S.insp = true;
       // The inspector offers "Check this stick"; folding never opens a sheet.
       render();
+      if (S.summaries.has(id)) {
+        const d = card(id);
+        void setCompareTarget(id, d ? stickLabel(d) : id);
+      }
       break;
     case "device-check":
       await openDevice(id);
@@ -1280,6 +1292,7 @@ function deviceInspector(id: string): Raw {
       ${s ? html`<div class="cap" style="height:8px;margin-top:12px"><i style="width:${Math.min(100, (100 * used) / Math.max(1, d.device.size_bytes))}%"></i></div>
         <div class="minicap num"><span>${gb(used)} used</span><span>${gb(Math.max(0, d.device.size_bytes - used))} free</span></div>` : ""}
     </div>
+    ${s ? compareSection(id) : ""}
     ${a ? html`<section><span class="lbl">Readiness</span><div><span class="verdict ${verdictStatus(a.overall)}">${VERDICT_LABEL[a.overall]}.</span> ${a.headline}</div>
         <div class="hint" style="margin-top:6px">For ${preset()?.title.toLowerCase() ?? S.targets.map(hwName).join(", ")}.</div></section>` : ""}
     <section><dl class="kv">

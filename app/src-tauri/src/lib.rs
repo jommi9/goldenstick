@@ -1182,6 +1182,108 @@ async fn library_analysis(
     .map_err(e2s)?
 }
 
+/// Compare the music library with the rekordbox library on a scanned stick:
+/// which playlists match, differ, or exist on one side only, and which stick
+/// tracks have no copy in the library.
+#[tauri::command]
+fn stick_compare(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Res<Option<boothready_core::library::compare::Comparison>> {
+    use boothready_core::library::compare::{compare, StickFile, StickPlaylist};
+    let report = state.lock().reports.get(&device_id).cloned().ok_or("Scan the stick first.")?;
+    let Some(dl) = report.libraries.rekordbox.as_ref().and_then(|rb| rb.device_library.as_ref()) else {
+        return Ok(None);
+    };
+    let stick: Vec<StickFile> = dl
+        .tracks
+        .iter()
+        .map(|t| StickFile {
+            id: t.id,
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            path: t.path.clone(),
+            size: t.db_file_size,
+        })
+        .collect();
+    let playlists: Vec<StickPlaylist> = dl
+        .playlists
+        .iter()
+        .filter(|p| !p.is_folder)
+        .map(|p| StickPlaylist { name: p.name.clone(), track_ids: p.track_ids.clone() })
+        .collect();
+    let files = state.with_library(&app, |library| library.compare_files())?;
+    Ok(Some(compare(&files, &stick, &playlists)))
+}
+
+/// Copy tracks from a stick into a folder of a music source: one stick
+/// playlist's tracks when `playlist` names one, or else every stick track that
+/// has no copy in the library. The files come from the stick, so nothing is
+/// downloaded, and the cloud client uploads them in the background. A file
+/// already in the folder with the same size is skipped; one with another size
+/// is kept beside it under a new name. Nothing is overwritten or deleted.
+/// Returns how many files were copied.
+#[tauri::command]
+async fn stick_to_library(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device_id: String,
+    source_id: String,
+    folder: String,
+    playlist: Option<String>,
+) -> Res<u32> {
+    use std::path::Component;
+    if folder.is_empty() || !Path::new(&folder).components().all(|c| matches!(c, Component::Normal(_))) {
+        return Err("That isn't a folder inside the music source.".to_string());
+    }
+    let report = state.lock().reports.get(&device_id).cloned().ok_or("Scan the stick first.")?;
+    let dev = state.device(&device_id)?;
+    let root = dev.primary_mount().and_then(|v| v.mount_point.clone()).ok_or("The stick isn't mounted.")?;
+    let dl = report
+        .libraries
+        .rekordbox
+        .as_ref()
+        .and_then(|rb| rb.device_library.clone())
+        .ok_or("This stick has no rekordbox library.")?;
+    let source_root = state.with_library(&app, |library| library.record(&source_id).map(|r| r.path))??;
+    let wanted: Vec<String> = match &playlist {
+        Some(name) => {
+            let p = dl
+                .playlists
+                .iter()
+                .find(|p| !p.is_folder && &p.name == name)
+                .ok_or("That playlist isn't on the stick any more.")?;
+            p.track_ids.iter().filter_map(|id| dl.tracks.iter().find(|t| t.id == *id)).map(|t| t.path.clone()).collect()
+        }
+        None => {
+            use boothready_core::library::compare::{compare, StickFile, StickPlaylist};
+            let stick: Vec<StickFile> = dl
+                .tracks
+                .iter()
+                .map(|t| StickFile {
+                    id: t.id,
+                    title: t.title.clone(),
+                    artist: t.artist.clone(),
+                    path: t.path.clone(),
+                    size: t.db_file_size,
+                })
+                .collect();
+            let lists: Vec<StickPlaylist> = dl
+                .playlists
+                .iter()
+                .filter(|p| !p.is_folder)
+                .map(|p| StickPlaylist { name: p.name.clone(), track_ids: p.track_ids.clone() })
+                .collect();
+            let files = state.with_library(&app, |library| library.compare_files())?;
+            compare(&files, &stick, &lists).orphans.into_iter().map(|o| o.path).collect()
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || library::copy_into(&root, &wanted, &source_root.join(&folder)))
+        .await
+        .map_err(e2s)?
+}
+
 /// The folders inside a source, for the browser's tree.
 #[tauri::command]
 fn library_folders(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<Vec<library::FolderNode>> {
@@ -1341,6 +1443,8 @@ pub fn run() {
             library_folders,
             library_play,
             library_analysis,
+            stick_compare,
+            stick_to_library,
             library_collect_plan,
             library_collect,
             library_cancel_collect,

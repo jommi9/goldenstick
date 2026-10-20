@@ -567,3 +567,26 @@ export interface TrackAnalysis {
   phrases: { start_secs: number; kind: string }[];
   mood: string | null;
 }
+
+/** How a library folder and a stick playlist of the same name relate. */
+export type CompareState = "same" | "differs" | "library_only" | "stick_only";
+
+export interface PlaylistCompare {
+  name: string;
+  /** `<source id>|<folder path>`, the tree's folder key, when there is a folder. */
+  folder: string | null;
+  state: CompareState;
+  library_tracks: number;
+  stick_tracks: number;
+  in_both: number;
+  missing_on_stick: string[];
+  only_on_stick: string[];
+}
+
+export interface StickComparison {
+  playlists: PlaylistCompare[];
+  orphans: { id: number; title: string; artist: string | null; path: string; playlists: string[] }[];
+  stick_tracks: number;
+  matched_by_size: number;
+  matched_by_name: number;
+}

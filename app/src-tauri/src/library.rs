@@ -425,6 +425,26 @@ impl LibraryState {
         Some(scan)
     }
 
+    /// Every scanned track of every source, for comparing with a stick. Paths
+    /// are `<source id>|<path in the source>`, the form the tree's folder
+    /// nodes use, so a compared folder maps straight onto its tree node.
+    pub fn compare_files(&mut self) -> Vec<boothready_core::library::compare::LibraryFile> {
+        let ids: Vec<String> = self.sources.iter().map(|s| s.id.clone()).collect();
+        let mut out = Vec::new();
+        for id in ids {
+            let Some(scan) = self.scan(&id) else { continue };
+            for t in &scan.tracks {
+                out.push(boothready_core::library::compare::LibraryFile {
+                    path: format!("{id}|{}", t.path),
+                    size: t.size,
+                    title: t.tags.as_ref().and_then(|g| g.title.clone()),
+                    artist: t.tags.as_ref().and_then(|g| g.artist.clone()),
+                });
+            }
+        }
+        out
+    }
+
     pub fn record(&self, id: &str) -> Result<SourceRecord, String> {
         self.sources.iter().find(|s| s.id == id).cloned().ok_or_else(|| "That music source was removed.".to_string())
     }
@@ -866,6 +886,35 @@ fn is_lossless(info: &AudioInfo) -> bool {
 /// A folder name for a collection, made from what the user typed. Anything
 /// outside letters, digits, spaces and a few marks becomes a dash, so the
 /// name is valid on FAT, NTFS and APFS alike.
+/// Copy `files` (paths under `from_root`) into the folder `target`, creating
+/// it. A file already there with the same size is skipped and one with another
+/// size is kept beside it as "<name> (from stick)"; nothing is overwritten.
+/// Returns how many files were copied.
+pub fn copy_into(from_root: &Path, files: &[String], target: &Path) -> Result<u32, String> {
+    std::fs::create_dir_all(target).map_err(|e| format!("Couldn't make {}: {e}", target.display()))?;
+    let mut copied = 0;
+    for rel in files {
+        let from = from_root.join(rel);
+        let Some(name) = from.file_name().map(|n| n.to_owned()) else { continue };
+        let Ok(meta) = std::fs::metadata(&from) else { continue };
+        let mut to = target.join(&name);
+        if let Ok(existing) = std::fs::metadata(&to) {
+            if existing.len() == meta.len() {
+                continue;
+            }
+            let stem = to.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let ext = to.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            to = target.join(format!("{stem} (from stick){ext}"));
+            if to.exists() {
+                continue;
+            }
+        }
+        std::fs::copy(&from, &to).map_err(|e| format!("Couldn't copy {}: {e}", name.to_string_lossy()))?;
+        copied += 1;
+    }
+    Ok(copied)
+}
+
 pub fn collection_folder_name(typed: &str) -> Result<String, String> {
     let cleaned: String = typed
         .trim()
@@ -1014,6 +1063,31 @@ fn track_row(source: &str, track: &SourceTrack, state: TrackState, issues: Vec<P
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn copying_from_a_stick_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let stick = dir.path().join("stick");
+        std::fs::create_dir_all(stick.join("Contents/A")).unwrap();
+        std::fs::write(stick.join("Contents/A/one.mp3"), b"one").unwrap();
+        std::fs::write(stick.join("Contents/A/two.mp3"), b"two-on-stick").unwrap();
+        std::fs::write(stick.join("Contents/A/three.mp3"), b"333").unwrap();
+        let target = dir.path().join("Music/DJ/acid prog");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("one.mp3"), b"one").unwrap();
+        std::fs::write(target.join("two.mp3"), b"two-in-the-drive").unwrap();
+        let files = ["Contents/A/one.mp3", "Contents/A/two.mp3", "Contents/A/three.mp3", "Contents/A/gone.mp3"]
+            .map(String::from);
+        assert_eq!(super::copy_into(&stick, &files, &target).unwrap(), 2);
+        assert_eq!(
+            std::fs::read(target.join("two.mp3")).unwrap(),
+            b"two-in-the-drive",
+            "an existing file is never overwritten"
+        );
+        assert_eq!(std::fs::read(target.join("two (from stick).mp3")).unwrap(), b"two-on-stick");
+        assert_eq!(std::fs::read(target.join("three.mp3")).unwrap(), b"333");
+        assert_eq!(super::copy_into(&stick, &files, &target).unwrap(), 0, "a second run copies nothing");
+    }
+
     use super::*;
     use boothready_core::rules::Ruleset;
 

@@ -5,7 +5,7 @@
 // actions to this module.
 
 import type { Api } from "./api";
-import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState, TrackAnalysis } from "./types";
+import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState, TrackAnalysis, StickComparison, PlaylistCompare, CompareState } from "./types";
 import { gb, html, isFolded, num, plural, raw, Raw, secHead, when } from "./ui";
 
 type Filter = "all" | TrackState;
@@ -196,6 +196,163 @@ const P = {
 };
 
 const trackKey = (t: { source: string; path: string }) => `${t.source}|${t.path}`;
+
+// ------------------------------------------------------------------ compare
+// The library compared with one stick: selecting a stick makes it the
+// comparison target, which stays while the user browses the library, so the
+// tree and the list can show what that stick has and lacks.
+
+const C = { device: null as string | null, label: "", data: null as StickComparison | null, loading: false };
+
+export async function setCompareTarget(deviceId: string | null, label = "") {
+  if (!deviceId) {
+    C.device = null;
+    C.data = null;
+    L.host.render();
+    return;
+  }
+  const same = C.device === deviceId;
+  C.device = deviceId;
+  C.label = label;
+  if (!same) C.data = null;
+  C.loading = true;
+  L.host.render();
+  try {
+    C.data = await L.host.api.stickCompare(deviceId);
+  } catch {
+    C.data = null;
+  } finally {
+    C.loading = false;
+  }
+  if (C.device === deviceId) L.host.render();
+}
+
+/** The stick the library is compared with, if any. */
+export const compareTarget = () => C.device;
+
+const C_BUSY = new Set<string>();
+
+/** The library source the compared folders live in: the one most of them share. */
+function compareSource(): string | null {
+  const count = new Map<string, number>();
+  for (const p of C.data?.playlists ?? []) if (p.folder) count.set(p.folder.split("|")[0], (count.get(p.folder.split("|")[0]) ?? 0) + 1);
+  let best: string | null = null;
+  for (const [id, n] of count) if (!best || n > (count.get(best) ?? 0)) best = id;
+  return best ?? L.sources[0]?.id ?? null;
+}
+
+/** Where a new playlist folder goes: under DJ when the source has one, as the library's layout puts playlists there. */
+function newFolderParent(sourceId: string): string {
+  const top = (L.folders.get(sourceId) ?? []).filter((f) => !f.path.includes("/")).map((f) => f.path);
+  return top.find((f) => f.toLowerCase() === "dj") ?? "";
+}
+
+function inboxFolder(sourceId: string): string {
+  const top = (L.folders.get(sourceId) ?? []).filter((f) => !f.path.includes("/")).map((f) => f.path);
+  return top.find((f) => /inbox/i.test(f)) ?? "Inbox";
+}
+
+async function copyFromStick(playlist: string | null) {
+  const dev = C.device;
+  const sid = compareSource();
+  if (!dev || !sid) return;
+  await loadFolders(sid);
+  const folder = playlist === null ? inboxFolder(sid) : [newFolderParent(sid), playlist.trim()].filter(Boolean).join("/");
+  const busyKey = playlist ?? "*orphans";
+  C_BUSY.add(busyKey);
+  L.host.render();
+  try {
+    const n = await L.host.api.stickToLibrary(dev, sid, folder, playlist);
+    L.host.toast(n ? `Copied ${plural(n, "track")} from ${C.label} into ${folder}. Your cloud app uploads them in the background.` : `${folder} already has these tracks.`);
+    await L.host.api.libraryScan(sid).catch(() => {});
+  } catch (e) {
+    L.host.toast(String(e));
+  } finally {
+    C_BUSY.delete(busyKey);
+  }
+  L.folders.delete(sid);
+  await refreshLibrary();
+  await setCompareTarget(dev, C.label);
+}
+
+/** Open the export with every library folder this stick already has a playlist for ticked. */
+async function exportForStick() {
+  const sid = compareSource();
+  if (!sid || !C.data) return;
+  const folders = new Set<string>(C.data.playlists.filter((p) => p.folder && (p.state === "same" || p.state === "differs") && p.folder.startsWith(`${sid}|`)).map((p) => p.folder!.slice(sid.length + 1)));
+  L.host.selectLibrary();
+  L.exp = { sourceId: sid, folders, plan: null, planning: false, name: "", running: false, stopping: false, progress: null, error: null, done: null };
+  L.collect = null;
+  await loadFolders(sid);
+  await planExport();
+  L.host.render();
+}
+
+const compareOf = (folderKey: string): PlaylistCompare | undefined => C.data?.playlists.find((p) => p.folder === folderKey);
+
+const COMPARE_GLYPH: Record<CompareState, [string, string]> = {
+  same: ["✓", "On the stick, same tracks"],
+  differs: ["≠", "On the stick with different tracks"],
+  library_only: ["", "Not on the stick"],
+  stick_only: ["◆", "Only on the stick"],
+};
+
+function compareBadge(folderKey: string): Raw {
+  if (!C.data) return html``;
+  const p = compareOf(folderKey);
+  if (!p || p.state === "library_only") return html``;
+  const [g, why] = COMPARE_GLYPH[p.state];
+  return html`<span class="cmp ${p.state}" title="${why} ${C.label}">${g}</span>`;
+}
+
+function cmpLine(p: PlaylistCompare): string {
+  switch (p.state) {
+    case "same":
+      return `${num(p.stick_tracks)} tracks`;
+    case "differs":
+      return [p.missing_on_stick.length ? `${num(p.missing_on_stick.length)} not on the stick` : "", p.only_on_stick.length ? `${num(p.only_on_stick.length)} only on the stick` : ""].filter(Boolean).join(", ");
+    case "stick_only":
+      return `${num(p.stick_tracks)} tracks, no folder in your library`;
+    default:
+      return `${num(p.library_tracks)} tracks, not on the stick`;
+  }
+}
+
+/** The stick inspector's comparison with the library. */
+export function compareSection(deviceId: string): Raw {
+  if (C.device !== deviceId) return html``;
+  if (!C.data) return html`<section><span class="lbl">Compared with your library</span><div class="hint">${C.loading ? html`<span class="spinner" aria-hidden="true"></span> Comparing.` : "This stick has no rekordbox library to compare."}</div></section>`;
+  const d = C.data;
+  const by = (st: CompareState) => d.playlists.filter((p) => p.state === st);
+  const matched = d.matched_by_size + d.matched_by_name;
+  const row = (p: PlaylistCompare) => {
+    const [g] = COMPARE_GLYPH[p.state];
+    if (!p.folder) {
+      const busy = C_BUSY.has(p.name);
+      return html`<div class="cmp-row ${p.state} with-act"><span class="cmp ${p.state}">${g}</span><span class="nm">${p.name}</span><button class="btn small" data-act="cmp-make-folder" data-id="${p.name}" ${busy ? "disabled" : ""} title="Copy this playlist's ${plural(p.stick_tracks, "track")} from the stick into a new folder in your library">${busy ? "Copying" : "Make folder"}</button><span class="ct">${cmpLine(p)}</span></div>`;
+    }
+    const open = raw(`data-act="library-folder" data-id="${p.folder.replace(/"/g, "&quot;")}"`);
+    return html`<button class="cmp-row ${p.state}" ${open} title="Open ${p.name} in the list"><span class="cmp ${p.state}">${g || "+"}</span><span class="nm">${p.name}</span><span class="ct">${cmpLine(p)}</span></button>`;
+  };
+  const group = (st: CompareState, label: string, open: boolean) => {
+    const list = by(st);
+    if (!list.length) return html``;
+    return html`<details class="cmp-group" ${open ? "open" : ""}><summary><span class="cmp ${st}">${COMPARE_GLYPH[st][0] || "+"}</span>${label} <b>${num(list.length)}</b></summary>${list.map(row)}</details>`;
+  };
+  return html`<section class="compare"><span class="lbl">Compared with your library</span>
+    <div class="cmp-head">${num(matched)} of ${num(d.stick_tracks)} tracks on this stick are in your library${d.orphans.length ? html`, <b>${num(d.orphans.length)}</b> only here` : ""}.</div>
+    ${by("stick_only").length || d.orphans.length
+      ? html`<div class="cmp-warn">Updating the stick from your library would drop ${[by("stick_only").length ? plural(by("stick_only").length, "playlist") : "", d.orphans.length ? plural(d.orphans.length, "track") : ""].filter(Boolean).join(" and ")} that exist only on it. Bring them into your library first.
+          <div class="actions">${by("stick_only").length ? html`<button class="btn" data-act="cmp-make-all" ${C_BUSY.size ? "disabled" : ""}>Make ${plural(by("stick_only").length, "folder")}</button>` : ""}${d.orphans.length ? html`<button class="btn" data-act="cmp-orphans" ${C_BUSY.has("*orphans") ? "disabled" : ""}>Copy ${plural(d.orphans.length, "track")} to the inbox</button>` : ""}</div></div>`
+      : ""}
+    <div class="actions"><button class="btn primary" data-act="cmp-export" title="Build an export of every library folder this stick has a playlist for, then copy it onto the stick">Update this stick from your library</button></div>
+    ${group("differs", "Different tracks", true)}
+    ${group("stick_only", "Only on the stick", true)}
+    ${group("same", "Same on both", false)}
+    ${group("library_only", "Not on the stick", false)}
+    ${d.orphans.length ? html`<details class="cmp-group"><summary><span class="cmp stick_only">!</span>Tracks only on this stick <b>${num(d.orphans.length)}</b></summary>${d.orphans.map((o) => html`<div class="cmp-row static"><span class="nm">${o.artist ? `${o.artist} - ` : ""}${o.title}</span><span class="ct">${o.playlists.join(", ")}</span></div>`)}</details>` : ""}
+  </section>`;
+}
 
 // ------------------------------------------------------------------ analysis
 // Waveforms, tempo, key and phrases come from BoothReady's own analysis,
@@ -812,6 +969,22 @@ export function closeLibrarySheet(): boolean {
 
 /** Handle a click. Returns false when the action isn't a Library one. */
 export async function libraryAct(a: string, id: string): Promise<boolean> {
+  if (a === "cmp-make-folder") {
+    await copyFromStick(id);
+    return true;
+  }
+  if (a === "cmp-make-all") {
+    for (const p of C.data?.playlists.filter((x) => x.state === "stick_only") ?? []) await copyFromStick(p.name);
+    return true;
+  }
+  if (a === "cmp-orphans") {
+    await copyFromStick(null);
+    return true;
+  }
+  if (a === "cmp-export") {
+    await exportForStick();
+    return true;
+  }
   const host = L.host;
   switch (a) {
     case "open-library":
@@ -1118,7 +1291,7 @@ export function libraryTree(): Raw {
     html`<div class="node ${on ? "on" : ""}"><span class="caret"></span><button class="label" data-act="${act}" data-id="${id}">${raw(ic)}<span class="nm">${label}</span><span class="ct">${num(n)}</span></button></div>`;
   const node = (key: string, label: string, count: number, depth: number, hasChildren: boolean, on: boolean, ic: string, dim = false) => html`<div class="node ${on ? "on" : ""} ${dim ? "dim" : ""}" style="--depth:${depth}">
       ${hasChildren ? html`<button class="caret" data-act="library-toggle" data-id="${key}" aria-label="${L.open.has(key) ? "Collapse" : "Expand"} ${label}" aria-expanded="${L.open.has(key) ? "true" : "false"}">${caret(L.open.has(key))}</button>` : html`<span class="caret"></span>`}
-      <button class="label" data-act="library-folder" data-id="${key.includes("|") ? key : `${key}|`}">${raw(ic)}<span class="nm">${label}</span><span class="ct">${num(count)}</span></button>
+      <button class="label" data-act="library-folder" data-id="${key.includes("|") ? key : `${key}|`}">${raw(ic)}<span class="nm">${label}</span>${compareBadge(key)}<span class="ct">${num(count)}</span></button>
     </div>`;
   const sourceNodes = L.sources.map((s) => {
     const folders = L.folders.get(s.id) ?? [];
@@ -1176,13 +1349,15 @@ function trackRow(t: LibraryTrack, i: number): Raw {
   const match = !!P.now && !loaded && keysMix(nowAn?.camelot ?? P.now.camelot, camelot);
   const plays = playsOn(t);
   const glyph = { ok: "", w: "w", b: "b", u: "u" };
+  const cmp = C.data && L.folder && L.tracksFor ? compareOf(`${L.tracksFor}|${L.folder}`) : undefined;
+  const notOnStick = !!cmp && cmp.state !== "stick_only" && cmp.missing_on_stick.includes(`${t.source}|${t.path}`);
   return html`<tr class="${t.state} ${loaded ? "playing" : ""} ${L.sel === i ? "sel" : ""}" data-act="library-select" data-id="${i}" data-row="${i}">
     <td class="c-n">${t.state === "unreadable"
       ? html`<span class="idx">${n}</span>`
       : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${titleOf(t)}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
     <td class="c-art"><span class="arttile f-${kind}" aria-hidden="true">${t.format.slice(0, 4)}</span></td>
     <td class="c-wave" title="${an ? "" : t.state === "cloud_only" ? "Not analysed: the file is still online" : analysing.has(trackKey(t)) ? "Analysing" : "Not analysed yet"}">${an ? html`<canvas class="pv" data-pv="${i}"></canvas>` : analysing.has(trackKey(t)) ? html`<span class="base busy"></span>` : html`<span class="base"></span>`}</td>
-    <td class="c-title" title="${where}">${titleOf(t)}</td>
+    <td class="c-title" title="${where}">${titleOf(t)}${notOnStick ? html`<span class="miss" title="Not in this playlist on ${C.label}">not on ${C.label}</span>` : ""}</td>
     <td class="c-artist">${t.artist ?? (t.title ? "" : html`<span class="faint">${t.folder}</span>`)}</td>
     <td class="r num c-bpm bpm">${bpm === null ? html`<span class="faint">·</span>` : bpmText(Math.round(bpm * 10) / 10)}</td>
     <td class="c-key ${match ? "match" : ""}" title="${keyName ?? ""}">${camelot ? keyChip(camelot) : html`<span class="faint">·</span>`}</td>

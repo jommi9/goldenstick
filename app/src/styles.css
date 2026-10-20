@@ -2692,3 +2692,45 @@ td.c-wave canvas.pv {
 .judge-pill .select:focus-visible {
   background-color: var(--line-2);
 }
+
+/* ------------------------------------------------------------------ compare */
+.cmp {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  margin-left: 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  flex: none;
+}
+.cmp.same { color: var(--ok); background: rgba(62, 207, 114, 0.12); }
+.cmp.differs { color: var(--warn); background: rgba(242, 179, 61, 0.14); }
+.cmp.stick_only { color: var(--cloud); background: rgba(122, 167, 255, 0.14); }
+.cmp.library_only { color: var(--text-3); background: var(--raised); }
+.tree .node .label .cmp { margin-left: auto; }
+.tree .node .label .cmp + .ct { margin-left: 8px; }
+
+.compare .cmp-head { color: var(--text-2); margin-bottom: 10px; }
+.cmp-group { border-top: 1px solid var(--line); padding: 6px 0; }
+.cmp-group summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text); padding: 4px 0; list-style: none; }
+.cmp-group summary::-webkit-details-marker { display: none; }
+.cmp-group summary b { margin-left: auto; color: var(--text-2); font-weight: 600; }
+.cmp-group summary .cmp { margin-left: 0; }
+.cmp-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; width: 100%; padding: 6px 4px 6px 2px; border-radius: 6px; text-align: left; align-items: center; }
+.cmp-row:not(.static):not([disabled]):hover { background: var(--hover); }
+.cmp-row .cmp { margin-left: 0; grid-row: span 2; }
+.cmp-row .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-row .ct { grid-column: 2; color: var(--text-3); font-size: 12px; }
+.cmp-row.static { grid-template-columns: minmax(0, 1fr); }
+.cmp-row.static .ct { grid-column: 1; }
+.miss { margin-left: 8px; padding: 1px 6px; border-radius: 4px; font-size: 11px; color: var(--warn); background: rgba(242, 179, 61, 0.12); white-space: nowrap; }
+
+.cmp-row.with-act { grid-template-columns: auto minmax(0, 1fr) auto; }
+.cmp-row.with-act .btn { grid-row: span 2; align-self: center; }
+.cmp-row.with-act .ct { grid-column: 2; }
+.cmp-warn { margin: 10px 0; padding: 10px 12px; border-radius: 8px; background: rgba(242, 179, 61, 0.1); border-left: 2px solid var(--warn); color: var(--text-2); line-height: 1.45; }
+.cmp-warn .actions { margin-top: 8px; }
+.compare > .actions { margin: 10px 0 4px; }
