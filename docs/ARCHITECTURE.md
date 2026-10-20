@@ -79,7 +79,7 @@ Each layer contributes a verdict, and the device verdict is the worst of them:
 | At risk | The vendor warns it may not work (power draw, a dirty filesystem, a partition that isn't first) |
 | Fix needed | Documented not to work |
 
-An untested USB model doesn't block Ready, because the format decides compatibility, but the physical column always shows that the exact stick hasn't been tested. OneLibrary databases are encrypted, so their presence can be checked but their contents can't, and any device that relies on them tops out at Expected to work.
+An untested USB model doesn't block Ready, because the format decides compatibility, but the physical column always shows that the exact stick hasn't been tested. OneLibrary databases are encrypted with a key rekordbox shares across all copies; BoothReady reads their track and playlist counts with that key from a temporary copy and warns when they disagree with the Device Library. Until a player has read a OneLibrary written by BoothReady, any device that relies on it tops out at Expected to work.
 
 Rule updates arrive as signed bundles (`rules::bundle`). Ed25519 signatures are checked against keys compiled into the app before the payload is even parsed, and a bundle whose version isn't higher than the installed one is rejected.
 

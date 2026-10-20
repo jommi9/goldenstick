@@ -226,11 +226,63 @@ pub fn populate(root: &Path, content: DemoContent) -> io::Result<()> {
         write(root, "Contents/Hi-Res/._Ambient Intro.flac", &[0u8; 4096])?;
     }
     if one_library {
-        // OneLibrary databases are encrypted; random-looking bytes stand in.
-        let bytes: Vec<u8> = (0..65_536u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
-        write(root, ONE_LIBRARY_FILE, &bytes)?;
+        write_one_library_stand_in(root, &fixture, &artists, &playlists)?;
     }
     Ok(())
+}
+
+/// A real encrypted OneLibrary database holding the same tracks and
+/// playlists as the demo's Device Library. Playlists sit at the root, since
+/// the writer does not nest them.
+#[cfg(feature = "onelibrary-writer")]
+fn write_one_library_stand_in(
+    root: &Path,
+    fixture: &[FixtureTrack],
+    artists: &[(u32, String)],
+    playlists: &[FixturePlaylist],
+) -> io::Result<()> {
+    use crate::library::onelibrary_writer::{write_one_library, PlaylistInput};
+    use crate::library::pdb_writer::TrackInput;
+    let tracks: Vec<TrackInput> = fixture
+        .iter()
+        .map(|t| TrackInput {
+            id: Some(t.id),
+            title: t.title.clone(),
+            file_path: t.file_path.clone(),
+            artist: artists.iter().find(|(id, _)| *id == t.artist_id).map(|(_, n)| n.clone()),
+            analyze_path: format!("/PIONEER/USBANLZ/P000/{:08X}/ANLZ0000.DAT", t.id),
+            tempo: t.tempo,
+            duration: t.duration_secs,
+            bitrate: t.bitrate,
+            sample_rate: t.sample_rate,
+            sample_depth: t.sample_depth,
+            file_size: t.file_size,
+            ..TrackInput::default()
+        })
+        .collect();
+    let lists: Vec<PlaylistInput> = playlists
+        .iter()
+        .filter(|p| !p.is_folder)
+        .map(|p| PlaylistInput { name: p.name.clone(), track_ids: p.track_ids.clone() })
+        .collect();
+    let path = root.join(ONE_LIBRARY_FILE);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_one_library(&path, &tracks, &lists, "2026-09-21").map_err(|e| io::Error::other(e.to_string()))?;
+    Ok(())
+}
+
+/// Without the writer, random-looking bytes stand in for the encrypted file.
+#[cfg(not(feature = "onelibrary-writer"))]
+fn write_one_library_stand_in(
+    root: &Path,
+    _fixture: &[FixtureTrack],
+    _artists: &[(u32, String)],
+    _playlists: &[FixturePlaylist],
+) -> io::Result<()> {
+    let bytes: Vec<u8> = (0..65_536u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+    write(root, ONE_LIBRARY_FILE, &bytes)
 }
 
 /// A simulated USB stick for demo mode.

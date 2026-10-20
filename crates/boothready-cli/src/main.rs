@@ -147,7 +147,7 @@ enum Cmd {
         #[arg(long, default_value = "normal")]
         rhythm_mode: String,
     },
-    /// Write a rekordbox Device Library (export.pdb, analysis files and the
+    /// Write a rekordbox export (export.pdb, OneLibrary, analysis files and the
     /// audio) into a local folder, one playlist per folder of music. Never
     /// writes to a USB: copy the finished folder with `boothready copy`.
     ExportPdb {
@@ -162,6 +162,10 @@ enum Cmd {
         /// Write no analysis files. Players then show no waveform or beat grid.
         #[arg(long)]
         skip_analysis: bool,
+        /// Write only export.pdb. By default a OneLibrary database (exportLibrary.db)
+        /// is written next to it for the CDJ-3000X, CDJ-1500X and XDJ-AZ.
+        #[arg(long)]
+        device_library_only: bool,
     },
     /// Build an MBR + FAT32 disk image (never touches devices).
     MakeImage {
@@ -379,7 +383,7 @@ fn main() -> Result<()> {
             }
             println!("{}", analyze::describe(&report, out));
         }
-        Cmd::ExportPdb { out, playlists, rhythm_mode, skip_analysis } => {
+        Cmd::ExportPdb { out, playlists, rhythm_mode, skip_analysis, device_library_only } => {
             let playlists = playlists.iter().map(|p| export::parse_playlist(p)).collect::<Result<Vec<_>>>()?;
             let analysis = export::analysis(*skip_analysis, rhythm_mode)?;
             let devices = backend(&cli)
@@ -387,7 +391,7 @@ fn main() -> Result<()> {
                 .list_devices()
                 .context("listing drives to make sure the output folder is not on a USB")?;
             export::guard_target(out, &devices)?;
-            let (report, warnings) = export::run(out, &playlists, analysis, cli.json)?;
+            let (report, warnings) = export::run(out, &playlists, analysis, !device_library_only, cli.json)?;
             if cli.json {
                 #[derive(serde::Serialize)]
                 struct Out<'a> {

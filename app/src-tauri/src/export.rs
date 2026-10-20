@@ -283,6 +283,7 @@ pub async fn library_export(app: AppHandle, state: State<'_, AppState>, request:
         playlists: prepared.collected.playlists,
         analysis: Analysis::Normal,
         analysis_cache: Some(prepared.cache),
+        one_library: true,
     };
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let mut last = std::time::Instant::now();

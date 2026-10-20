@@ -66,3 +66,45 @@ Diff `packages/rekordbox-ts/src/devicelib` between commit `452c46f` and the
 new djbooth commit, apply the changes to the two Rust files, rerun
 `cargo test -p boothready-core pdb_writer export::`, and update the commit
 here.
+
+## rekordbox OneLibrary writer and reader
+
+`src/library/onelibrary_writer.rs` is a Rust port of djbooth's
+`writeOneLibraryPlaylist` in `packages/rekordbox-ts/src/devicelib-plus/export.ts`
+at the same commit `452c46f03c99e87df1793558dab1f69fc0a810a1` (MIT, Dylan Jones
+and Georgios Konstantopoulos), and `src/library/onelibrary.rs` carries the
+obfuscated database key from djbooth's `database.ts` with the base85, XOR and
+zlib decoding from djbooth's `utils.ts`. pyrekordbox (MIT) publishes the same
+key the same way. The key is never stored in plain text in this repository.
+
+| djbooth (TypeScript) | BoothReady (Rust) |
+|---|---|
+| `devicelib-plus/export.ts`: `SCHEMA`, `MENU_ITEMS`, `CATEGORIES`, `SORTS`, `COLORS`, `writeOneLibraryPlaylist`, `insertContent` | `src/library/onelibrary_writer.rs`: the same constants, `write_one_library`, `insert_content` |
+| `devicelib-plus/database.ts`: `DEVICE_LIBRARY_PLUS_KEY_BLOB` | `KEY_BLOB` in `src/library/onelibrary.rs` |
+| `utils.ts`: `deobfuscate`, `decodeBase85`, `xorBlob` | `key` and `decode_base85` in the same file |
+
+The schema and fixed rows are unchanged. An ignored test,
+`rekordbox_reference_has_the_same_schema_and_fixed_rows`, compares them with a
+database rekordbox wrote; it passed on 19 October 2026 against the two OneLibrary
+databases in Jommi's stick backups.
+
+### Local changes
+
+- One call builds the whole database from the `TrackInput` rows the Device
+  Library writer receives, so both databases describe the same files with the
+  same IDs. djbooth appends one folder and one playlist per call to an existing
+  file. Playlists go at the root, as in `export.pdb`, and an existing file is
+  refused.
+- Album, genre and label rows are written from the tags as well as artist and
+  key.
+- Values that differ from djbooth follow what rekordbox wrote in the December
+  2025 database on Jommi's stick: `analysedBits` 41 (djbooth 105), `contentLink`
+  788224 (djbooth `NULL`), `NULL` update counters (djbooth 2 and empty text),
+  `property.dbVersion` "1000" (djbooth "10000"), and the four My Tag parent rows
+  `Genre`, `Components`, `Situation` and `Untitled Column` (djbooth one `Tags`
+  row). `masterDbId` and `masterContentId` are `NULL` because there is no
+  rekordbox master database, and `myTagMasterDBID` is 1 as in djbooth.
+- The journal mode is `DELETE`, so no `-wal` or `-shm` file is left beside the
+  database.
+- BoothReady reads the database back after writing it and compares every track
+  and playlist with the export, where djbooth checks the one playlist it added.

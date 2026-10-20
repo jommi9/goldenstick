@@ -56,6 +56,7 @@ fn export_without_analysis_reads_back_through_the_library_scanner() {
         ],
         analysis: Analysis::Skip,
         analysis_cache: None,
+        one_library: false,
     };
     let mut phases = Vec::new();
     let report = export_device_library(&request, |p| phases.push(p.phase)).unwrap();
@@ -115,6 +116,7 @@ fn export_with_analysis_points_the_anlz_files_at_the_media_path() {
         playlists: vec![PlaylistSpec { name: "Set".into(), tracks: vec![0] }],
         analysis: Analysis::Normal,
         analysis_cache: None,
+        one_library: false,
     };
     let report = export_device_library(&request, |_| {}).unwrap();
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -165,6 +167,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
             playlists: vec![],
             analysis: Analysis::Skip,
             analysis_cache: None,
+            one_library: false,
         };
         assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Target(_))), "{occupant}");
     }
@@ -176,6 +179,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         playlists: vec![],
         analysis: Analysis::Skip,
         analysis_cache: None,
+        one_library: false,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Io { .. })));
     assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "staging must be removed and nothing installed");
@@ -188,6 +192,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         playlists: vec![],
         analysis: Analysis::Skip,
         analysis_cache: None,
+        one_library: false,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Track(_))));
 
@@ -197,6 +202,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         playlists: vec![],
         analysis: Analysis::Skip,
         analysis_cache: None,
+        one_library: false,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Request(_))));
     let request = ExportRequest {
@@ -205,6 +211,7 @@ fn targets_with_an_export_or_unreadable_tracks_are_refused_and_leave_nothing_beh
         playlists: vec![PlaylistSpec { name: "Bad".into(), tracks: vec![1] }],
         analysis: Analysis::Skip,
         analysis_cache: None,
+        one_library: false,
     };
     assert!(matches!(export_device_library(&request, |_| {}), Err(ExportError::Request(_))));
 }
@@ -241,6 +248,7 @@ fn a_cached_analysis_is_reused_and_repointed() {
         playlists: vec![PlaylistSpec { name: "Set".into(), tracks: vec![0] }],
         analysis: Analysis::Normal,
         analysis_cache: Some(cache.clone()),
+        one_library: false,
     };
     let mut analysed = 0;
     let first = export_device_library(&request, |p| analysed = analysed.max(p.analysed)).unwrap();
@@ -283,4 +291,91 @@ fn usb_analysis_dir(t: &ExportedTrack) -> PathBuf {
     let path = crate::library::pdb_writer::usb_analysis_path(&t.usb_path).unwrap();
     let dir = path.trim_start_matches("/PIONEER/USBANLZ/").rsplit_once('/').map(|(d, _)| d).unwrap().to_string();
     PathBuf::from(dir)
+}
+
+#[cfg(feature = "onelibrary-writer")]
+#[test]
+fn one_export_writes_both_libraries_with_the_same_tracks_and_playlists() {
+    use crate::library::onelibrary::read_one_library_file;
+    use crate::library::pdb::parse_pdb;
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("music");
+    fs::create_dir(&src).unwrap();
+    let tracks = source_tracks(
+        &src,
+        &[("a.wav", "Alpha", "Ääkkönen"), ("b.wav", "Beta", "Artist B"), ("c.wav", "Gamma", "Ääkkönen")],
+        2,
+    );
+    let root = tmp.path().join("stick");
+    let request = ExportRequest {
+        root: root.clone(),
+        tracks,
+        playlists: vec![
+            PlaylistSpec { name: "Friday".into(), tracks: vec![2, 0] },
+            PlaylistSpec { name: "Warm-up ☀".into(), tracks: vec![1, 2] },
+        ],
+        analysis: Analysis::Skip,
+        analysis_cache: None,
+        one_library: true,
+    };
+    let report = export_device_library(&request, |_| {}).unwrap();
+    let ol_path = report.one_library_path.clone().expect("OneLibrary path");
+    assert_eq!(ol_path, report.root.join(crate::library::ONE_LIBRARY_FILE));
+    assert!(!report.root.join("PIONEER/rekordbox/exportLibrary.db-wal").exists());
+
+    let pdb = parse_pdb(&fs::read(&report.pdb_path).unwrap()).unwrap();
+    let ol = read_one_library_file(&ol_path).unwrap();
+    let from_pdb: Vec<_> =
+        pdb.tracks.iter().map(|t| (t.id, t.title.clone(), t.artist.clone(), t.file_path.clone())).collect();
+    let from_ol: Vec<_> =
+        ol.tracks.iter().map(|t| (t.id, t.title.clone(), t.artist.clone(), t.file_path.clone())).collect();
+    assert_eq!(from_pdb, from_ol);
+    let pl_pdb: Vec<_> = pdb.playlists.iter().map(|p| (p.name.clone(), p.track_ids.clone())).collect();
+    let pl_ol: Vec<_> = ol.playlists.iter().map(|p| (p.name.clone(), p.track_ids.clone())).collect();
+    assert_eq!(pl_pdb, pl_ol);
+    assert_eq!(pl_ol, vec![("Friday".to_string(), vec![3, 1]), ("Warm-up ☀".to_string(), vec![2, 3])]);
+
+    let libs = scan_libraries(&root);
+    assert!(libs.has(LibraryFormat::RekordboxDeviceLibrary) && libs.has(LibraryFormat::RekordboxOneLibrary));
+    let rb = libs.rekordbox.as_ref().unwrap();
+    let one = rb.one_library.as_ref().unwrap();
+    assert!(one.encrypted);
+    assert_eq!((one.tracks, one.playlists), (Some(3), Some(2)));
+    assert!(rb.warnings.is_empty(), "{:?}", rb.warnings);
+}
+
+#[cfg(feature = "onelibrary-writer")]
+#[test]
+fn the_scanner_warns_when_onelibrary_and_device_library_disagree() {
+    use crate::library::onelibrary_writer::write_one_library;
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("music");
+    fs::create_dir(&src).unwrap();
+    let tracks = source_tracks(&src, &[("a.wav", "Alpha", "A"), ("b.wav", "Beta", "B")], 2);
+    let root = tmp.path().join("stick");
+    let request = ExportRequest {
+        root: root.clone(),
+        tracks,
+        playlists: vec![PlaylistSpec { name: "All".into(), tracks: vec![0, 1] }],
+        analysis: Analysis::Skip,
+        analysis_cache: None,
+        one_library: false,
+    };
+    export_device_library(&request, |_| {}).unwrap();
+    // A OneLibrary left over from an earlier, smaller export.
+    let stale = crate::library::pdb_writer::TrackInput {
+        id: Some(1),
+        title: "Alpha".into(),
+        file_path: "/Contents/00000001/a.wav".into(),
+        ..Default::default()
+    };
+    write_one_library(&root.join(crate::library::ONE_LIBRARY_FILE), &[stale], &[], "2026-01-01").unwrap();
+    let libs = scan_libraries(&root);
+    let rb = libs.rekordbox.as_ref().unwrap();
+    assert_eq!(rb.one_library.as_ref().unwrap().tracks, Some(1));
+    assert!(
+        rb.warnings.iter().any(|w| w.contains("OneLibrary lists 1 tracks and the Device Library 2")),
+        "{:?}",
+        rb.warnings
+    );
 }

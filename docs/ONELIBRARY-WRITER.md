@@ -1,6 +1,6 @@
 # OneLibrary writer
 
-Status: research and proposed design, written 2026-10-19. No writer exists in BoothReady yet, no export was written to a USB for this work, and no player has read a OneLibrary database written by BoothReady or by the throwaway spike described below.
+Status: written 2026-10-19 as research and design; steps 1 and 2 of [Work](#work) and the planner part of step 3 are now implemented (`library/onelibrary.rs`, `library/onelibrary_writer.rs`, `ExportRequest::one_library`, `export-pdb` writes both libraries by default). No export with a OneLibrary database has been written to a USB, and no player has read one.
 
 BoothReady's Device Library writer (`crates/boothready-core/src/export/device_library.rs`) produces `export.pdb`, the ANLZ files and the audio. BoothReady's library check passes that tree for the CDJ-2000, CDJ-2000NXS2, CDJ-3000 and XDJ-XZ and blocks it for the CDJ-3000X, CDJ-1500X and XDJ-AZ, because those players read `PIONEER/rekordbox/exportLibrary.db` (OneLibrary, formerly Device Library Plus) instead. This document records what is known about that database and proposes how BoothReady could write one next to `export.pdb` in the same export.
 

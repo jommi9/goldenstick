@@ -49,6 +49,7 @@ pub fn run(
     out: &Path,
     playlists: &[(String, PathBuf)],
     analysis: Analysis,
+    one_library: bool,
     quiet: bool,
 ) -> Result<(ExportReport, Vec<String>)> {
     let folders: Vec<PlaylistFolder> =
@@ -63,6 +64,7 @@ pub fn run(
         playlists: collected.playlists,
         analysis,
         analysis_cache: None,
+        one_library,
     };
     let report = export_device_library(&request, |p| {
         if !quiet {
@@ -70,7 +72,7 @@ pub fn run(
                 "analyze" => "Analysing",
                 "probe" => "Reading",
                 "copy" => "Copying",
-                "database" => "Writing export.pdb",
+                "database" => "Writing the databases",
                 _ => "Installing",
             };
             if p.total > 0 && p.current.is_empty() {
@@ -93,6 +95,11 @@ pub fn describe(report: &ExportReport, warnings: &[String]) -> String {
         report.analysis_files,
         boothready_core::verify::human_bytes(report.bytes_copied)
     );
+    out.push_str(if report.one_library_path.is_some() {
+        "\nLibraries: rekordbox Device Library (export.pdb) and OneLibrary (exportLibrary.db)."
+    } else {
+        "\nLibraries: rekordbox Device Library (export.pdb) only."
+    });
     for w in warnings.iter().chain(&report.warnings) {
         out.push_str("\n  ");
         out.push_str(w);
@@ -129,13 +136,14 @@ mod tests {
         }
         let lists = [("Friday".to_string(), fri.clone())];
         let out = tmp.path().join("out");
-        let (report, warnings) = run(&out, &lists, Analysis::Skip, true).unwrap();
+        let (report, warnings) = run(&out, &lists, Analysis::Skip, true, true).unwrap();
+        assert!(report.one_library_path.as_ref().is_some_and(|p| p.exists()), "both libraries are written by default");
         assert_eq!(report.tracks.len(), 2);
         assert!(warnings.iter().any(|w| w.contains("odd.ogg")));
         let libs = boothready_core::library::scan_libraries(&out);
         let dl = libs.rekordbox.unwrap().device_library.unwrap();
         assert_eq!(dl.playlists.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Friday"]);
         assert!(describe(&report, &warnings).contains("Wrote 2 tracks and 1 playlists"));
-        assert!(run(&out, &lists, Analysis::Skip, true).is_err(), "a folder that holds an export is refused");
+        assert!(run(&out, &lists, Analysis::Skip, true, true).is_err(), "a folder that holds an export is refused");
     }
 }
