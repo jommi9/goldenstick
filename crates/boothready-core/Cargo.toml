@@ -31,6 +31,11 @@ lofty = { workspace = true, optional = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 djbooth-analyzer = { workspace = true, optional = true }
 
+# SQLCipher takes its cryptography from CommonCrypto on macOS. Elsewhere it
+# needs OpenSSL, which is built from source so no system copy is required.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+libsqlite3-sys = { version = "0.35", features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
+
 [dev-dependencies]
 tempfile.workspace = true
 # Independent PDB parser used only to cross-check our reader and fixtures.
@@ -39,10 +44,10 @@ rekordcrate = { version = "=0.3.0", default-features = false }
 binrw = "0.14"
 
 [features]
-default = ["sqlite", "tags", "device-library-writer"]
+default = ["sqlite", "tags", "device-library-writer", "onelibrary-writer"]
 # Engine DJ database validation and the local store. Off in the privileged
 # helper, which has no business opening databases.
-sqlite = ["dep:rusqlite"]
+sqlite = ["dep:rusqlite", "dep:libsqlite3-sys", "dep:flate2"]
 # Reading track tags (artist, title, BPM, key) during a library scan. Off in
 # the privileged helper, which never reads music.
 tags = ["dep:lofty"]
@@ -52,3 +57,6 @@ fixtures = []
 # ported from djbooth. Off in the privileged helper, which never writes
 # libraries. Needs `tags` to read artist and title from the audio files.
 device-library-writer = ["tags", "dep:flate2", "dep:djbooth-analyzer"]
+# Writing rekordbox OneLibrary databases (exportLibrary.db) next to
+# export.pdb, ported from djbooth. Needs SQLCipher from `sqlite`.
+onelibrary-writer = ["sqlite", "device-library-writer"]

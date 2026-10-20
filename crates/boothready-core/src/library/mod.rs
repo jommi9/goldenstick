@@ -6,6 +6,10 @@
 //! validated, Serato crates are detected.
 
 mod engine;
+#[cfg(feature = "sqlite")]
+pub mod onelibrary;
+#[cfg(feature = "onelibrary-writer")]
+pub mod onelibrary_writer;
 pub mod pdb;
 #[cfg(any(test, feature = "fixtures"))]
 pub mod pdb_fixture;
@@ -179,6 +183,13 @@ pub struct OneLibraryReport {
     /// OneLibrary databases are SQLCipher-encrypted; a plain SQLite header
     /// means something other than rekordbox wrote this file.
     pub encrypted: bool,
+    /// Tracks and playlists read from inside the database with rekordbox's
+    /// published key, or `None` when it was not read (no SQLite support in
+    /// this build, or the key did not fit).
+    #[serde(default)]
+    pub tracks: Option<u32>,
+    #[serde(default)]
+    pub playlists: Option<u32>,
 }
 
 /// One rekordbox database was last written well before the other.
@@ -342,6 +353,34 @@ pub fn scan_libraries(root: &Path) -> LibraryReport {
     LibraryReport { formats, rekordbox, engine, serato }
 }
 
+/// Count the tracks and playlists in a OneLibrary database without touching
+/// the drive: the database and any `-wal` file are copied to a temporary
+/// folder first, because SQLite may create `-shm` and journal files beside
+/// a database it opens, and a check never writes to the stick.
+#[cfg(feature = "sqlite")]
+fn read_one_library_copy(db: &Path) -> Option<(u32, u32)> {
+    let dir = std::env::temp_dir().join(format!("boothready-onelibrary-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&dir).ok()?;
+    let result = (|| {
+        let copy = dir.join("exportLibrary.db");
+        fs::copy(db, &copy).ok()?;
+        let wal = db.with_file_name("exportLibrary.db-wal");
+        if wal.exists() {
+            fs::copy(&wal, dir.join("exportLibrary.db-wal")).ok()?;
+        }
+        let lib = onelibrary::read_one_library_file(&copy).ok()?;
+        let playlists = lib.playlists.iter().filter(|p| !p.is_folder).count();
+        Some((lib.tracks.len() as u32, playlists as u32))
+    })();
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
+#[cfg(not(feature = "sqlite"))]
+fn read_one_library_copy(_db: &Path) -> Option<(u32, u32)> {
+    None
+}
+
 fn scan_rekordbox(resolver: &mut PathResolver) -> Option<RekordboxReport> {
     let rb_dir = existing(resolver, REKORDBOX_DIR)?;
     if !rb_dir.is_dir() {
@@ -354,15 +393,29 @@ fn scan_rekordbox(resolver: &mut PathResolver) -> Option<RekordboxReport> {
         let meta = fs::metadata(&p).ok()?;
         let mut head = [0u8; 16];
         let n = fs::File::open(&p).and_then(|mut f| std::io::Read::read(&mut f, &mut head)).unwrap_or(0);
+        let encrypted = n == 16 && &head != b"SQLite format 3\0";
+        let contents = if encrypted && meta.len() > 0 { read_one_library_copy(&p) } else { None };
         Some(OneLibraryReport {
             modified_unix: one_library_written,
             size_bytes: meta.len(),
-            encrypted: n == 16 && &head != b"SQLite format 3\0",
+            encrypted,
+            tracks: contents.as_ref().map(|c| c.0),
+            playlists: contents.as_ref().map(|c| c.1),
         })
     });
     if let Some(ol) = &one_library {
         if ol.size_bytes == 0 {
             warnings.push("rekordbox OneLibrary database is empty (export interrupted?)".into());
+        } else if ol.encrypted && ol.tracks.is_none() && cfg!(feature = "sqlite") {
+            warnings.push("rekordbox OneLibrary database did not open with rekordbox's published key".into());
+        }
+        if let (Some(ol_tracks), Some(dl)) = (ol.tracks, &device_library) {
+            let dl_tracks = dl.tracks.len() as u32;
+            if dl.parse_error.is_none() && ol_tracks != dl_tracks {
+                warnings.push(format!(
+                    "rekordbox OneLibrary lists {ol_tracks} tracks and the Device Library {dl_tracks}; newer players read only OneLibrary"
+                ));
+            }
         }
     }
     let mut lag = None;
