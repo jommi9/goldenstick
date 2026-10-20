@@ -119,6 +119,11 @@ jobs:
             if [ -z "${!v}" ]; then unset "$v"; fi
           done
           if [ -n "${APPLE_SIGNING_IDENTITY:-}${APPLE_CERTIFICATE:-}" ]; then echo "macOS signing: on"; else echo "macOS signing: off (no APPLE_* secrets)"; fi
+          # SQLCipher on Windows builds OpenSSL from source, and OpenSSL's
+          # Configure needs a full Perl. This step runs in Git Bash, whose Perl
+          # lacks Locale::Maketext::Simple, so point openssl-src at the runner's
+          # Strawberry Perl instead.
+          if [ "$RUNNER_OS" = "Windows" ]; then export OPENSSL_SRC_PERL="C:/Strawberry/perl/bin/perl.exe"; fi
           npm ci
           npx tauri build --target ${{ matrix.target }} --config src-tauri/tauri.release.conf.json
       - name: Report whether the build is signed (macOS)
