@@ -346,7 +346,12 @@ fn one_library_detection_and_staleness() {
     );
     assert_eq!(rb.lag, None);
 
-    let days = |n: u64| SystemTime::now() - Duration::from_secs(n * 24 * 3600);
+    // Both dates come from one instant: opening the OneLibrary file above
+    // takes seconds in a debug build on slow runners, which would otherwise
+    // shorten a three-day gap to "about 2 days".
+    let now = SystemTime::now();
+    let days = |n: u64| now - Duration::from_secs(n * 24 * 3600);
+    set_modified(&vol.path().join(DEVICE_LIBRARY_FILE), now);
     set_modified(&ol, days(3));
     let report = scan_libraries(vol.path());
     let lag = report.rekordbox.as_ref().unwrap().lag.unwrap();
