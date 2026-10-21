@@ -104,7 +104,7 @@ pub fn exports_root(app: &AppHandle, state: &AppState) -> Res<PathBuf> {
 }
 
 /// Where analyses from earlier exports are kept for the next one.
-fn analysis_cache_dir(app: &AppHandle, state: &AppState) -> Res<PathBuf> {
+pub(crate) fn analysis_cache_dir(app: &AppHandle, state: &AppState) -> Res<PathBuf> {
     match state.demo_root() {
         Some(root) => Ok(root.join("analysis-cache")),
         None => Ok(app.path().app_data_dir().map_err(e2s)?.join("analysis-cache")),

@@ -2,42 +2,7 @@
 // screenshots) the same interface is served by a mock built from real
 // engine output, loaded lazily so the desktop build never fetches it.
 
-import type {
-  AppInfo,
-  Candidate,
-  ConfirmationDetails,
-  CopyReport,
-  CopySource,
-  DemoStickInfo,
-  DeviceCard,
-  DeviceEvent,
-  DriveAssessment,
-  DriveSummary,
-  EjectResult,
-  ExportPlan,
-  ExportStatus,
-  Filesystem,
-  GigProfile,
-  HardwareCard,
-  Identification,
-  KitPlan,
-  CollectPlan,
-  FolderNode,
-  KnownMedia,
-  LibraryCollectProgress,
-  LibraryExportProgress,
-  LibraryPage,
-  LibraryScanProgress,
-  LibrarySource,
-  LocalExport,
-  Preset,
-  Role,
-  VerifyProgress,
-  VerifyReport,
-  RealTestResult,
-  TestScenario,
-  VirtualTestSuite,
-} from "./types";
+import type { AppInfo, Candidate, ConfirmationDetails, CopyReport, CopySource, DemoStickInfo, DeviceCard, DeviceEvent, DriveAssessment, DriveSummary, EjectResult, ExportPlan, ExportStatus, Filesystem, GigProfile, HardwareCard, Identification, KitPlan, CollectPlan, FolderNode, KnownMedia, LibraryCollectProgress, LibraryExportProgress, LibraryPage, LibraryScanProgress, LibrarySource, LocalExport, Preset, Role, VerifyProgress, VerifyReport, RealTestResult, TestScenario, VirtualTestSuite, TrackAnalysis, StickComparison, SortOp, SortOutcome } from "./types";
 
 export interface Api {
   appInfo(): Promise<AppInfo>;
@@ -91,6 +56,18 @@ export interface Api {
   libraryFolders(id: string): Promise<FolderNode[]>;
   /** A URL the webview can play one track from. The path is relative to the source. */
   libraryPlayUrl(id: string, path: string): Promise<string>;
+  /** A track's analysis from the cache, or analysed now when `analyze` is set; null when there is none. */
+  libraryAnalysis(id: string, path: string, analyze: boolean): Promise<TrackAnalysis | null>;
+  /** The library compared with a scanned stick's rekordbox library; null when the stick has none. */
+  stickCompare(deviceId: string): Promise<StickComparison | null>;
+  /** Copy a stick playlist's tracks, or the stick-only tracks when no playlist is named, into a folder of a source. Returns how many were copied. */
+  stickToLibrary(deviceId: string, sourceId: string, folder: string, playlist: string | null): Promise<number>;
+  /** Sort a music source: copy (`add`) or move tracks into a folder, or move them to its removed folder. */
+  librarySort(id: string, op: SortOp, paths: string[], folder: string): Promise<SortOutcome>;
+  /** Undo the last sorting change. */
+  libraryUndo(): Promise<SortOutcome>;
+  /** The folders of a source holding a copy of one track. */
+  libraryTrackFolders(id: string, path: string): Promise<string[]>;
   onLibraryScanProgress(cb: (p: LibraryScanProgress) => void): void;
   /** What collecting the tracks shown for this filter and search would copy. An empty name asks for the suggested one. */
   libraryCollectPlan(id: string, targets: string[], filter: string, query: string, name: string, folder?: string): Promise<CollectPlan>;
@@ -173,6 +150,12 @@ async function tauriApi(): Promise<Api> {
     libraryTracks: (id, targets, filter, query, offset, limit, folder, sort, desc) => invoke("library_tracks", { request: { id, targets, filter, query, offset, limit, folder: folder ?? "", sort: sort ?? "", desc: desc ?? false } }),
     libraryFolders: (id) => invoke("library_folders", { id }),
     libraryPlayUrl: async (id, path) => convertFileSrc(await invoke<string>("library_play", { id, path })),
+    libraryAnalysis: (id, path, analyze) => invoke("library_analysis", { id, path, analyze }),
+    stickCompare: (deviceId) => invoke("stick_compare", { deviceId }),
+    stickToLibrary: (deviceId, sourceId, folder, playlist) => invoke("stick_to_library", { deviceId, sourceId, folder, playlist }),
+    librarySort: (id, op, paths, folder) => invoke("library_sort", { id, op, paths, folder }),
+    libraryUndo: () => invoke("library_undo"),
+    libraryTrackFolders: (id, path) => invoke("library_track_folders", { id, path }),
     onLibraryScanProgress: on("library-scan-progress"),
     libraryCollectPlan: (id, targets, filter, query, name, folder) => invoke("library_collect_plan", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),
     libraryCollect: (id, targets, filter, query, name, folder) => invoke("library_collect", { request: { id, targets, filter, query, name, folder: folder ?? "" } }),

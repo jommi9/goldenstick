@@ -296,6 +296,10 @@ pub struct LibraryState {
     scanning: HashSet<String>,
     collecting: bool,
     exporting: bool,
+    /// What sorting changed, newest last, so it can be undone: source id and changes.
+    undo_log: Vec<(String, Vec<boothready_core::sorting::Change>)>,
+    /// Scan entries of removed tracks, by source id and removed path, for undo.
+    set_aside: HashMap<String, HashMap<String, SourceTrack>>,
 }
 
 /// The name a source is listed under: its collection name or folder name.
@@ -423,6 +427,76 @@ impl LibraryState {
         let scan: Arc<SourceScan> = Arc::new(serde_json::from_slice(&bytes).ok()?);
         self.scans.insert(id.to_string(), scan.clone());
         Some(scan)
+    }
+
+    /// Bring a source's saved scan up to date with sorting changes, and
+    /// remember them for undo unless `undoing`.
+    pub fn apply_changes(&mut self, id: &str, changes: &[boothready_core::sorting::Change], undoing: bool) {
+        if changes.is_empty() {
+            return;
+        }
+        if let Some(scan) = self.scan(id) {
+            let mut next = (*scan).clone();
+            boothready_core::sorting::apply_to_scan(
+                &mut next,
+                changes,
+                self.set_aside.entry(id.to_string()).or_default(),
+            );
+            if let Some(record) = self.sources.iter().find(|r| r.id == id).cloned() {
+                self.store_scan(id, next, record.location, record.scanned_unix.unwrap_or(0));
+            }
+        }
+        if !undoing {
+            self.undo_log.push((id.to_string(), changes.to_vec()));
+            if self.undo_log.len() > 50 {
+                self.undo_log.remove(0);
+            }
+        }
+    }
+
+    pub fn take_last_change(&mut self) -> Option<(String, Vec<boothready_core::sorting::Change>)> {
+        self.undo_log.pop()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_log.is_empty()
+    }
+
+    /// The folders of a source that hold a copy of the track at `path`: the
+    /// same file name and size, which is how a copy made by sorting looks.
+    pub fn folders_of(&mut self, id: &str, path: &str) -> Vec<String> {
+        let Some(scan) = self.scan(id) else { return Vec::new() };
+        let Some(me) = scan.tracks.iter().find(|t| t.path == path) else { return Vec::new() };
+        let name = me.path.rsplit('/').next().unwrap_or("").to_lowercase();
+        let mut out: Vec<String> = scan
+            .tracks
+            .iter()
+            .filter(|t| t.size == me.size && t.path.rsplit('/').next().unwrap_or("").to_lowercase() == name)
+            .map(|t| t.path.rsplit_once('/').map(|(f, _)| f.to_string()).unwrap_or_default())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Every scanned track of every source, for comparing with a stick. Paths
+    /// are `<source id>|<path in the source>`, the form the tree's folder
+    /// nodes use, so a compared folder maps straight onto its tree node.
+    pub fn compare_files(&mut self) -> Vec<boothready_core::library::compare::LibraryFile> {
+        let ids: Vec<String> = self.sources.iter().map(|s| s.id.clone()).collect();
+        let mut out = Vec::new();
+        for id in ids {
+            let Some(scan) = self.scan(&id) else { continue };
+            for t in &scan.tracks {
+                out.push(boothready_core::library::compare::LibraryFile {
+                    path: format!("{id}|{}", t.path),
+                    size: t.size,
+                    title: t.tags.as_ref().and_then(|g| g.title.clone()),
+                    artist: t.tags.as_ref().and_then(|g| g.artist.clone()),
+                });
+            }
+        }
+        out
     }
 
     pub fn record(&self, id: &str) -> Result<SourceRecord, String> {
@@ -732,20 +806,37 @@ impl LibraryState {
         Ok(file)
     }
 
-    /// The folders inside a source with the number of tracks below each.
+    /// The folders inside a source with the number of tracks below each,
+    /// in the order a file manager lists them: a folder right before its
+    /// children, siblings by name without regard to case. Folders the scan
+    /// walked are listed even when no track is in them yet.
     pub fn folders(&mut self, id: &str) -> Result<Vec<FolderNode>, String> {
         self.record(id)?;
         let Some(scan) = self.scan(id) else { return Ok(Vec::new()) };
-        // Keyed by components, so a folder sorts directly before its children.
-        let mut counts: std::collections::BTreeMap<Vec<String>, u32> = std::collections::BTreeMap::new();
+        // Keyed by lower-cased components, so a folder sorts directly before
+        // its children and "TechnoRemix" sits between "dark" and "trance".
+        let mut counts: std::collections::BTreeMap<Vec<String>, (Vec<String>, u32)> = std::collections::BTreeMap::new();
+        let mut note = |parts: &[&str], tracks: u32| {
+            let key: Vec<String> = parts.iter().map(|p| p.to_lowercase()).collect();
+            counts.entry(key).or_insert_with(|| (parts.iter().map(|p| p.to_string()).collect(), 0)).1 += tracks;
+        };
         for track in &scan.tracks {
             let parts: Vec<&str> = track.path.split('/').collect();
             for end in 1..parts.len() {
-                *counts.entry(parts[..end].iter().map(|p| p.to_string()).collect()).or_default() += 1;
+                note(&parts[..end], 1);
+            }
+        }
+        for folder in &scan.folders {
+            if folder.starts_with(boothready_core::sorting::REMOVED_DIR) {
+                continue;
+            }
+            let parts: Vec<&str> = folder.split('/').collect();
+            for end in 1..=parts.len() {
+                note(&parts[..end], 0);
             }
         }
         Ok(counts
-            .into_iter()
+            .into_values()
             .map(|(parts, tracks)| FolderNode {
                 name: parts.last().cloned().unwrap_or_default(),
                 depth: parts.len() as u32 - 1,
@@ -866,6 +957,35 @@ fn is_lossless(info: &AudioInfo) -> bool {
 /// A folder name for a collection, made from what the user typed. Anything
 /// outside letters, digits, spaces and a few marks becomes a dash, so the
 /// name is valid on FAT, NTFS and APFS alike.
+/// Copy `files` (paths under `from_root`) into the folder `target`, creating
+/// it. A file already there with the same size is skipped and one with another
+/// size is kept beside it as "<name> (from stick)"; nothing is overwritten.
+/// Returns how many files were copied.
+pub fn copy_into(from_root: &Path, files: &[String], target: &Path) -> Result<u32, String> {
+    std::fs::create_dir_all(target).map_err(|e| format!("Couldn't make {}: {e}", target.display()))?;
+    let mut copied = 0;
+    for rel in files {
+        let from = from_root.join(rel);
+        let Some(name) = from.file_name().map(|n| n.to_owned()) else { continue };
+        let Ok(meta) = std::fs::metadata(&from) else { continue };
+        let mut to = target.join(&name);
+        if let Ok(existing) = std::fs::metadata(&to) {
+            if existing.len() == meta.len() {
+                continue;
+            }
+            let stem = to.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let ext = to.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            to = target.join(format!("{stem} (from stick){ext}"));
+            if to.exists() {
+                continue;
+            }
+        }
+        std::fs::copy(&from, &to).map_err(|e| format!("Couldn't copy {}: {e}", name.to_string_lossy()))?;
+        copied += 1;
+    }
+    Ok(copied)
+}
+
 pub fn collection_folder_name(typed: &str) -> Result<String, String> {
     let cleaned: String = typed
         .trim()
@@ -1014,6 +1134,31 @@ fn track_row(source: &str, track: &SourceTrack, state: TrackState, issues: Vec<P
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn copying_from_a_stick_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let stick = dir.path().join("stick");
+        std::fs::create_dir_all(stick.join("Contents/A")).unwrap();
+        std::fs::write(stick.join("Contents/A/one.mp3"), b"one").unwrap();
+        std::fs::write(stick.join("Contents/A/two.mp3"), b"two-on-stick").unwrap();
+        std::fs::write(stick.join("Contents/A/three.mp3"), b"333").unwrap();
+        let target = dir.path().join("Music/DJ/acid prog");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("one.mp3"), b"one").unwrap();
+        std::fs::write(target.join("two.mp3"), b"two-in-the-drive").unwrap();
+        let files = ["Contents/A/one.mp3", "Contents/A/two.mp3", "Contents/A/three.mp3", "Contents/A/gone.mp3"]
+            .map(String::from);
+        assert_eq!(super::copy_into(&stick, &files, &target).unwrap(), 2);
+        assert_eq!(
+            std::fs::read(target.join("two.mp3")).unwrap(),
+            b"two-in-the-drive",
+            "an existing file is never overwritten"
+        );
+        assert_eq!(std::fs::read(target.join("two (from stick).mp3")).unwrap(), b"two-on-stick");
+        assert_eq!(std::fs::read(target.join("three.mp3")).unwrap(), b"333");
+        assert_eq!(super::copy_into(&stick, &files, &target).unwrap(), 0, "a second run copies nothing");
+    }
+
     use super::*;
     use boothready_core::rules::Ruleset;
 
@@ -1300,6 +1445,19 @@ mod tests {
         let speicher = folders.iter().position(|f| f.path == "Kolsch/Speicher").unwrap();
         let kolsch = folders.iter().position(|f| f.path == "Kolsch").unwrap();
         assert_eq!(speicher, kolsch + 1, "a folder is listed right before its subfolders");
+        let names: Vec<String> = folders.iter().filter(|f| f.depth == 0).map(|f| f.name.to_lowercase()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "top-level folders are in case-insensitive order");
+
+        // A folder the scan walked but no track sits in is still listed, empty.
+        let changes =
+            boothready_core::sorting::new_folder(&library.record("demo-computer").unwrap().path, "Zz Empty").unwrap();
+        library.apply_changes("demo-computer", &changes, false);
+        let folders = library.folders("demo-computer").unwrap();
+        let empty = folders.iter().find(|f| f.path == "Zz Empty").expect("the empty folder is listed");
+        assert_eq!((empty.depth, empty.tracks), (0, 0));
+        assert_eq!(folders.last().map(|f| f.path.as_str()), Some("Zz Empty"));
 
         let page = library.tracks("demo-computer", &targets, &ask("all", "", "Hi-Res", 0, 500)).unwrap();
         assert_eq!(page.total, 4);
@@ -1351,5 +1509,78 @@ mod tests {
         assert!(resolve_folder(&file).is_err());
         assert!(resolve_folder(&dir.path().join("gone")).is_err());
         assert!(resolve_folder(dir.path()).is_ok());
+    }
+
+    fn sorted_library() -> (tempfile::TempDir, tempfile::TempDir, PathBuf, LibraryState, String) {
+        let data = tempfile::tempdir().unwrap();
+        let music = tempfile::tempdir().unwrap();
+        let root = music.path().canonicalize().unwrap().join("Music");
+        for (p, bytes) in [("00 INBOX/A.mp3", &b"one"[..]), ("00 INBOX/B.mp3", b"two!"), ("DJ/peak/C.mp3", b"three")] {
+            std::fs::create_dir_all(root.join(p).parent().unwrap()).unwrap();
+            std::fs::write(root.join(p), bytes).unwrap();
+        }
+        let mut library = LibraryState::load(data.path().join("library"));
+        let id = library.add(root.clone(), Location::Computer, 100).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let scan = boothready_core::sources::scan_source(&root, &|_, _| false, &cancel, |_| {}).unwrap();
+        library.store_scan(&id, scan, Location::Computer, 200);
+        (data, music, root, library, id)
+    }
+
+    fn paths_of(library: &mut LibraryState, id: &str) -> Vec<String> {
+        library.scan(id).unwrap().tracks.iter().map(|t| t.path.clone()).collect()
+    }
+
+    #[test]
+    fn sorting_updates_the_saved_scan_and_can_be_undone() {
+        use boothready_core::sorting;
+        const DAY: &str = "2026-10-20";
+        let (data, _music, root, mut library, id) = sorted_library();
+        assert!(!library.can_undo());
+        let moved = sorting::move_to_folder(&root, &["00 INBOX/A.mp3".into()], "DJ/peak", DAY).unwrap();
+        library.apply_changes(&id, &moved, false);
+        let copied = sorting::add_to_folder(&root, &["DJ/peak/C.mp3".into()], "DJ/warmup").unwrap();
+        library.apply_changes(&id, &copied, false);
+        let removed = sorting::remove(&root, &["00 INBOX/B.mp3".into()], DAY).unwrap();
+        library.apply_changes(&id, &removed, false);
+        let after = ["DJ/peak/A.mp3", "DJ/peak/C.mp3", "DJ/warmup/C.mp3"].map(String::from).to_vec();
+        assert_eq!(paths_of(&mut library, &id), after);
+        assert_eq!(
+            paths_of(&mut LibraryState::load(data.path().join("library")), &id),
+            after,
+            "the saved scan follows"
+        );
+        assert_eq!(library.undo_log.len(), 3);
+        assert_eq!(library.folders_of(&id, "DJ/peak/C.mp3"), vec!["DJ/peak".to_string(), "DJ/warmup".to_string()]);
+        assert_eq!(library.folders_of(&id, "DJ/peak/A.mp3"), vec!["DJ/peak".to_string()]);
+        assert!(library.folders_of(&id, "gone.mp3").is_empty());
+
+        while let Some((source, changes)) = library.take_last_change() {
+            assert_eq!(source, id);
+            let undone = sorting::undo(&root, &changes, DAY).unwrap();
+            library.apply_changes(&id, &undone, true);
+        }
+        assert!(!library.can_undo(), "undoing adds nothing to the log");
+        for p in ["00 INBOX/A.mp3", "00 INBOX/B.mp3", "DJ/peak/C.mp3"] {
+            assert!(root.join(p).exists(), "{p} is back");
+        }
+        assert!(!root.join("DJ/warmup/C.mp3").exists());
+        let before = ["00 INBOX/A.mp3", "00 INBOX/B.mp3", "DJ/peak/C.mp3"].map(String::from).to_vec();
+        assert_eq!(paths_of(&mut library, &id), before, "the scan is restored");
+    }
+
+    #[test]
+    fn the_undo_log_keeps_the_last_fifty_changes() {
+        use boothready_core::sorting::{Change, ChangeKind};
+        let (_data, _music, _root, mut library, id) = sorted_library();
+        for n in 0..55 {
+            let change =
+                Change { kind: ChangeKind::Copied, from: format!("gone {n}.mp3"), to: format!("DJ/x/gone {n}.mp3") };
+            library.apply_changes(&id, &[change], false);
+        }
+        library.apply_changes(&id, &[], false);
+        assert_eq!(library.undo_log.len(), 50);
+        assert_eq!(library.undo_log[0].1[0].from, "gone 5.mp3", "the oldest go first");
+        assert_eq!(library.take_last_change().unwrap().1[0].from, "gone 54.mp3");
     }
 }

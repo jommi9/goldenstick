@@ -43,7 +43,8 @@ const cases = [
       await page.getByRole("button", { name: "Dev tools" }).click();
       await page.locator('[data-act="open-device"][data-id="demo:sandisk-128"]').click();
       await page.waitForTimeout(120);
-      await page.getByRole("button", { name: "Dev tools" }).click();
+      // The stick's check opens as a sheet over the window; closing it leaves the scan running.
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Reset demo state" }).click();
       await page.getByText("No devices are currently connected.").waitFor();
       await page.waitForTimeout(1200);

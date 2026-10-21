@@ -4,7 +4,9 @@ Plug in your USB and BoothReady tells you whether it will work on the DJ equipme
 
 This repository holds the Phase 1 prototype from the product requirements: a Rust engine that reads a USB stick down to its partition table, a privileged helper that is the only part allowed to erase anything, a `boothready` command-line tool, and a Tauri 2 desktop app for macOS and Windows.
 
-![Compatibility report](docs/screenshots/06-report.png)
+![The library window with a stick in the tree](docs/screenshots/20-stick-inspector.png)
+
+![Compatibility report](docs/screenshots/07-report.png)
 
 ## Try it without a USB stick
 
@@ -67,15 +69,15 @@ The release config ships `boothready-helper` next to the app's executable. A dev
 
 ## Music library
 
-The app's **Library** screen holds the folders your music lives in. A folder can be on the computer, on an external drive or inside a synced cloud folder such as Google Drive for desktop. BoothReady scans each folder where it is and shows which tracks are ready for the players you selected, which ones a player is documented not to play, and which are damaged.
+The app's window is the library: the folders your music lives in are listed under Playlists in the tree, and **Manage** opens the list of sources. A folder can be on the computer, on an external drive or inside a synced cloud folder such as Google Drive for desktop. BoothReady scans each folder where it is and shows which tracks are ready for the players you selected, which ones a player is documented not to play, and which are damaged.
 
-![Music library](docs/screenshots/20-library.png)
+![Music sources](docs/screenshots/21-music-sources.png)
 
 A file that the cloud client shows without having downloaded it is listed from its name and size and is never opened, so a scan downloads nothing. Its format stays unchecked until you make it available offline. The last scan of every source is kept in the app's data folder, which lets you browse an external drive that is unplugged.
 
 **Collect** on a source copies the tracks you are looking at into a verified folder on this computer, under `Music/BoothReady`. Reading a track that is still in the cloud makes your cloud app download it, and the finished collection appears in the library with every track's format checked.
 
-![Collecting a cloud folder](docs/screenshots/23-collect-plan.png)
+![Collecting a cloud folder](docs/screenshots/27-collect-plan.png)
 
 `boothready library scan <folder>` prints the same counts from the command line. [Library sources](docs/LIBRARY-SOURCES.md) describes what a scan reads.
 

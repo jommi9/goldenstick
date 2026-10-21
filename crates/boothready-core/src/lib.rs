@@ -23,6 +23,7 @@ pub mod planner;
 pub mod privileged;
 pub mod rules;
 pub mod scan;
+pub mod sorting;
 pub mod sources;
 pub mod staging;
 pub mod state;

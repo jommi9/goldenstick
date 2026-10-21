@@ -57,6 +57,11 @@ pub struct SourceScan {
     /// didn't, so their tracks have no artist or BPM until scanned again.
     #[serde(default)]
     pub tags_read: bool,
+    /// Every folder under the root, as a relative path, so a playlist with
+    /// no tracks yet still shows in the tree. Scans saved by older versions
+    /// have none and list only the folders their tracks sit in.
+    #[serde(default)]
+    pub folders: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +151,12 @@ pub fn scan_source(
                 continue;
             }
         };
+        if entry.file_type().is_dir() {
+            if entry.depth() > 0 {
+                scan.folders.push(relative(root, entry.path()));
+            }
+            continue;
+        }
         if !entry.file_type().is_file() || !is_audio_path(entry.path()) {
             continue;
         }
@@ -194,6 +205,7 @@ pub fn scan_source(
         scan.tracks.push(track);
     }
     scan.tracks.sort_by(|a, b| a.path.cmp(&b.path));
+    scan.folders.sort();
     Ok(scan)
 }
 

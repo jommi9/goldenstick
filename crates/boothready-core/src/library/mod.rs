@@ -5,6 +5,7 @@
 //! 0) because the database is encrypted, Engine DJ databases are read and
 //! validated, Serato crates are detected.
 
+pub mod compare;
 mod engine;
 #[cfg(feature = "sqlite")]
 pub mod onelibrary;
@@ -559,6 +560,10 @@ pub(crate) fn is_ignored_dir(e: &walkdir::DirEntry) -> bool {
         return false;
     }
     let name = e.file_name().to_string_lossy();
+    // Tracks the user removed from the library while sorting it.
+    if e.depth() == 1 && name == crate::sorting::REMOVED_DIR {
+        return true;
+    }
     matches!(
         name.as_ref(),
         ".Spotlight-V100"

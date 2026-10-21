@@ -230,7 +230,7 @@ pub fn export_device_library_cancellable(
                     Some(hit) => Ok(hit),
                     None => {
                         analysed += 1;
-                        let fresh = analyze(source, mode);
+                        let fresh = analyze_track(source, mode);
                         if let (Ok(fresh), Some(c)) = (&fresh, &cache) {
                             if let Err(e) = c.store(source, mode, fresh) {
                                 warnings.push(format!("{name}: the analysis couldn't be kept for next time ({e})"));
@@ -465,7 +465,8 @@ struct GeneratedFiles {
 }
 
 /// Analyse one file as the analyser sees it, with its own path tag.
-fn analyze(source: &Path, mode: RhythmMode) -> std::result::Result<CachedAnalysis, String> {
+/// Analyse one audio file: beat grid, key, phrases and waveforms as the three ANLZ files.
+pub fn analyze_track(source: &Path, mode: RhythmMode) -> std::result::Result<CachedAnalysis, String> {
     let options = AnalysisOptions::automatic().with_rhythm_mode(mode);
     let generated = analyze_audio_file_with_options(source, options).map_err(|e| format!("{e:#}"))?;
     let [dat, ext, two_ex] =

@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BoothReady redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+1p:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --win: #0c0d0f; --panel: #131417; --raised: #1a1c20; --hover: #1f2226; --sel: #1d3556; --sel-line: #2f8cff;
+  --line: #24272d; --line-2: #2e3238;
+  --text: #e8eaed; --text-2: #9aa1aa; --text-3: #5d636c;
+  --accent: #2f8cff; --accent-ink: #fff;
+  --ok: #3ecf72; --warn: #f2b33d; --bad: #ff5d5d; --cloud: #7aa7ff;
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+  --cdj: "M PLUS 1p", var(--ui);
+  --row: 32px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--win); color: var(--text); font: 13.5px/1.4 var(--ui); -webkit-font-smoothing: antialiased; }
+body { display: grid; grid-template-rows: 38px auto 1fr 28px; overflow: hidden; user-select: none; }
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+.num { font-variant-numeric: tabular-nums; }
+.lbl { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
+
+/* title bar */
+.titlebar { display: flex; align-items: center; gap: 14px; padding: 0 12px 0 84px; border-bottom: 1px solid var(--line); background: #0f1012; }
+.brand { font: 700 13px/1 var(--cdj); letter-spacing: .18em; color: var(--text-2); }
+.brand b { color: var(--text); }
+.titlebar .spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px; background: var(--raised); color: var(--text-2); font-size: 12.5px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+
+/* player strip */
+.strip { display: grid; grid-template-columns: 400px minmax(0, 1fr) 300px; border-bottom: 1px solid var(--line); background: linear-gradient(#121316, #0e0f11); height: 176px; transition: height .2s; }
+.strip.collapsed { height: 56px; }
+.np { display: grid; grid-template-columns: 136px 1fr; gap: 18px; padding: 20px 18px 20px 20px; align-items: center; min-width: 0; }
+.np .art { width: 136px; height: 136px; border-radius: 4px; background: var(--raised) center/cover; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+.np .t { font: 500 20px/1.2 var(--cdj); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .a { color: var(--text-2); font-size: 15px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np .ctl { display: flex; gap: 10px; margin-top: 16px; align-items: center; }
+.round { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line-2); display: grid; place-items: center; color: var(--text-2); }
+.round.play { border-color: #3a7b4f; color: var(--ok); }
+.round.play.on { background: rgba(62,207,114,.12); }
+.round.cue { font: 700 11px var(--cdj); color: var(--warn); border-color: #6b5420; }
+.wavebox { position: relative; padding: 18px 0 12px; min-width: 0; }
+.wavebox canvas { width: 100%; display: block; }
+#wave { height: 104px; cursor: pointer; }
+#phrase { height: 12px; margin-top: 6px; border-radius: 2px; }
+.wavebox .times { display: flex; justify-content: space-between; margin-top: 8px; font: 500 13.5px var(--cdj); color: var(--text-2); }
+.wavebox .times b { color: var(--text); font-weight: 500; }
+.readout { display: grid; grid-template-columns: 1fr 1fr; align-content: center; gap: 12px 18px; padding: 0 24px; border-left: 1px solid var(--line); }
+.readout .big { font: 500 44px/1 var(--cdj); letter-spacing: .01em; }
+.readout .sub { font: 500 12px var(--cdj); letter-spacing: .14em; color: var(--text-3); margin-top: 4px; }
+.keychip { display: inline-grid; place-items: center; min-width: 38px; height: 22px; padding: 0 7px; border-radius: 5px; font: 700 13px var(--ui); color: #0c0d0f; }
+.keychip.big { font: 700 34px/1 var(--cdj); height: 54px; min-width: 92px; border-radius: 8px; }
+.strip .collapse { position: absolute; right: 8px; top: 6px; color: var(--text-3); font-size: 10px; }
+.strip.collapsed .np .art, .strip.collapsed .np .ctl, .strip.collapsed .readout, .strip.collapsed .times, .strip.collapsed #phrase { display: none; }
+.strip.collapsed .np { grid-template-columns: 1fr; padding: 8px 16px; }
+.strip.collapsed #wave { height: 34px; }
+.strip.collapsed .wavebox { padding: 11px 0; }
+
+/* main */
+.main { display: grid; grid-template-columns: 56px 320px minmax(0, 1fr) 400px; min-height: 0; }
+.main.noinsp { grid-template-columns: 56px 320px minmax(0, 1fr) 0; }
+.rail { border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 8px; background: #0f1012; }
+.rail button { width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center; color: var(--text-3); }
+.rail button.on, .rail button:hover { color: var(--text); background: var(--raised); }
+.rail .grow { flex: 1; }
+svg.i { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+.tree { border-right: 1px solid var(--line); overflow: auto; background: var(--panel); padding: 8px 0 24px; }
+.tree .sec { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px 7px; }
+.node { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 16px 0 calc(16px + var(--d, 0) * 16px); color: var(--text-2); cursor: default; white-space: nowrap; position: relative; }
+.node:hover { background: var(--hover); color: var(--text); }
+.node.on { background: var(--sel); color: var(--text); box-shadow: inset 2px 0 var(--sel-line); }
+.node.drop { background: rgba(47,140,255,.18); box-shadow: inset 0 0 0 1px var(--accent); color: var(--text); }
+.node .tw { width: 10px; color: var(--text-3); font-size: 8px; flex: none; text-align: center; }
+.node .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.node .ct { color: var(--text-3); font-size: 12.5px; }
+.node svg.i { width: 17px; height: 17px; flex: none; opacity: .8; }
+.dev { margin: 6px 12px 4px; padding: 12px 14px 13px; border-radius: 8px; background: var(--raised); border: 1px solid transparent; cursor: default; }
+.dev:hover { border-color: var(--line-2); }
+.dev.on { border-color: var(--accent); background: #17243a; }
+.dev.drop { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47,140,255,.25); }
+.dev .row1 { display: flex; align-items: center; gap: 7px; }
+.dev .lab { font: 700 15px var(--cdj); letter-spacing: .04em; flex: 1; }
+.dev .mdl { color: var(--text-3); font-size: 12.5px; margin-top: 3px; }
+.cap { height: 6px; border-radius: 2px; background: #2a2e35; margin: 8px 0 6px; overflow: hidden; }
+.cap i { display: block; height: 100%; background: var(--text-2); border-radius: 2px; }
+.badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.badge { font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 1px 5px; border-radius: 3px; border: 1px solid var(--line-2); color: var(--text-3); }
+.badge.y { color: var(--text); border-color: #4a505a; }
+.dev .kids { margin: 8px -14px -8px; }
+.dev .kids .node { height: 30px; --d: 1; }
+
+/* list */
+.list { display: grid; grid-template-rows: auto auto 1fr; min-width: 0; min-height: 0; overflow: hidden; }
+.lhead { display: flex; align-items: center; gap: 14px; padding: 14px 20px 12px; border-bottom: 1px solid var(--line); }
+.lhead h1 { margin: 0; font: 600 19px var(--ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 60px; }
+.lhead .meta { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lhead .spacer { flex: 1; }
+.search { display: flex; align-items: center; gap: 8px; height: 34px; width: 300px; flex: 0 1 300px; min-width: 140px; padding: 0 8px; border-radius: 6px; background: var(--raised); border: 1px solid var(--line); color: var(--text-3); }
+.search input { flex: 1; background: none; border: 0; outline: 0; color: var(--text); font: inherit; min-width: 0; }
+.btn { height: 34px; padding: 0 16px; border-radius: 8px; flex: none; background: var(--raised); border: 1px solid var(--line-2); color: var(--text); font-weight: 600; white-space: nowrap; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn[disabled] { opacity: .45; cursor: default; }
+.chips { display: flex; gap: 8px; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+.chip { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--line-2); color: var(--text-2); font-size: 13px; }
+.chip.on { background: var(--raised); color: var(--text); border-color: #4a505a; }
+.chip b { font-weight: 600; color: var(--text); }
+.chips .spacer { flex: 1; }
+.judge { color: var(--text-3); font-size: 13px; }
+.judge b { color: var(--text-2); font-weight: 500; }
+.scroller { overflow: auto; min-height: 0; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: fixed; }
+thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); height: 34px; text-align: left; font-weight: 600; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); border-bottom: 1px solid var(--line); padding: 0 8px; white-space: nowrap; cursor: default; }
+thead th.sorted { color: var(--text); }
+thead th .ar { font-size: 8px; margin-left: 3px; }
+tbody tr { height: var(--row); }
+tbody tr:nth-child(even) td { background: rgba(255,255,255,.012); }
+tbody tr:hover td { background: var(--hover); }
+tbody tr.sel td { background: var(--sel); }
+tbody tr.sel td:first-child { box-shadow: inset 2px 0 var(--sel-line); }
+tbody tr.loaded td.c-title { color: var(--ok); }
+td { padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #16181b; color: var(--text); }
+td.dim, td.c-artist { color: var(--text-2); }
+td.r, th.r { text-align: right; }
+td.c-art { padding: 0 4px; }
+td.c-art i { display: block; width: 26px; height: 26px; border-radius: 2px; background: var(--raised) center/cover; }
+td.c-wave canvas { width: 100%; height: 24px; display: block; }
+td.c-key .keychip { height: 22px; }
+td.c-key.match { background: rgba(62,207,114,.16) !important; }
+.plays { display: inline-flex; gap: 2px; vertical-align: middle; }
+.plays i { width: 6px; height: 13px; border-radius: 1px; background: var(--ok); opacity: .9; }
+.plays i.w { background: var(--warn); }
+.plays i.b { background: var(--bad); }
+.plays i.u { background: #3a3f47; }
+.state { display: inline-flex; align-items: center; gap: 7px; color: var(--text-2); font-size: 13px; }
+.empty { padding: 60px 20px; text-align: center; color: var(--text-3); }
+
+/* inspector */
+.insp { border-left: 1px solid var(--line); background: var(--panel); overflow: auto; min-width: 0; }
+.main.noinsp .insp { display: none; }
+.insp .hd { padding: 20px 22px 16px; border-bottom: 1px solid var(--line); }
+.insp .hd.trk { display: grid; grid-template-columns: 120px 1fr; gap: 16px; align-items: center; }
+.insp .art { width: 120px; height: 120px; border-radius: 4px; background: var(--raised) center/cover; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+.insp h2 { margin: 0; font: 600 19px/1.25 var(--ui); }
+.insp .by { color: var(--text-2); margin-top: 3px; }
+.insp section { padding: 16px 22px; border-bottom: 1px solid var(--line); }
+.insp section > .lbl { display: block; margin-bottom: 8px; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; }
+.kv dt { color: var(--text-3); }
+.kv dd { margin: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mx { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.mx th { position: static; background: none; height: 26px; font-size: 10.5px; padding: 0 2px; text-align: center; border: 0; }
+.mx th:first-child { text-align: left; width: 132px; }
+.mx th:last-child { width: 58px; }
+.mx td { height: 30px; padding: 0 2px; border: 0; border-top: 1px solid #1c1f23; text-align: center; font-size: 13.5px; }
+.mx td:first-child { text-align: left; color: var(--text); }
+.mx tr.pick td { background: var(--sel); }
+.g { font-weight: 700; }
+.g.ok { color: var(--ok); } .g.w { color: var(--warn); } .g.b { color: var(--bad); } .g.u { color: var(--text-3); }
+.why { margin-top: 10px; padding: 9px 10px; border-radius: 6px; background: var(--raised); border-left: 2px solid var(--bad); }
+.why b { display: block; margin-bottom: 3px; }
+.why span { color: var(--text-2); }
+.fix { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid #1c1f23; }
+.fix:first-of-type { border-top: 0; }
+.fix div { flex: 1; color: var(--text-2); }
+.fix div b { display: block; color: var(--text); font-weight: 600; }
+.sync .line { display: flex; justify-content: space-between; padding: 4px 0; color: var(--text-2); }
+.sync .line b { color: var(--text); font-weight: 500; }
+.sync .add { color: var(--ok); }
+.sync .plist { margin: 6px 0 10px; }
+.sync .plist div { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 12px; border-radius: 4px; background: var(--raised); margin-bottom: 4px; }
+.sync .plist div span:not(.dot) { flex: 1; }
+.sync .plist div em { color: var(--text-3); font-style: normal; }
+.bar { height: 8px; border-radius: 4px; background: #2a2e35; overflow: hidden; margin: 8px 0 4px; display: flex; }
+.bar i { display: block; height: 100%; }
+.hint { color: var(--text-3); font-size: 13px; line-height: 1.5; }
+.minicap { display: flex; justify-content: space-between; color: var(--text-3); font-size: 12.5px; }
+.insp .full { width: 100%; height: 42px; margin-top: 14px; font-size: 14.5px; }
+
+/* status bar */
+.status { display: flex; align-items: center; gap: 20px; padding: 0 16px; border-top: 1px solid var(--line); background: #0f1012; color: var(--text-3); font-size: 12.5px; white-space: nowrap; }
+.status .spacer { flex: 1; }
+.prog { width: 120px; height: 4px; border-radius: 2px; background: #2a2e35; overflow: hidden; }
+.prog i { display: block; height: 100%; background: var(--accent); width: 62%; }
+
+/* sheet */
+.veil { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: flex-start; justify-content: center; padding-top: 120px; z-index: 10; }
+.veil.on { display: flex; }
+.sheet { width: 520px; background: #17191d; border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 30px 80px rgba(0,0,0,.6); overflow: hidden; }
+.sheet .sh { padding: 18px 20px 6px; }
+.sheet h3 { margin: 0 0 6px; font-size: 15px; }
+.sheet p { margin: 0 0 12px; color: var(--text-2); line-height: 1.45; }
+.sheet .kv { padding: 10px 20px; background: var(--raised); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.sheet .sf { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; }
+.toast { position: fixed; right: 16px; bottom: 36px; background: #1b1e23; border: 1px solid var(--line-2); border-radius: 8px; padding: 10px 14px; box-shadow: 0 12px 30px rgba(0,0,0,.5); display: none; gap: 10px; align-items: center; z-index: 9; }
+.toast.on { display: flex; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2a2e35; border-radius: 5px; border: 2px solid var(--panel); }
+::-webkit-scrollbar-track { background: transparent; }
+
+</style>
+</head>
+<body>
+<header class="titlebar">
+  <div class="brand"><b>BOOTH</b>READY</div>
+  <span class="pill"><span class="dot" style="background:var(--ok)"></span><span id="tb-sticks">2 sticks connected</span></span>
+  <div class="spacer"></div>
+  <span class="pill">Judging against <b style="color:var(--text);font-weight:500">Pioneer club gear</b></span>
+  <span class="pill">Runs locally</span>
+  <button class="pill" id="b-full" title="Full screen (F)"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg><span id="b-full-t">Full screen</span></button>
+</header>
+
+<section class="strip" id="strip">
+  <div class="np">
+    <div class="art" id="np-art"></div>
+    <div style="min-width:0">
+      <div class="lbl" id="np-lbl">Loaded</div>
+      <div class="t" id="np-title">Nothing loaded</div>
+      <div class="a" id="np-artist">Press Return on a track</div>
+      <div class="ctl">
+        <button class="round cue" title="Back to start">CUE</button>
+        <button class="round play" id="np-play" title="Play or pause (Space)"><svg class="i" viewBox="0 0 24 24" id="np-play-ico"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></svg></button>
+        <span class="lbl" id="np-mood" style="margin-left:6px"></span>
+      </div>
+    </div>
+  </div>
+  <div class="wavebox">
+    <button class="collapse" id="collapse" title="Collapse the player">&#9650;</button>
+    <canvas id="wave"></canvas>
+    <canvas id="phrase"></canvas>
+    <div class="times"><span><b id="t-el">00:00.0</b> elapsed</span><span id="t-ph"></span><span>remaining <b id="t-rem">00:00.0</b></span></div>
+  </div>
+  <div class="readout">
+    <div><div class="big num" id="r-bpm">---.-</div><div class="sub">BPM</div></div>
+    <div><span class="keychip big" id="r-key" style="background:#2a2e35;color:var(--text-3)">--</span><div class="sub" id="r-keyname">KEY</div></div>
+    <div style="grid-column:span 2" class="hint" id="r-mix">Keys that mix with the loaded track turn green in the list.</div>
+  </div>
+</section>
+
+<main class="main" id="main">
+  <nav class="rail">
+    <button class="on" title="Library"><svg class="i" viewBox="0 0 24 24"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16.5 5.5l3.5 1-3 13-3.5-1z"/></svg></button>
+    <button title="Search (Cmd+F)"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
+    <button title="Smart lists"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+    <button title="Devices"><svg class="i" viewBox="0 0 24 24"><rect x="7" y="9" width="10" height="12" rx="2"/><path d="M9 9V4h6v5M10.5 6h0M13.5 6h0"/></svg></button>
+    <button title="Gig kit"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2"/></svg></button>
+    <div class="grow"></div>
+    <button title="Test lab"><svg class="i" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3"/></svg></button>
+    <button title="Settings" style="margin-bottom:8px"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg></button>
+  </nav>
+  <aside class="tree" id="tree"></aside>
+  <section class="list">
+    <div class="lhead">
+      <h1 id="l-title">All tracks</h1>
+      <span class="meta num" id="l-meta"></span>
+      <div class="spacer"></div>
+      <label class="search"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><input id="q" placeholder="Search title, artist, key or BPM"></label>
+      <button class="btn" id="b-insp" title="Inspector (Cmd+I)" style="padding:0 7px"><svg class="i" viewBox="0 0 24 24" style="width:15px;height:15px;vertical-align:-3px"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg></button>
+      <button class="btn primary" id="b-export" title="Export to the selected stick (Cmd+E)">Export to stick</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="scroller" id="scroller"><table id="tbl"></table></div>
+  </section>
+  <aside class="insp" id="insp"></aside>
+</main>
+
+<footer class="status">
+  <span><span class="dot" style="background:var(--ok);margin-right:6px"></span>Library scanned 2 min ago</span>
+  <span id="st-ana" style="display:flex;align-items:center;gap:8px">Analysis cache <span class="prog"><i></i></span> <span class="num" id="st-ana-n"></span></span>
+  <div class="spacer"></div>
+  <span id="st-sel"></span>
+  <span>BoothReady 0.2 design mockup</span>
+</footer>
+
+<div class="veil" id="veil"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="../../../local-data/mockup-data.js"></script>
+<script>
+// ---------- data ----------
+// ?sample shows invented tracks, for screenshots that go into Git
+const D = (!/[?&]sample/.test(location.search) && window.MOCKUP_DATA) || synthetic();
+function synthetic() {
+  const rnd = (s => () => (s = (s * 16807) % 2147483647) / 2147483647)(7);
+  const names = [['Low Tide','Arlo Venn'],['Night Shift (Extended)','Mira Kade'],['Sodium Lights','The Pressure Unit'],['Rave Signal','Oskar Vale'],['Sand Dial','Halden'],['Glass Floor','Juno Reyes-Park'],['Open Window','Cassia North'],['Late Ferry','Nils Ober'],['Undertow','Pale Arcade'],['Brass Moon','Ondine']];
+  const wave = n => Array.from({length: n}, (_, i) => { const e = Math.abs(Math.sin(i / 37)); return [Math.round(30 + 90 * e * rnd()), Math.round(20 + 70 * e * rnd()), Math.round(10 + 40 * rnd())]; });
+  const tracks = names.map(([t, a], i) => ({ n: i + 1, title: t, artist: a, bpm: 122 + (i % 6) * 2, key: null, camelot: ['8A','9A','7A','8B','10A','5A'][i % 6], dur: 300 + i * 17, format: 'MP3', bitrate: 320, rate: 44100, size: 11e6, mini: wave(90), wave: wave(900), phrases: [{t:0,kind:'Intro'},{t:60,kind:'Up'},{t:120,kind:'Chorus'},{t:200,kind:'Down'},{t:260,kind:'Outro'}], mood: 'High', art: null, state: 'ready' }));
+  return { playlist: 'Sample playlist', tracks, inbox: 3, drive: [{ name: 'Sample playlist', count: 10, files: [], children: [] }, { name: 'Warmup', count: 2, files: [{title:'Brass Moon',artist:'Ondine',format:'FLAC'},{title:'Late Ferry',artist:'Nils Ober',format:'AIFF'}], children: [] }],
+    devices: [{ id: 'disk5', label: 'SAMPLE_USB', model: 'Example 64 GB', size_gb: 64, used_gb: 0.6, fs: 'MBR + FAT32', libs: { rekordbox: true, onelibrary: false, engine: false, serato: false }, tracks: 10, verdict: 'Ready for 9 of 15 players', state: 'warn', playlists: [{ name: 'Sample playlist', count: 10 }] }] };
+}
+const PLAYERS = [
+  ['CDJ-900', 'ok ok ok ok ok'], ['CDJ-2000', 'ok ok ok ok ok'], ['CDJ-900NXS', 'u ok ok ok ok'], ['CDJ-2000NXS', 'u ok ok ok ok'],
+  ['CDJ-2000NXS2', 'ok ok ok ok ok'], ['XDJ-700', 'u ok ok ok ok'], ['XDJ-1000MK2', 'ok ok ok ok ok'], ['XDJ-XZ', 'u ok ok ok ok'],
+  ['CDJ-3000', 'ok ok ok ok ok'], ['CDJ-3000X', 'u ok ok b ok'], ['CDJ-1500X', 'u ok ok b ok'], ['XDJ-AZ', 'u ok ok b ok'],
+];
+const FLAC_OLD = new Set(['CDJ-900', 'CDJ-2000', 'CDJ-900NXS', 'CDJ-2000NXS', 'XDJ-700']);
+const PH_COL = { Intro: '#d9534f', Up: '#e8973a', Down: '#3f7fd8', Chorus: '#41c26a', Outro: '#8f5bd6', Verse: '#d9c04a', Bridge: '#3bb7c4' };
+
+// Camelot colours: neighbours on the wheel get neighbouring hues
+function keyColor(c) { if (!c) return null; const n = parseInt(c), b = c.endsWith('B'); const h = (n * 30 + 150) % 360; return `hsl(${h} ${b ? 62 : 70}% ${b ? 70 : 60}%)`; }
+function mixes(a, b) { if (!a || !b) return false; const na = parseInt(a), nb = parseInt(b), la = a.slice(-1), lb = b.slice(-1); if (na === nb) return true; if (la === lb && ((na % 12) + 1 === nb || (nb % 12) + 1 === na)) return true; return false; }
+const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), r = s - m * 60; return String(m).padStart(2, '0') + ':' + r.toFixed(1).padStart(4, '0'); };
+const fmtD = s => s ? Math.floor(s / 60) + ':' + String(Math.round(s % 60)).padStart(2, '0') : '';
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------- state ----------
+const st = { node: 'pl:' + D.playlist, sel: 0, loaded: null, playing: false, pos: 0, sort: ['n', 1], chip: 'all', q: '', dev: null, queue: [], insp: null, collapsed: false, pick: null };
+
+// ---------- tree ----------
+const ICON = {
+  all: '<svg class="i" viewBox="0 0 24 24"><path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>',
+  folder: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
+  smart: '<svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>',
+  inbox: '<svg class="i" viewBox="0 0 24 24"><path d="M3 13l3-8h12l3 8v6H3zM3 13h5l1 2h6l1-2h5"/></svg>',
+  usb: '<svg class="i" viewBox="0 0 24 24"><rect x="7" y="9" width="10" height="12" rx="2"/><path d="M9 9V4h6v5"/></svg>',
+};
+function flatDrive() { const out = []; const walk = (n, path) => { const p = path ? path + '/' + n.name : n.name; out.push({ id: 'pl:' + p, node: n, path: p }); n.children.forEach(c => walk(c, p)); }; D.drive.forEach(n => walk(n, '')); return out; }
+const DRIVE = flatDrive();
+const open = new Set();
+function renderTree() {
+  const t = document.getElementById('tree');
+  let h = '<div class="sec"><span class="lbl">Collection</span></div>';
+  const coll = [['all', 'All tracks', D.tracks.length + DRIVE.reduce((a, d) => a + d.node.files.length, 0), ICON.all], ['recent', 'Recently added', 9, ICON.all], ['needs', 'Needs analysis', DRIVE.reduce((a, d) => a + d.node.files.length, 0), ICON.smart], ['wont', "Won't play everywhere", DRIVE.reduce((a, d) => a + d.node.files.filter(f => f.format === 'FLAC').length, 0), ICON.smart], ['inbox', '00 INBOX', D.inbox, ICON.inbox]];
+  coll.forEach(([id, nm, ct, ic]) => h += `<div class="node ${st.node === 'c:' + id ? 'on' : ''}" data-node="c:${id}">${ic}<span class="nm">${esc(nm)}</span><span class="ct num">${ct}</span></div>`);
+  h += '<div class="sec"><span class="lbl">Playlists</span><span class="lbl" style="font-weight:500">Drive / DJ</span></div>';
+  const walk = (n, path, d) => {
+    const p = path ? path + '/' + n.name : n.name, id = 'pl:' + p, kids = n.children.length;
+    h += `<div class="node ${st.node === id ? 'on' : ''}" draggable="true" data-node="${esc(id)}" style="--d:${d}"><span class="tw" data-tw="${esc(id)}">${kids ? (open.has(id) ? '&#9660;' : '&#9654;') : ''}</span>${ICON.folder}<span class="nm">${esc(n.name)}</span><span class="ct num">${n.count}</span></div>`;
+    if (kids && open.has(id)) n.children.forEach(c => walk(c, p, d + 1));
+  };
+  D.drive.forEach(n => walk(n, '', 0));
+  h += '<div class="sec"><span class="lbl">Devices</span><span class="lbl" style="font-weight:500">drop playlists here</span></div>';
+  D.devices.forEach(dv => {
+    const pct = Math.min(100, dv.used_gb / dv.size_gb * 100);
+    const col = dv.state === 'ok' ? 'var(--ok)' : dv.state === 'warn' ? 'var(--warn)' : 'var(--bad)';
+    h += `<div class="dev ${st.node === 'dev:' + dv.id ? 'on' : ''}" data-node="dev:${dv.id}" data-dev="${dv.id}">
+      <div class="row1">${ICON.usb}<span class="lab">${esc(dv.label)}</span><span class="dot" style="background:${col}" title="${esc(dv.verdict)}"></span></div>
+      <div class="mdl">${esc(dv.model)} · ${esc(dv.fs)}</div>
+      <div class="cap"><i style="width:${Math.max(pct, 1.5)}%"></i></div>
+      <div class="minicap num"><span>${dv.used_gb.toFixed(1)} of ${dv.size_gb.toFixed(0)} GB</span><span>${dv.tracks} tracks</span></div>
+      <div class="badges" style="margin-top:7px">${[['rekordbox', 'RB'], ['onelibrary', 'ONELIB'], ['engine', 'ENGINE'], ['serato', 'SERATO']].map(([k, l]) => `<span class="badge ${dv.libs[k] ? 'y' : ''}">${l}</span>`).join('')}</div>
+      ${st.node.startsWith('dev:' + dv.id) ? `<div class="kids">${dv.playlists.map(p => `<div class="node ${st.node === 'devpl:' + dv.id + ':' + p.name ? 'on' : ''}" data-node="devpl:${dv.id}:${esc(p.name)}">${ICON.folder}<span class="nm">${esc(p.name)}</span><span class="ct num">${p.count}</span></div>`).join('')}</div>` : ''}
+    </div>`;
+  });
+  h += '<div class="sec"><span class="lbl">Gig kit</span></div>';
+  [['Main', D.devices[0] ? D.devices[0].label : 'not assigned'], ['Legacy rescue', 'not assigned'], ['Backup', D.devices[1] ? D.devices[1].label : 'not assigned']].forEach(([r, s]) => h += `<div class="node" data-node="kit:${r}">${ICON.usb}<span class="nm">${r}</span><span class="ct">${s}</span></div>`);
+  t.innerHTML = h;
+}
+
+// ---------- rows for the current node ----------
+function rows() {
+  const id = st.node;
+  const driveRows = (n, path) => n.files.map((f, i) => ({ n: i + 1, title: f.title, artist: f.artist, bpm: null, camelot: null, dur: null, format: f.format, state: 'cloud', mini: null, folder: path }));
+  let r = [];
+  if (id === 'pl:' + D.playlist || id === 'c:recent') r = D.tracks.map(t => ({ ...t }));
+  else if (id === 'c:all') { r = D.tracks.map(t => ({ ...t })); DRIVE.forEach(d => { if (d.path !== D.playlist) r = r.concat(driveRows(d.node, d.path)); }); r.forEach((x, i) => x.n = i + 1); }
+  else if (id === 'c:needs') { DRIVE.forEach(d => { if (d.path !== D.playlist) r = r.concat(driveRows(d.node, d.path)); }); r.forEach((x, i) => x.n = i + 1); }
+  else if (id === 'c:wont') { DRIVE.forEach(d => r = r.concat(driveRows(d.node, d.path).filter(x => x.format === 'FLAC'))); r.forEach((x, i) => x.n = i + 1); }
+  else if (id.startsWith('pl:')) { const d = DRIVE.find(x => x.id === id); if (d) { r = driveRows(d.node, d.path); d.node.children.forEach(c => r = r.concat(driveRows(c, d.path + '/' + c.name))); r.forEach((x, i) => x.n = i + 1); } }
+  else if (id.startsWith('devpl:')) { const [, dev, ...rest] = id.split(':'); const name = rest.join(':'); const dv = D.devices.find(x => x.id === dev);
+    if (dv.contents) { const p = dv.contents.find(x => x.name === name); r = (p ? p.tracks : []).map((t, i) => ({ n: i + 1, ...t, camelot: null, state: 'ready', onstick: true })); }
+    else r = D.tracks.map(t => ({ ...t, onstick: true })); }
+  else if (id.startsWith('dev:')) { const dv = D.devices.find(x => 'dev:' + x.id === id); if (dv.contents) { const seen = new Map(); dv.contents.forEach(p => p.tracks.forEach(t => seen.set(t.title + t.artist, t))); r = [...seen.values()].map((t, i) => ({ n: i + 1, ...t, camelot: null, state: 'ready', onstick: true })); } else r = D.tracks.map(t => ({ ...t, onstick: true })); }
+  return r;
+}
+function plays(t) { // per player family, from format
+  if (t.state === 'unread') return PLAYERS.map(() => 'b');
+  return PLAYERS.map(([p]) => (t.format === 'FLAC' && FLAC_OLD.has(p)) ? 'b' : (t.format === 'M4A' && p === 'CDJ-900') ? 'w' : 'ok');
+}
+function stateOf(t) { const p = plays(t); if (t.state === 'cloud') return 'cloud'; if (p.includes('b')) return 'wont'; return 'ready'; }
+
+// ---------- list ----------
+const COLS = [
+  ['n', '#', 58, 'r num dim'], ['art', '', 40, 'c-art'], ['mini', 'Preview', 120, 'c-wave'], ['title', 'Title', null, 'c-title'], ['artist', 'Artist', '20%', 'c-artist'],
+  ['bpm', 'BPM', 76, 'r num'], ['camelot', 'Key', 70, 'c-key'], ['dur', 'Time', 70, 'r num dim'], ['plays', 'Plays on', 100, ''], ['state', 'State', 150, ''],
+];
+function renderList() {
+  let r = rows();
+  const counts = { all: r.length, ready: 0, cloud: 0, wont: 0 };
+  r.forEach(t => { t._s = stateOf(t); counts[t._s]++; });
+  if (st.chip !== 'all') r = r.filter(t => t._s === st.chip);
+  if (st.q) { const q = st.q.toLowerCase().split(/\s+/).filter(Boolean); r = r.filter(t => q.every(w => [t.title, t.artist, t.camelot, t.bpm && String(Math.round(t.bpm)), t.format].some(v => v && String(v).toLowerCase().includes(w)))); }
+  const [sk, sd] = st.sort;
+  r.sort((a, b) => { const x = a[sk], y = b[sk]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })) * sd; });
+  st.view = r;
+  const loadedCam = st.loaded && st.loaded.camelot;
+  document.getElementById('chips').innerHTML = [['all', 'All', counts.all, null], ['ready', 'Ready', counts.ready, 'var(--ok)'], ['cloud', 'In the cloud', counts.cloud, 'var(--cloud)'], ['wont', "Won't play everywhere", counts.wont, 'var(--warn)']]
+    .map(([k, l, c, col]) => `<button class="chip ${st.chip === k ? 'on' : ''}" data-chip="${k}">${col ? `<span class="dot" style="background:${col}"></span>` : ''}${l} <b class="num">${c}</b></button>`).join('')
+    + `<span class="spacer"></span><span class="judge">Judged against <b>Pioneer club gear, 12 players</b> &#9662;</span>`;
+  const lw = document.querySelector('.list').clientWidth;
+  const cols = COLS.filter(([k]) => !(k === 'plays' && lw < 1080) && !(k === 'mini' && lw < 920) && !(k === 'state' && lw < 760));
+  const head = '<colgroup>' + cols.map(c => `<col style="${c[2] ? 'width:' + (typeof c[2] === 'number' ? c[2] + 'px' : c[2]) : ''}">`).join('') + '</colgroup><thead><tr>' + cols.map(([k, l, , cls]) => `<th class="${cls.includes('r') ? 'r' : ''} ${sk === k ? 'sorted' : ''}" data-sort="${k}">${l}${sk === k ? `<span class="ar">${sd > 0 ? '&#9650;' : '&#9660;'}</span>` : ''}</th>`).join('') + '</tr></thead>';
+  const body = r.map((t, i) => {
+    const kc = keyColor(t.camelot), match = loadedCam && t !== st.loaded && mixes(loadedCam, t.camelot);
+    const p = plays(t), stc = { ready: ['var(--ok)', t.onstick ? 'On the stick' : 'Ready'], cloud: ['var(--cloud)', 'In the cloud'], wont: ['var(--warn)', "Won't play everywhere"] }[t._s];
+    const isLoaded = st.loaded && st.loaded.title === t.title && st.loaded.artist === t.artist;
+    const cell = {
+      n: `<td class="r num dim">${String(t.n).padStart(3, '0')}</td>`,
+      art: `<td class="c-art"><i style="${t.art ? `background-image:url(${t.art})` : ''}"></i></td>`,
+      mini: `<td class="c-wave">${t.mini ? `<canvas data-mini="${i}"></canvas>` : `<span style="font-size:12px;color:var(--text-3)">${t._s === 'cloud' ? 'not analysed' : ''}</span>`}</td>`,
+      title: `<td class="c-title">${esc(t.title)}</td>`,
+      artist: `<td class="c-artist">${esc(t.artist)}</td>`,
+      bpm: `<td class="r num">${t.bpm ? t.bpm.toFixed(1) : '<span style="color:var(--text-3)">-</span>'}</td>`,
+      camelot: `<td class="c-key ${match ? 'match' : ''}">${kc ? `<span class="keychip" style="background:${kc}">${t.camelot}</span>` : '<span style="color:var(--text-3)">-</span>'}</td>`,
+      dur: `<td class="r num dim">${fmtD(t.dur)}</td>`,
+      plays: `<td><span class="plays" title="${PLAYERS.map(([n], j) => n + ': ' + ({ ok: 'plays', w: 'check', b: "won't play" })[p[j]]).join('\n')}">${p.map(x => `<i class="${x === 'ok' ? '' : x}"></i>`).join('')}</span></td>`,
+      state: `<td><span class="state"><span class="dot" style="background:${stc[0]}"></span>${stc[1]}</span></td>`,
+    };
+    return `<tr data-i="${i}" class="${i === st.sel ? 'sel' : ''} ${isLoaded ? 'loaded' : ''}">${cols.map(([k]) => cell[k]).join('')}</tr>`;
+  }).join('');
+  document.getElementById('tbl').innerHTML = head + '<tbody>' + body + '</tbody>';
+  if (!r.length) document.getElementById('tbl').innerHTML += `<tbody><tr><td colspan="${cols.length}" class="empty">${st.q ? 'No tracks match that search.' : 'This playlist is empty.'}</td></tr></tbody>`;
+  document.querySelectorAll('canvas[data-mini]').forEach(c => drawMini(c, r[+c.dataset.mini].mini));
+  // header
+  const id = st.node; let title = 'All tracks', meta = '';
+  if (id.startsWith('pl:')) title = id.slice(3).split('/').pop();
+  else if (id.startsWith('devpl:')) title = id.split(':').slice(2).join(':');
+  else if (id.startsWith('dev:')) title = D.devices.find(x => 'dev:' + x.id === id).label;
+  else title = { 'c:all': 'All tracks', 'c:recent': 'Recently added', 'c:needs': 'Needs analysis', 'c:wont': "Won't play everywhere", 'c:inbox': '00 INBOX' }[id] || title;
+  const tot = rows(); const secs = tot.reduce((a, t) => a + (t.dur || 0), 0);
+  meta = `${tot.length} tracks${secs ? ' · ' + Math.floor(secs / 3600) + ' h ' + Math.round(secs % 3600 / 60) + ' min' : ''}${id.startsWith('dev') ? ' · on the stick' : id.startsWith('pl:') ? ' · Google Drive' : ''}`;
+  document.getElementById('l-title').textContent = title;
+  document.getElementById('l-meta').textContent = meta;
+  const dv = targetDevice();
+  const ex = document.getElementById('b-export');
+  ex.textContent = lw < 1000 ? 'Export' : dv ? 'Export to ' + dv.label : 'Export to stick';
+  ex.disabled = !id.startsWith('pl:');
+  document.getElementById('st-sel').textContent = r[st.sel] ? `Selected: ${r[st.sel].title}` : '';
+}
+const BAND = ['#2a6bff', '#e39a3c', '#f4f1ea'];
+function drawMini(c, m) {
+  const w = c.clientWidth || 90, h = c.clientHeight || 18, dpr = (devicePixelRatio || 1) * Z; c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext('2d'); g.scale(dpr, dpr);
+  const n = m.length, bw = w / n;
+  for (let b = 0; b < 3; b++) { g.fillStyle = BAND[b]; for (let i = 0; i < n; i++) { const y = m[i][b] / 127 * h * (b === 2 ? .8 : 1); g.fillRect(i * bw, h - y, Math.max(1, bw - .15), y); } }
+}
+
+// ---------- player strip ----------
+function drawWave() {
+  const c = document.getElementById('wave'), t = st.loaded; const w = c.clientWidth, h = c.clientHeight, dpr = (devicePixelRatio || 1) * Z; c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+  g.fillStyle = '#16181b'; g.fillRect(0, 0, w, h);
+  if (!t) { g.fillStyle = '#2a2e35'; g.fillRect(0, h / 2, w, 1); return; }
+  const m = t.wave, n = m.length, bw = w / n, mid = h / 2, played = st.pos / t.dur * w;
+  for (let b = 0; b < 3; b++) {
+    for (let i = 0; i < n; i++) {
+      const x = i * bw, y = m[i][b] / 127 * (mid - 2) * (b === 2 ? .8 : 1);
+      g.globalAlpha = x < played ? .42 : 1; g.fillStyle = BAND[b];
+      g.fillRect(x, mid - y, Math.max(1, bw + .3), y * 2);
+    }
+  }
+  g.globalAlpha = 1;
+  // phrase boundaries as ticks
+  (t.phrases || []).forEach(p => { const x = p.t / t.dur * w; g.fillStyle = 'rgba(255,255,255,.18)'; g.fillRect(x, 0, 1, h); });
+  g.fillStyle = '#ff4d4d'; g.fillRect(played - 1, 0, 2, h);
+  const p = document.getElementById('phrase'), pw = p.clientWidth, ph = p.clientHeight; p.width = pw * dpr; p.height = ph * dpr;
+  const pg = p.getContext('2d'); pg.scale(dpr, dpr); pg.clearRect(0, 0, pw, ph);
+  const P = t.phrases || [];
+  P.forEach((q, i) => { const x0 = q.t / t.dur * pw, x1 = (i + 1 < P.length ? P[i + 1].t : t.dur) / t.dur * pw; pg.fillStyle = PH_COL[q.kind] || '#666'; pg.globalAlpha = x0 < played ? .5 : .9; pg.fillRect(x0, 0, Math.max(1, x1 - x0 - 1), ph); });
+  pg.globalAlpha = 1;
+  const cur = [...P].reverse().find(q => q.t <= st.pos);
+  document.getElementById('t-ph').innerHTML = cur ? `<span class="dot" style="background:${PH_COL[cur.kind]};margin-right:6px"></span>${cur.kind}` : '';
+  document.getElementById('t-el').textContent = fmtT(st.pos);
+  document.getElementById('t-rem').textContent = '-' + fmtT(t.dur - st.pos);
+}
+function load(t) {
+  st.loaded = t; st.pos = 0;
+  document.getElementById('np-art').style.backgroundImage = t.art ? `url(${t.art})` : '';
+  document.getElementById('np-title').textContent = t.title;
+  document.getElementById('np-artist').textContent = t.artist;
+  document.getElementById('np-mood').textContent = t.mood ? t.mood + ' mood · ' + (t.phrases || []).length + ' phrases' : '';
+  document.getElementById('r-bpm').textContent = t.bpm ? t.bpm.toFixed(1) : '---.-';
+  const k = document.getElementById('r-key');
+  if (t.camelot) { k.textContent = t.camelot; k.style.background = keyColor(t.camelot); k.style.color = '#0c0d0f'; document.getElementById('r-keyname').textContent = t.key ? 'KEY · ' + t.key : 'KEY'; }
+  else { k.textContent = '--'; k.style.background = '#2a2e35'; k.style.color = 'var(--text-3)'; document.getElementById('r-keyname').textContent = 'KEY'; }
+  const n = (st.view || []).filter(x => x !== t && mixes(t.camelot, x.camelot)).length;
+  document.getElementById('r-mix').textContent = t.camelot ? `${n} tracks in this list mix with ${t.camelot}.` : 'Key not analysed yet.';
+  drawWave(); renderList();
+}
+let last = performance.now();
+function tick(now) { const dt = (now - last) / 1000; last = now; if (st.playing && st.loaded) { st.pos += dt; if (st.pos >= st.loaded.dur) { st.pos = 0; st.playing = false; setPlayIcon(); } drawWave(); } requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+function setPlayIcon() { const b = document.getElementById('np-play'); b.classList.toggle('on', st.playing); document.getElementById('np-play-ico').innerHTML = st.playing ? '<path d="M7 5h4v14H7zM13 5h4v14h-4z" fill="currentColor" stroke="none"/>' : '<path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/>'; }
+
+// ---------- inspector ----------
+function targetDevice() { return D.devices.find(d => d.id === st.dev) || D.devices[0]; }
+function renderInsp() {
+  const el = document.getElementById('insp'), id = st.node;
+  if (id.startsWith('dev') || st.queue.length) { el.innerHTML = devInsp(st.queue.length ? targetDevice() : D.devices.find(x => id.includes(x.id))); return; }
+  if (id.startsWith('pl:') && st.view && !st.view[st.sel]) { el.innerHTML = '<div class="empty">Select a track.</div>'; return; }
+  const t = (st.view || [])[st.sel];
+  if (!t) { el.innerHTML = '<div class="empty">Select a track.</div>'; return; }
+  const p = plays(t);
+  const fam = [['CDJ-900, 2000, 900NXS, 2000NXS, XDJ-700', p.slice(0, 4).concat(p[5])], ['CDJ-2000NXS2, XDJ-1000MK2, XDJ-XZ', [p[4], p[6], p[7]]], ['CDJ-3000, 3000X, 1500X, XDJ-AZ', p.slice(8)]];
+  const gl = a => a.includes('b') ? '<span class="g b">&#10005;</span>' : a.includes('w') ? '<span class="g w">!</span>' : '<span class="g ok">&#10003;</span>';
+  el.innerHTML = `<div class="hd trk"><div class="art" style="${t.art ? `background-image:url(${t.art})` : ''}"></div><div style="min-width:0"><div class="lbl">Track</div><h2 style="margin-top:3px">${esc(t.title)}</h2><div class="by">${esc(t.artist)}</div></div></div>
+    <section><span class="lbl">Analysis</span><dl class="kv">
+      <dt>BPM</dt><dd class="num">${t.bpm ? t.bpm.toFixed(2) : 'not analysed'}</dd>
+      <dt>Key</dt><dd>${t.camelot ? `<span class="keychip" style="background:${keyColor(t.camelot)}">${t.camelot}</span> ${t.key || ''}` : 'not analysed'}</dd>
+      <dt>Phrases</dt><dd>${t.phrases ? t.phrases.length + ', ' + (t.mood || '') + ' mood' : '-'}</dd>
+      <dt>Length</dt><dd class="num">${fmtD(t.dur) || '-'}</dd></dl></section>
+    <section><span class="lbl">File</span><dl class="kv">
+      <dt>Format</dt><dd>${esc(t.format)}${t.bitrate ? ', ' + t.bitrate + ' kbps' : ''}${t.rate ? ', ' + (t.rate / 1000).toFixed(1) + ' kHz' : ''}</dd>
+      <dt>Size</dt><dd class="num">${t.size ? (t.size / 1e6).toFixed(1) + ' MB' : '-'}</dd>
+      <dt>Where</dt><dd>${t.onstick ? 'On the stick' : t._s === 'cloud' ? 'Google Drive, not downloaded' : 'Google Drive, on this Mac'}</dd>
+      <dt>Playlist</dt><dd>${esc(t.folder || D.playlist)}</dd></dl></section>
+    <section><span class="lbl">Plays on</span>
+      ${fam.map(([n, a]) => `<div class="fix"><div><b style="font-weight:500">${n}</b></div>${gl(a)}</div>`).join('')}
+      ${p.includes('b') ? `<div class="why"><b>FLAC on older players</b><span>The CDJ-900, CDJ-2000 and the first NXS generation read MP3, AAC, WAV and AIFF only. BoothReady can add an AIFF copy for the export.</span></div>` : ''}
+    </section>
+    <section><span class="lbl">On sticks</span><div class="hint">${t.onstick || (t.mini && !t.folder) ? esc(D.devices[0].label) + ', in ' + esc(D.playlist) : 'Not on any connected stick'}</div></section>`;
+}
+function devInsp(dv) {
+  if (!dv) return '';
+  const pct = dv.used_gb / dv.size_gb * 100;
+  const q = st.queue.filter(x => x.dev === dv.id);
+  const addTracks = q.reduce((a, x) => a + x.count, 0), addGb = addTracks * 0.012, toAnalyse = q.reduce((a, x) => a + (x.analysed ? 0 : x.count), 0);
+  const pick = st.pick != null ? PLAYERS[st.pick] : null;
+  const mxRows = PLAYERS.map(([n, s], i) => { const a = s.split(' '); if (dv.libs.onelibrary) a[3] = 'ok'; const v = a.includes('b') ? ['b', 'Fix'] : a.includes('u') ? ['u', 'Likely'] : ['ok', 'OK'];
+    return `<tr data-pick="${i}" class="${st.pick === i ? 'pick' : ''}"><td>${n}</td>${a.map(x => `<td><span class="g ${x}">${{ ok: '&#10003;', u: '?', b: '&#10005;', w: '!' }[x]}</span></td>`).join('')}<td><span class="g ${v[0]}" style="font-size:10.5px;font-weight:600">${v[1]}</span></td></tr>`; }).join('');
+  return `<div class="hd"><div class="lbl">Stick</div><h2 style="font-family:var(--cdj);letter-spacing:.03em;margin-top:4px">${esc(dv.label)}</h2><div class="by">${esc(dv.model)} · ${esc(dv.fs)}</div>
+      <div class="bar"><i style="width:${pct}%;background:var(--text-2)"></i>${addGb ? `<i style="width:${addGb / dv.size_gb * 100}%;background:var(--accent)"></i>` : ''}</div>
+      <div class="minicap num"><span>${dv.used_gb.toFixed(1)} GB used${addGb ? ` + ${addGb.toFixed(1)} GB` : ''}</span><span>${(dv.size_gb - dv.used_gb - addGb).toFixed(1)} GB free</span></div></div>
+    ${q.length ? `<section class="sync"><span class="lbl">Sync to this stick</span>
+      <div class="plist">${q.map(x => `<div><span class="dot" style="background:var(--accent)"></span><span>${esc(x.name)}</span><em class="num">${x.count}</em><button class="g u" data-unq="${esc(x.name)}" title="Remove">&#10005;</button></div>`).join('')}</div>
+      <div class="line"><span>Tracks to copy</span><b class="num add">+${addTracks}</b></div>
+      <div class="line"><span>Already on the stick</span><b class="num">${dv.tracks}</b></div>
+      <div class="line"><span>To analyse first</span><b class="num">${toAnalyse ? toAnalyse + ' · about ' + Math.ceil(toAnalyse * 6 / 60) + ' min' : 'none'}</b></div>
+      <div class="line"><span>Libraries written</span><b>rekordbox Device Library</b></div>
+      <div class="hint" style="margin-top:8px">The export is built whole on this Mac first. The stick's current library is replaced by one that holds its ${dv.playlists.length} playlist${dv.playlists.length === 1 ? '' : 's'} plus these.</div>
+      <button class="btn primary full" id="b-write">Write to ${esc(dv.label)}</button></section>` : ''}
+    <section><span class="lbl">Readiness · ${esc(dv.verdict)}</span>
+      <table class="mx"><thead><tr><th>Player</th><th>USB</th><th>Part</th><th>FS</th><th>Lib</th><th>Audio</th><th></th></tr></thead><tbody>${mxRows}</tbody></table>
+      ${pick && !dv.libs.onelibrary && pick[1].includes('b') ? `<div class="why"><b>${pick[0]}: OneLibrary missing</b><span>This player reads rekordbox OneLibrary, and the stick only has a Device Library. Evidence: vendor documented (alphatheta.com).</span></div>` : pick ? `<div class="why" style="border-left-color:var(--ok)"><b>${pick[0]}</b><span>${pick[1].includes('u') ? 'Expected to work. The USB check is inferred for this model, not documented or tested.' : 'Every check passes for this player.'}</span></div>` : '<div class="hint" style="margin-top:8px">Select a player to see why.</div>'}
+    </section>
+    <section><span class="lbl">Fixes</span>
+      ${!dv.libs.onelibrary ? `<div class="fix"><div><b>Add OneLibrary</b>For CDJ-3000X, CDJ-1500X and XDJ-AZ. Needs the OneLibrary writer.</div><button class="btn" disabled>Soon</button></div>` : ''}
+      <div class="fix"><div><b>Remove macOS ._ files</b>Hidden files Finder leaves on FAT drives.</div><button class="btn">Clean</button></div>
+      <div class="fix"><div><b>Verify every file</b>Reads back all audio against the copy hashes.</div><button class="btn">Verify</button></div>
+      <div class="fix"><div><b>Eject safely</b></div><button class="btn">Eject</button></div>
+    </section>`;
+}
+
+// ---------- events ----------
+function render() { applyZoom(); renderTree(); renderList(); renderInsp(); }
+document.getElementById('tree').addEventListener('click', e => {
+  const tw = e.target.closest('[data-tw]'); if (tw && tw.textContent.trim()) { const id = tw.dataset.tw; open.has(id) ? open.delete(id) : open.add(id); renderTree(); return; }
+  const n = e.target.closest('[data-node]'); if (!n) return;
+  st.node = n.dataset.node; st.sel = 0; st.chip = 'all'; st.pick = null; if (n.dataset.dev) { st.dev = n.dataset.dev; st.insp = true; } if (!st.node.startsWith('dev')) st.queue = st.queue; render();
+});
+document.getElementById('tbl').addEventListener('click', e => {
+  const th = e.target.closest('th[data-sort]'); if (th) { const k = th.dataset.sort; if (k === 'art' || k === 'mini' || k === 'plays') return; st.sort = [k, st.sort[0] === k ? -st.sort[1] : 1]; renderList(); return; }
+  const tr = e.target.closest('tr[data-i]'); if (tr) { st.sel = +tr.dataset.i; renderList(); renderInsp(); }
+});
+document.getElementById('tbl').addEventListener('dblclick', e => { const tr = e.target.closest('tr[data-i]'); if (tr) { const t = st.view[+tr.dataset.i]; if (t.wave) { load(t); st.playing = true; setPlayIcon(); } } });
+document.getElementById('chips').addEventListener('click', e => { const c = e.target.closest('[data-chip]'); if (c) { st.chip = c.dataset.chip; st.sel = 0; renderList(); renderInsp(); } });
+document.getElementById('q').addEventListener('input', e => { st.q = e.target.value; st.sel = 0; renderList(); renderInsp(); });
+document.getElementById('np-play').onclick = () => { if (!st.loaded) return; st.playing = !st.playing; setPlayIcon(); };
+document.getElementById('wave').onclick = e => { if (!st.loaded) return; const r = e.target.getBoundingClientRect(); st.pos = (e.clientX - r.left) / r.width * st.loaded.dur; drawWave(); };
+document.getElementById('collapse').onclick = () => { st.collapsed = !st.collapsed; document.getElementById('strip').classList.toggle('collapsed', st.collapsed); document.getElementById('collapse').innerHTML = st.collapsed ? '&#9660;' : '&#9650;'; setTimeout(drawWave, 220); };
+document.getElementById('b-insp').onclick = () => { st.insp = document.getElementById('main').classList.contains('noinsp'); applyZoom(); setTimeout(() => { renderList(); drawWave(); }, 0); };
+document.getElementById('b-export').onclick = () => queue(st.node, targetDevice());
+document.getElementById('insp').addEventListener('click', e => {
+  const pk = e.target.closest('[data-pick]'); if (pk) { st.pick = +pk.dataset.pick; renderInsp(); return; }
+  const uq = e.target.closest('[data-unq]'); if (uq) { st.queue = st.queue.filter(x => x.name !== uq.dataset.unq); renderInsp(); return; }
+  if (e.target.id === 'b-write') confirmWrite(targetDevice());
+});
+function queue(nodeId, dv) {
+  if (!nodeId.startsWith('pl:')) return;
+  const d = DRIVE.find(x => x.id === nodeId); if (!d) return;
+  if (!st.queue.find(x => x.name === d.path)) st.queue.push({ name: d.path, count: d.node.count, dev: dv.id, analysed: d.path === D.playlist });
+  st.dev = dv.id; st.node = 'dev:' + dv.id; st.sel = 0; st.insp = true; render();
+  toast(`Queued <b>${esc(d.path.split('/').pop())}</b> for ${esc(dv.label)}. Review it in the inspector, then write.`);
+}
+// drag playlists onto sticks
+document.addEventListener('dragstart', e => { const n = e.target.closest('[data-node^="pl:"]'); if (n) { e.dataTransfer.setData('text/plain', n.dataset.node); e.dataTransfer.effectAllowed = 'copy'; } });
+document.addEventListener('dragover', e => { const d = e.target.closest('.dev'); document.querySelectorAll('.dev.drop').forEach(x => x !== d && x.classList.remove('drop')); if (d) { e.preventDefault(); d.classList.add('drop'); } });
+document.addEventListener('drop', e => { const d = e.target.closest('.dev'); if (!d) return; e.preventDefault(); d.classList.remove('drop'); queue(e.dataTransfer.getData('text/plain'), D.devices.find(x => x.id === d.dataset.dev)); });
+function confirmWrite(dv) {
+  const s = document.getElementById('sheet');
+  s.innerHTML = `<div class="sh"><h3>Write to ${esc(dv.label)}?</h3><p>The library on this stick is replaced with the new export. Music files already there that the new library still uses are kept.</p></div>
+    <dl class="kv" style="margin:0"><dt>Device</dt><dd>${esc(dv.id)}</dd><dt>Model</dt><dd>${esc(dv.model)}</dd><dt>Size</dt><dd class="num">${dv.size_gb} GB</dd><dt>Serial ends</dt><dd class="num">6749</dd></dl>
+    <div class="sf"><button class="btn" id="s-cancel">Cancel</button><button class="btn primary" id="s-ok">Write ${st.queue.reduce((a, x) => a + x.count, 0) + dv.tracks} tracks</button></div>`;
+  document.getElementById('veil').classList.add('on');
+  document.getElementById('s-cancel').onclick = () => document.getElementById('veil').classList.remove('on');
+  document.getElementById('s-ok').onclick = () => { document.getElementById('veil').classList.remove('on'); toast('This is a mockup, so nothing was written.'); };
+}
+let tt; function toast(h) { const t = document.getElementById('toast'); t.innerHTML = h; t.classList.add('on'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('on'), 4200); }
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') { if (e.key === 'Escape') e.target.blur(); return; }
+  const v = st.view || [];
+  if (e.key === 'ArrowDown') { st.sel = Math.min(v.length - 1, st.sel + 1); renderList(); renderInsp(); scrollSel(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { st.sel = Math.max(0, st.sel - 1); renderList(); renderInsp(); scrollSel(); e.preventDefault(); }
+  else if (e.key === 'Enter') { const t = v[st.sel]; if (t && t.wave) load(t); }
+  else if (e.key === ' ') { if (st.loaded) { st.playing = !st.playing; setPlayIcon(); } e.preventDefault(); }
+  else if ((e.metaKey || e.ctrlKey) && e.key === 'f') { document.getElementById('q').focus(); e.preventDefault(); }
+  else if ((e.metaKey || e.ctrlKey) && e.key === 'i') { document.getElementById('b-insp').click(); e.preventDefault(); }
+  else if ((e.metaKey || e.ctrlKey) && e.key === 'e') { document.getElementById('b-export').click(); e.preventDefault(); }
+  else if (e.key === 'Escape') document.getElementById('veil').classList.remove('on');
+  else if (e.key === 'f' && !e.metaKey && !e.ctrlKey) toggleFull();
+});
+function scrollSel() { const r = document.querySelector('tr.sel'); if (r) r.scrollIntoView({ block: 'nearest' }); }
+// The window scales with the screen: designed at 1900 px wide, so a 2560 px display draws everything about 35% larger
+// instead of leaving empty space, and a laptop panel draws it slightly smaller.
+const zoom = () => Math.min(1.4, Math.max(0.9, innerWidth / 1900));
+let Z = 1;
+function applyZoom() { Z = zoom(); document.documentElement.style.zoom = Z; const room = innerWidth / Z >= 1700; document.getElementById('main').classList.toggle('noinsp', !(st.insp ?? room)); }
+window.addEventListener('resize', () => { applyZoom(); renderList(); drawWave(); });
+function toggleFull() { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); }
+document.getElementById('b-full').onclick = toggleFull;
+document.addEventListener('fullscreenchange', () => { document.getElementById('b-full-t').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen'; document.querySelector('.titlebar').style.paddingLeft = document.fullscreenElement ? '16px' : ''; });
+
+// boot: open the real playlist and load its first track, so the first screen is a working one
+document.getElementById('tb-sticks').textContent = D.devices.length + ' stick' + (D.devices.length === 1 ? '' : 's') + ' connected';
+const ana = D.tracks.length, all = ana + DRIVE.reduce((a, d) => a + d.node.files.length, 0);
+document.getElementById('st-ana-n').textContent = `${ana} of ${all} tracks analysed`;
+document.querySelector('.prog i').style.width = (ana / all * 100) + '%';
+render();
+const first = D.tracks.find(t => t.camelot) || D.tracks[0];
+if (first) { st.sel = Math.max(0, (st.view || []).indexOf((st.view || []).find(x => x.title === first.title))); load(first); st.pos = first.dur * .31; drawWave(); renderInsp(); }
+</script>
+</body>
+</html>

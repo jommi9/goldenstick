@@ -12,6 +12,8 @@
 #[cfg(feature = "device-library-writer")]
 pub mod analysis_cache;
 #[cfg(feature = "device-library-writer")]
+pub mod analysis_view;
+#[cfg(feature = "device-library-writer")]
 pub mod device_library;
 #[cfg(feature = "device-library-writer")]
 pub mod playlists;

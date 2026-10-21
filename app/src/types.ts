@@ -555,3 +555,47 @@ export interface LocalExport {
   source: string;
   warnings: string[];
 }
+
+/** One track's analysis, as the window draws it. Waveform columns are [low, mid, high], 0 to 127. */
+export interface TrackAnalysis {
+  tempo_bpm: number;
+  key: string;
+  camelot: string | null;
+  duration_secs: number;
+  preview: [number, number, number][];
+  overview: [number, number, number][];
+  phrases: { start_secs: number; kind: string }[];
+  mood: string | null;
+}
+
+/** How a library folder and a stick playlist of the same name relate. */
+export type CompareState = "same" | "differs" | "library_only" | "stick_only";
+
+export interface PlaylistCompare {
+  name: string;
+  /** `<source id>|<folder path>`, the tree's folder key, when there is a folder. */
+  folder: string | null;
+  state: CompareState;
+  library_tracks: number;
+  stick_tracks: number;
+  in_both: number;
+  missing_on_stick: string[];
+  only_on_stick: string[];
+}
+
+export interface StickComparison {
+  playlists: PlaylistCompare[];
+  orphans: { id: number; title: string; artist: string | null; path: string; playlists: string[] }[];
+  stick_tracks: number;
+  matched_by_size: number;
+  matched_by_name: number;
+}
+
+/** Sorting steps: tracks are added (copied), moved or removed; folders are made, renamed, moved or removed. */
+export type SortOp = "add" | "move" | "remove" | "new-folder" | "rename-folder" | "move-folder" | "remove-folder";
+
+export interface SortOutcome {
+  /** Files copied, moved or put back. */
+  changed: number;
+  can_undo: boolean;
+}
