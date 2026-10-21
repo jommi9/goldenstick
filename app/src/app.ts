@@ -17,10 +17,16 @@ import {
   libraryInspector,
   libraryList,
   libraryListKey,
+  librarySortKey,
+  libraryClickMods,
+  librarySelectedRows,
+  libraryDragStart,
+  libraryDragOver,
+  libraryDragEnd,
+  libraryDrop,
   libraryPlayKey,
   libraryScrolled,
   librarySelection,
-  librarySelectionIndex,
   librarySheet,
   libraryStatus,
   libraryTree,
@@ -2026,8 +2032,7 @@ function refreshSelection() {
   const rows = list.querySelectorAll<HTMLElement>("tr[data-row]");
   rows.forEach((r) => r.classList.remove("sel"));
   const t = document.createElement("template");
-  const sel = librarySelectionIndex();
-  if (sel !== null) rows[sel]?.classList.add("sel");
+  for (const i of librarySelectedRows()) rows[i]?.classList.add("sel");
   const insp = document.getElementById("insp");
   if (insp && !S.node) {
     t.innerHTML = inspector().s;
@@ -2051,6 +2056,7 @@ function onKey(ev: KeyboardEvent) {
     }
     return;
   }
+  if (S.panel === "library" && !S.node && librarySortKey(ev)) return;
   if (ev.key === "Escape" && typing) {
     target?.blur();
     return;
@@ -2146,6 +2152,7 @@ export async function start(api: Api) {
     const el = (ev.target as HTMLElement).closest<HTMLElement>("[data-act]");
     if (el && !(el as HTMLButtonElement).disabled) {
       ev.preventDefault();
+      libraryClickMods(ev);
       // A double-click on a row loads it into the player.
       if (el.dataset.act === "library-select" && ev.detail >= 2) {
         void libraryAct("library-play-row", el.dataset.id ?? "").catch((e) => toast(String(e)));
@@ -2158,6 +2165,10 @@ export async function start(api: Api) {
     if ((ev.target as HTMLElement).matches("[data-veil]")) closeSheet();
   });
   root().addEventListener("scroll", (ev) => libraryScrolled(ev.target as HTMLElement), true);
+  root().addEventListener("dragstart", (ev) => libraryDragStart(ev));
+  root().addEventListener("dragover", (ev) => libraryDragOver(ev));
+  root().addEventListener("dragend", () => libraryDragEnd());
+  root().addEventListener("drop", (ev) => void libraryDrop(ev).catch((e) => toast(String(e))));
   root().addEventListener("input", (ev) => {
     const t = ev.target as HTMLInputElement;
     if (libraryInput(t)) return;

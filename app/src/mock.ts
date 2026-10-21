@@ -203,6 +203,7 @@ export async function createMockApi(): Promise<Api> {
   /** Folders added in this session: id, record, and the demo source whose tracks stand in for theirs. */
   const addedSources: { source: LibrarySource; scanned: boolean }[] = [];
   let libraryCancelled = false;
+  const sortLog: { id: string; before: Record<string, LibraryTrack[] | undefined> }[] = [];
   /** Collections made in this session: the tracks picked from a source, by path. */
   const collections: { id: string; name: string; origin: string; paths: Set<string> }[] = [];
   const collectionTracks = (c: { origin: string; paths: Set<string> }, targets: string[]): LibraryTrack[] => {
@@ -687,6 +688,46 @@ export async function createMockApi(): Promise<Api> {
     libraryAnalysis: async () => null,
     stickCompare: async () => null,
     stickToLibrary: async () => 0,
+    // Sorting changes the built-in sources' track lists in every preset, and
+    // undo puts the lists back as they were.
+    librarySort: async (id, op, paths, folder) => {
+      const before = Object.fromEntries(Object.entries(data.library).map(([k, lib]) => [k, lib.tracks[id]]));
+      let changed = 0;
+      for (const lib of Object.values(data.library)) {
+        if (!lib.tracks[id]) continue;
+        let out = [...lib.tracks[id]];
+        changed = 0;
+        for (const path of paths) {
+          const t = out.find((x) => x.path === path);
+          if (!t) continue;
+          if (op === "remove") {
+            out = out.filter((x) => x !== t);
+            changed++;
+            continue;
+          }
+          if (op !== "add" && op !== "move") continue;
+          const there = out.some((x) => x.path === `${folder}/${t.name}`);
+          if (op === "move") out = out.filter((x) => x !== t);
+          if (!there) out.push({ ...t, path: `${folder}/${t.name}`, folder });
+          if (!there || op === "move") changed++;
+        }
+        lib.tracks[id] = out;
+      }
+      if (changed) sortLog.push({ id, before });
+      return { changed, can_undo: sortLog.length > 0 };
+    },
+    libraryUndo: async () => {
+      const last = sortLog.pop();
+      if (!last) return { changed: 0, can_undo: false };
+      for (const [k, list] of Object.entries(last.before)) if (list) data.library[k].tracks[last.id] = list;
+      return { changed: 1, can_undo: sortLog.length > 0 };
+    },
+    libraryTrackFolders: async (id, path) => {
+      const all = tracksOf(id, []);
+      const t = all.find((x) => x.path === path);
+      if (!t) return [];
+      return [...new Set(all.filter((x) => x.name.toLowerCase() === t.name.toLowerCase() && x.size === t.size).map((x) => x.folder))].sort();
+    },
     libraryPlayUrl: async (id, path) => {
       const t = tracksOf(id, []).find((x) => x.path === path);
       if (!t || t.state === "unreadable") throw new Error("That isn't a track in this source.");

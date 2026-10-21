@@ -33,3 +33,17 @@ The base size went up throughout: 13.5 px text, 32 px rows, a 176 px player stri
 ## 19 October 2026: step 1, the shell in the app
 
 The app now opens on the new window: title bar, player strip (transport, clock, BPM and key; no waveform yet), icon rail, tree with Collection, Playlists (music sources and their folders), Devices (capacity bar, library badges, readiness dot, simulated sticks in demo mode) and Gig kit, the dense track list with sortable columns, Camelot key pills, green cells for keys that mix with the loaded track, a plays-on bar per selected player, an inspector for a track, a source or a stick, and a status bar. The check, erase, copy and verify screens open as sheets over the window, as do Manage sources, Collect and Export to USB. Test lab and Dev tools sit behind the rail. A plugged-in stick appears in the tree with a toast and is read in the background. Rows are 32 px, following the second mockup pass rather than the 24 px of the first. The preview column draws a baseline until step 3 reads the analysis. `npm run check-ui` passes 723 checks; captures are in `app/screenshots` (1920 x 1080, plus 1280 x 800 and 2560 x 1440).
+
+## 21 October 2026: sorting tracks
+
+Folders in a music source are playlists, so sorting moves and copies files between them. Moving is a rename, which keeps cloud files online, and adding to a playlist copies the file. Removing moves the file into `_Removed by BoothReady/<date>/` inside the source, which the scan skips; nothing is deleted, and the last 50 changes can be undone with Cmd+Z or the Undo button in the list header.
+
+Rows can be picked with Cmd-click, Shift-click and Cmd+A. The track inspector lists the playlists that hold a copy of the track, each with a button that takes it out, and has Add to playlist and Move to menus, both able to make a new playlist inside DJ. Dragging rows onto a folder in the tree moves them, and holding Option adds a copy.
+
+When a folder named like an inbox is open, a bar above the list gives nine playlists a number key. Pressing a number moves the selected track there and selects the next one. A playlist keeps its number once it has one, and one picked from the More menu takes the slot used least recently, so the keys stay put while working through the inbox.
+
+![The inbox bar](screenshots/sorting-triage.png)
+
+![Sorting in the track inspector](screenshots/sorting-inspector.png)
+
+A test of the undo log found that undoing a removal put the file back on disk but left the track out of the saved scan; it now comes back in both. `npm run check-ui` passes 772 checks, including four sorting screens.

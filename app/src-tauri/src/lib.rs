@@ -1284,6 +1284,75 @@ async fn stick_to_library(
         .map_err(e2s)?
 }
 
+#[derive(serde::Serialize)]
+struct SortOutcome {
+    changed: usize,
+    can_undo: bool,
+}
+
+fn today() -> String {
+    let days =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0);
+    boothready_core::export::device_library::civil_date(days as i64)
+}
+
+/// Sort a music source: `add` copies tracks into `folder`, `move` moves them
+/// there, `remove` moves them into the source's removed folder, `new-folder`
+/// makes `folder`. Nothing is deleted, and the change can be undone.
+#[tauri::command]
+async fn library_sort(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    op: String,
+    paths: Vec<String>,
+    folder: String,
+) -> Res<SortOutcome> {
+    use boothready_core::sorting;
+    let root = state.with_library(&app, |library| library.record(&id).map(|r| r.path))??;
+    let date = today();
+    let changes = tauri::async_runtime::spawn_blocking(move || -> Res<Vec<sorting::Change>> {
+        match op.as_str() {
+            "add" => sorting::add_to_folder(&root, &paths, &folder).map_err(e2s),
+            "move" => sorting::move_to_folder(&root, &paths, &folder, &date).map_err(e2s),
+            "remove" => sorting::remove(&root, &paths, &date).map_err(e2s),
+            "new-folder" => sorting::new_folder(&root, &folder).map(|_| Vec::new()).map_err(e2s),
+            _ => Err("Unknown sorting step.".to_string()),
+        }
+    })
+    .await
+    .map_err(e2s)??;
+    state.with_library(&app, |library| {
+        library.apply_changes(&id, &changes, false);
+        SortOutcome { changed: changes.len(), can_undo: library.can_undo() }
+    })
+}
+
+/// Undo the last sorting change. Returns how many files were put back.
+#[tauri::command]
+async fn library_undo(app: AppHandle, state: State<'_, AppState>) -> Res<SortOutcome> {
+    let Some((id, changes)) = state.with_library(&app, |library| library.take_last_change())? else {
+        return Ok(SortOutcome { changed: 0, can_undo: false });
+    };
+    let root = state.with_library(&app, |library| library.record(&id).map(|r| r.path))??;
+    let date = today();
+    let undone = tauri::async_runtime::spawn_blocking(move || {
+        boothready_core::sorting::undo(&root, &changes, &date).map_err(e2s)
+    })
+    .await
+    .map_err(e2s)??;
+    state.with_library(&app, |library| {
+        library.apply_changes(&id, &undone, true);
+        SortOutcome { changed: undone.len(), can_undo: library.can_undo() }
+    })
+}
+
+/// The folders of a source that hold a copy of one track.
+#[tauri::command]
+fn library_track_folders(app: AppHandle, state: State<'_, AppState>, id: String, path: String) -> Res<Vec<String>> {
+    state.with_library(&app, |library| library.folders_of(&id, &path))
+}
+
 /// The folders inside a source, for the browser's tree.
 #[tauri::command]
 fn library_folders(app: AppHandle, state: State<'_, AppState>, id: String) -> Res<Vec<library::FolderNode>> {
@@ -1445,6 +1514,9 @@ pub fn run() {
             library_analysis,
             stick_compare,
             stick_to_library,
+            library_sort,
+            library_undo,
+            library_track_folders,
             library_collect_plan,
             library_collect,
             library_cancel_collect,

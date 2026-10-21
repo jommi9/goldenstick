@@ -255,6 +255,7 @@ async function walk() {
   await checkLibrary(page, text, at, view);
   await page.close();
   await checkSizes();
+  await checkSorting();
 }
 
 // The four regions, the rail pages and the inspector toggle.
@@ -304,6 +305,144 @@ async function checkSizes() {
   same(await small.locator("th.c-plays").evaluate((el) => getComputedStyle(el).display), "none", "a narrow list drops the plays-on column first");
   check((await small.locator("th.c-title").evaluate((el) => el.getBoundingClientRect().width)) > 120, "the title column keeps its room in a narrow list");
   await small.close();
+}
+
+// Sorting: folders are playlists, so moving a track changes its folder, a
+// copy puts it in a second one, the inbox sorts with number keys and Cmd+Z
+// puts things back. It runs on its own page because sorting changes the
+// mock's tracks for the rest of the visit.
+async function checkSorting() {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, colorScheme: "dark" });
+  page.on("pageerror", (e) => browserErrors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && browserErrors.push(m.text()));
+  const text = async (selector) => (await page.locator(selector).first().textContent()) ?? "";
+  const at = async (name) => {
+    screen = name;
+    screens.push(name);
+    await page.waitForTimeout(150);
+    check(!/\bundefined\b|\[object Object\]|\bNaN\b/.test(await text(".app")), "no undefined, NaN or [object Object] rendered");
+    console.log(`  ${name}`);
+  };
+  const tracks = data.library[PRESET].tracks["demo-computer"];
+  const title = (t) => t.title ?? t.name;
+  const rows = page.locator(".tracks tbody tr");
+  const row = (t) => rows.filter({ has: page.locator("td.c-title", { hasText: title(t) }) });
+  const node = (folder) => page.locator(`.tree [data-act="library-folder"][data-id="demo-computer|${folder}"]`);
+  const toast = (msg) => page.locator(".toast", { hasText: msg }).waitFor({ timeout: 4000 });
+  const rowCount = (n) => page.waitForFunction((n) => document.querySelectorAll(".tracks tbody tr").length === n, n, { timeout: 4000 });
+  // Nested folders start folded in the tree, so tracks are found through their top-level folder, which lists everything under it.
+  const top = (t) => t.folder.split("/")[0];
+  const openFolder = async (folder) => {
+    await node(folder).click();
+    await page.waitForTimeout(200);
+  };
+  const lastPart = (folder) => folder.split("/").pop();
+  /** The playlists named by the inspector's chips, from their titles since each chip also holds a remove button. */
+  const chips = () => page.locator("#insp .inlist").evaluateAll((els) => els.map((e) => e.getAttribute("title")));
+  const [first, second] = tracks.filter((t) => t.state === "ready");
+  const copied = tracks.find((t) => t.state === "ready" && t.folder !== first.folder && t.folder !== "Hi-Res");
+  const hiRes = tracks.filter((t) => t.folder === "Hi-Res");
+
+  await page.goto(`http://127.0.0.1:${port}/`);
+  await page.locator("#list-title").waitFor();
+  await openFolder("");
+  await page.locator("#list").getByRole("table").waitFor();
+
+  // A track's inspector names the playlists that hold it.
+  await row(first).locator("td.c-title").click();
+  await page.locator("#insp .in-lists").waitFor();
+  await at("sort-inspector");
+  includes(await text("#insp .sorting .lbl"), "In playlists", "a selected track's inspector lists its playlists");
+  same((await chips()).join(","), first.folder, "the chips name the track's one folder");
+  same(await page.locator('.lhead [data-act="sort-undo"]').count(), 0, "there is nothing to undo before sorting");
+
+  // Move to a new playlist: the folder appears in the tree.
+  await page.locator("#library-move-to").selectOption("*new");
+  await page.locator("#library-new-playlist").fill("00 INBOX");
+  await page.locator("#library-new-playlist").press("Enter");
+  await toast("Moved 1 track to 00 INBOX.");
+  check(true, "a toast says the track moved to the new playlist");
+  await node("00 INBOX").waitFor({ timeout: 4000 });
+  includes(await node("00 INBOX").textContent(), "1", "the tree lists the new 00 INBOX folder with its track");
+  same(await page.locator('.lhead [data-act="sort-undo"]').count(), 1, "the Undo button appears after a move");
+  await row(second).locator("td.c-title").click();
+  await page.locator("#insp .in-lists").waitFor();
+  await page.locator("#library-move-to").selectOption("00 INBOX");
+  await page.waitForFunction(() => document.querySelector('.tree [data-id="demo-computer|00 INBOX"] .ct')?.textContent?.trim() === "2", null, { timeout: 4000 });
+  check(true, "Move to an existing folder puts a second track in the inbox");
+
+  // The inbox: the triage bar numbers the playlists, and a number key moves
+  // the selection there and selects the next track.
+  await openFolder("00 INBOX");
+  await at("sort-inbox");
+  same(await rows.count(), 2, "the inbox lists the two moved tracks");
+  same(await page.locator(".triage").count(), 1, "the inbox shows the triage bar");
+  const slots = page.locator('.triage [data-act="sort-slot"]');
+  check((await slots.count()) > 0 && (await slots.count()) <= 9, `the triage bar offers one to nine playlists (got ${await slots.count()})`);
+  same((await slots.first().locator("kbd").textContent())?.trim(), "1", "the first slot is key 1");
+  const slot1 = (await slots.first().getAttribute("data-id")) ?? "";
+  check(slot1 && !/inbox/i.test(slot1), `slot 1 is a playlist other than the inbox (got ${JSON.stringify(slot1)})`);
+  check(await slots.first().isDisabled(), "the slots wait for a selection");
+  await row(first).locator("td.c-title").click();
+  check(!(await slots.first().isDisabled()), "selecting a track enables the slots");
+  await page.keyboard.press("1");
+  await rowCount(1);
+  await toast(`Moved 1 track to ${lastPart(slot1)}.`);
+  same(await row(first).count(), 0, "key 1 moves the track out of the inbox");
+  same(await page.locator(".tracks tbody tr.sel").count(), 1, "the next track is selected");
+  includes(await text(".tracks tbody tr.sel td.c-title"), title(second), "the selection moves on to the remaining inbox track");
+  includes(await text("#insp h2"), title(second), "the inspector follows to the next track");
+
+  // Cmd+Z puts each change back, newest first, and Undo goes away at the end.
+  await page.keyboard.press("Meta+z");
+  await rowCount(2);
+  await toast("Undone: 1 file put back.");
+  same(await row(first).count(), 1, "Cmd+Z puts the track back in the inbox");
+  same(await page.locator('.lhead [data-act="sort-undo"]').count(), 1, "Undo stays while there is more to undo");
+  await page.keyboard.press("Meta+z");
+  await rowCount(1);
+  await page.keyboard.press("Meta+z");
+  await rowCount(0);
+  await page.waitForFunction(() => !document.querySelector('.lhead [data-act="sort-undo"]'), null, { timeout: 4000 });
+  check(true, "the Undo button goes once nothing is left to undo");
+  same(await node("00 INBOX").count(), 0, "undoing every move leaves no 00 INBOX folder");
+  await openFolder(top(first));
+  same(await row(first).count(), 1, "the first track is back in its own folder");
+  await openFolder(top(second));
+  same(await row(second).count(), 1, "the second track is back in its own folder");
+
+  // Picking rows: Cmd-click adds one, Shift-click takes a range, Escape drops them.
+  await openFolder("");
+  await rows.nth(0).locator("td.c-title").click();
+  await rows.nth(2).locator("td.c-title").click({ modifiers: ["Meta"] });
+  await at("sort-picked");
+  same(await page.locator(".tracks tbody tr.sel").count(), 2, "Cmd-click picks a second row");
+  same((await text("#insp h2")).trim(), "2 tracks", "the inspector shows the 2-track selection");
+  includes(await text("#insp .sorting .lbl"), "Sort", "the selection can be sorted together");
+  await rows.nth(5).locator("td.c-title").click({ modifiers: ["Shift"] });
+  same(await page.locator(".tracks tbody tr.sel").count(), 4, "Shift-click picks the range from the last picked row");
+  same((await text("#insp h2")).trim(), "4 tracks", "the inspector counts the range");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  same(await page.locator(".tracks tbody tr.sel").count(), 1, "Escape drops the picked rows");
+  check((await text("#insp h2")).trim() !== "4 tracks", "the inspector leaves the selection view after Escape");
+
+  // Add to playlist copies: the track stays and also shows up in the target.
+  await openFolder(top(copied));
+  const here = await rows.count();
+  await row(copied).locator("td.c-title").click();
+  await page.locator("#insp .in-lists").waitFor();
+  await page.locator("#library-add-to").selectOption("Hi-Res");
+  await toast("Added 1 track to Hi-Res.");
+  await at("sort-added");
+  same(await rows.count(), here, "adding a copy leaves the folder's list as it was");
+  same(await row(copied).count(), 1, "the copied track stays in its folder");
+  await page.waitForFunction(() => document.querySelectorAll("#insp .inlist").length === 2, null, { timeout: 4000 });
+  same((await chips()).sort().join(","), ["Hi-Res", copied.folder].sort().join(","), "the inspector lists both playlists");
+  await openFolder("Hi-Res");
+  same(await rows.count(), hiRes.length + 1, "the target playlist gains the copy");
+  same(await row(copied).count(), 1, "the copy is listed in the target playlist");
+  await page.close();
 }
 
 // The music library: every source and every track shows what the engine's
@@ -449,7 +588,7 @@ async function checkLibrary(page, text, at, view) {
   const second = page.locator(".rb-play").nth(1);
   const secondName = (await second.getAttribute("aria-label"))?.replace(/^Play /, "");
   await second.click();
-  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
+  await page.waitForFunction(() => document.querySelector(".player-key.play")?.getAttribute("aria-label") === "Pause");
   await at("library-player");
   check((await text(".player-name")).trim().startsWith(secondName), "the player shows the track that was clicked");
   same((await text("tr.playing td.c-title")).trim(), secondName, "the playing row is marked");
@@ -457,14 +596,15 @@ async function checkLibrary(page, text, at, view) {
   if (loaded?.camelot) includes(await text(".player .readout"), loaded.camelot, "the strip shows the loaded track's key");
   const mixing = tracks.filter((t) => t !== loaded && keysMix(loaded?.camelot, t.camelot)).length;
   same(await page.locator("td.c-key.match").count(), mixing, "keys that mix with the loaded track are marked");
-  await page.waitForFunction(() => document.getElementById("player-elapsed")?.textContent !== "0:00", null, { timeout: 4000 });
+  // Generous: under load the headless browser can take seconds to start the audio.
+  await page.waitForFunction(() => document.getElementById("player-elapsed")?.textContent !== "0:00", null, { timeout: 15000 });
   check(true, "the clock runs while the track plays");
   await page.locator('[data-act="library-next"]').click();
   await page.waitForFunction((name) => document.querySelector("tr.playing td.c-title")?.textContent?.trim() !== name, secondName);
   check(!(await text(".player-name")).trim().startsWith(secondName), "next moves to the following track");
   await page.locator("#list-title").click();
   await page.keyboard.press(" ");
-  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Play");
+  await page.waitForFunction(() => document.querySelector(".player-key.play")?.getAttribute("aria-label") === "Play");
   check(true, "the space bar pauses");
   // The keyboard: arrows move the selection and Return loads it; a double-click loads a row too.
   await page.locator(".tracks tbody tr").nth(0).locator("td.c-title").click();

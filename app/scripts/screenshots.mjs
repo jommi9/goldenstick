@@ -156,7 +156,7 @@ async function run(scheme) {
   await page.locator('[data-act="library-open"][data-id="*"]').click();
   await page.locator("#list").getByRole("table").waitFor();
   await page.locator(".tracks tbody tr").nth(2).locator("td.c-title").dblclick();
-  await page.waitForFunction(() => document.querySelector(".player-key.main")?.getAttribute("aria-label") === "Pause");
+  await page.waitForFunction(() => document.querySelector(".player-key.play")?.getAttribute("aria-label") === "Pause");
   await page.waitForTimeout(1200);
   await shot("25-collection-playing");
   await page.locator('.tree [data-act="library-collection"][data-id="blocked"]').click();

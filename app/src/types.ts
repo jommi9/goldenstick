@@ -590,3 +590,11 @@ export interface StickComparison {
   matched_by_size: number;
   matched_by_name: number;
 }
+
+export type SortOp = "add" | "move" | "remove" | "new-folder";
+
+export interface SortOutcome {
+  /** Files copied, moved or put back. */
+  changed: number;
+  can_undo: boolean;
+}

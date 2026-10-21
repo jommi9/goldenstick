@@ -5,7 +5,7 @@
 // actions to this module.
 
 import type { Api } from "./api";
-import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState, TrackAnalysis, StickComparison, PlaylistCompare, CompareState } from "./types";
+import type { CollectPlan, ExportPlan, FolderNode, LibraryCollectProgress, LibraryExportProgress, LibraryLocation, LibraryScanProgress, LibrarySource, LibraryTrack, LocalExport, Preset, StateCounts, TrackState, TrackAnalysis, StickComparison, PlaylistCompare, CompareState, SortOp } from "./types";
 import { gb, html, isFolded, num, plural, raw, Raw, secHead, when } from "./ui";
 
 type Filter = "all" | TrackState;
@@ -354,6 +354,431 @@ export function compareSection(deviceId: string): Raw {
   </section>`;
 }
 
+// ------------------------------------------------------------------ sorting
+// Folders are playlists, so sorting moves and copies files between the
+// folders of a music source. Moves inside a cloud folder are renames, so
+// nothing is downloaded. Removing moves a file into the source's removed
+// folder; nothing is deleted, and every change can be undone.
+
+const REMOVED_DIR = "_Removed by BoothReady";
+
+const SORT = {
+  /** Rows picked with Cmd or Shift, by index in `L.tracks`; empty when one row is selected. */
+  picked: new Set<number>(),
+  anchor: null as number | null,
+  /** Modifier keys of the click being handled. */
+  mods: { shift: false, meta: false },
+  canUndo: false,
+  busy: false,
+  /** The new-playlist field is open in the inspector, for this step. */
+  naming: null as null | "add" | "move",
+  /** Folders holding a copy of each track, by track key, fetched for the inspector. */
+  folders: new Map<string, string[]>(),
+  /** The rows being dragged. */
+  drag: null as null | { source: string; paths: string[] },
+};
+
+/** Remember the modifier keys of a click before its action runs. */
+export function libraryClickMods(ev: MouseEvent) {
+  SORT.mods = { shift: ev.shiftKey, meta: ev.metaKey || ev.ctrlKey };
+}
+
+function pickRow(i: number) {
+  if (SORT.mods.meta) {
+    if (!SORT.picked.size && L.sel !== null) SORT.picked.add(L.sel);
+    if (SORT.picked.has(i)) SORT.picked.delete(i);
+    else SORT.picked.add(i);
+    SORT.anchor = i;
+  } else if (SORT.mods.shift && (SORT.anchor ?? L.sel) !== null) {
+    const from = (SORT.anchor ?? L.sel)!;
+    SORT.picked.clear();
+    for (let k = Math.min(from, i); k <= Math.max(from, i); k++) SORT.picked.add(k);
+  } else {
+    SORT.picked.clear();
+    SORT.anchor = i;
+  }
+  L.sel = i;
+  SORT.naming = null;
+  if (SORT.picked.size === 1) SORT.picked.clear();
+}
+
+/** The rows that are highlighted: the picked ones, or the selected one. */
+export function librarySelectedRows(): number[] {
+  if (SORT.picked.size) return [...SORT.picked].sort((a, b) => a - b);
+  return L.sel === null ? [] : [L.sel];
+}
+
+function selectedTracks(): LibraryTrack[] {
+  return librarySelectedRows()
+    .map((i) => L.tracks[i])
+    .filter(Boolean);
+}
+
+const folderOfPath = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
+const lastPart = (folder: string) => folder.split("/").pop() || folder;
+
+/** Every folder of a source, as sorting targets. */
+function folderPaths(sourceId: string): string[] {
+  return (L.folders.get(sourceId) ?? []).map((f) => f.path).filter((f) => !f.startsWith(REMOVED_DIR));
+}
+
+function isInbox(folder: string): boolean {
+  return /inbox/i.test(lastPart(folder));
+}
+
+/** The folders that are playlists: those under DJ when the source has one, else the top-level ones, without the inbox. */
+function playlistFolders(sourceId: string): string[] {
+  const parent = newFolderParent(sourceId);
+  const all = folderPaths(sourceId);
+  const list = parent ? all.filter((f) => f.startsWith(`${parent}/`)) : all.filter((f) => !f.includes("/"));
+  return list.filter((f) => !isInbox(f));
+}
+
+const SLOTS_KEY = "boothready.sortSlots";
+
+/**
+ * The nine playlists the number keys move to. A playlist keeps its number
+ * once it has one; a playlist picked from the full list takes the slot used
+ * least recently, so triage keeps the same keys for the same playlists.
+ */
+function triageSlots(sourceId: string): string[] {
+  let stored: Record<string, { f: string; t: number }[]> = {};
+  try {
+    stored = JSON.parse(localStorage.getItem(SLOTS_KEY) ?? "{}");
+  } catch {
+    stored = {};
+  }
+  const lists = playlistFolders(sourceId);
+  const exists = new Set(folderPaths(sourceId));
+  const slots = (stored[sourceId] ?? []).filter((x) => exists.has(x.f) && !isInbox(x.f));
+  for (const f of lists) if (slots.length < 9 && !slots.some((x) => x.f === f)) slots.push({ f, t: 0 });
+  stored[sourceId] = slots;
+  try {
+    localStorage.setItem(SLOTS_KEY, JSON.stringify(stored));
+  } catch {
+    // Without storage the slots are worked out again each time.
+  }
+  return slots.map((x) => x.f);
+}
+
+function useSlot(sourceId: string, folder: string) {
+  let stored: Record<string, { f: string; t: number }[]> = {};
+  try {
+    stored = JSON.parse(localStorage.getItem(SLOTS_KEY) ?? "{}");
+  } catch {
+    return;
+  }
+  const slots = stored[sourceId] ?? [];
+  const hit = slots.find((x) => x.f === folder);
+  if (hit) hit.t = Date.now();
+  else if (slots.length < 9) slots.push({ f: folder, t: Date.now() });
+  else {
+    let lru = 0;
+    slots.forEach((x, k) => {
+      if (x.t < slots[lru].t) lru = k;
+    });
+    slots[lru] = { f: folder, t: Date.now() };
+  }
+  stored[sourceId] = slots;
+  try {
+    localStorage.setItem(SLOTS_KEY, JSON.stringify(stored));
+  } catch {
+    // Kept for this visit only.
+  }
+}
+
+/** The inbox folder is shown with its tracks, so the triage bar applies. */
+function triaging(): string | null {
+  const id = L.tracksFor;
+  if (!id || id === ALL || !L.folder || !isInbox(L.folder)) return null;
+  return id;
+}
+
+function triageBar(sourceId: string): Raw {
+  if (triaging() !== sourceId) return html``;
+  const slots = triageSlots(sourceId);
+  const rest = folderPaths(sourceId).filter((f) => f !== L.folder && !slots.includes(f));
+  const none = !selectedTracks().length;
+  return html`<div class="triage" role="group" aria-label="Sort the inbox">
+    <span class="lbl">Sort the inbox</span>
+    ${slots.map((f, k) => html`<button class="chip slot" data-act="sort-slot" data-id="${f}" ${none || SORT.busy ? "disabled" : ""} title="Move the selected ${plural(selectedTracks().length || 1, "track")} to ${f} (${k + 1})"><kbd>${k + 1}</kbd>${lastPart(f)}</button>`)}
+    ${rest.length || slots.length ? html`<select id="library-triage-to" class="select small" aria-label="Move to another folder" ${none || SORT.busy ? "disabled" : ""}><option value="">More…</option><option value="*new">New playlist…</option>${rest.map((f) => html`<option value="${f}">${f}</option>`)}</select>` : ""}
+    <button class="btn small" data-act="sort-remove" ${none || SORT.busy ? "disabled" : ""} title="Move the selected tracks to ${REMOVED_DIR} (Cmd+Delete)">Remove</button>
+    <span class="hint">${none ? "Select a track, then press a number to move it." : "A number moves the selection and goes to the next track. Down arrow skips."}</span>
+  </div>`;
+}
+
+/** The inspector's playlists and sorting controls for the selected tracks. */
+function sortSection(tracks: LibraryTrack[]): Raw {
+  if (!tracks.length) return html``;
+  const sid = tracks[0].source;
+  if (tracks.some((t) => t.source !== sid)) return html`<section><span class="lbl">Playlists</span><div class="hint">Select tracks from one music folder to sort them.</div></section>`;
+  const s = source(sid);
+  if (!s?.connected) return html``;
+  if (!L.folders.has(sid)) void loadFolders(sid).then(() => L.host.refreshSelection());
+  const options = folderPaths(sid);
+  const one = tracks.length === 1 ? tracks[0] : null;
+  let inFolders: Raw = html``;
+  if (one) {
+    const key = trackKey(one);
+    const known = SORT.folders.get(key);
+    if (!known) {
+      void L.host.api
+        .libraryTrackFolders(sid, one.path)
+        .then((f) => {
+          SORT.folders.set(key, f);
+          L.host.refreshSelection();
+        })
+        .catch(() => {});
+    }
+    inFolders = known
+      ? html`<div class="in-lists">${known.map((f) => html`<span class="inlist" title="${f || s.name}">${f ? lastPart(f) : s.name}<button class="x" data-act="sort-remove-copy" data-id="${f}" aria-label="Take it out of ${f || s.name}" title="Take it out of ${f || s.name}: the file moves to ${REMOVED_DIR}">×</button></span>`)}</div>`
+      : html`<div class="hint">Looking for its playlists.</div>`;
+  }
+  const disabled = SORT.busy ? "disabled" : "";
+  return html`<section class="sorting"><span class="lbl">${one ? "In playlists" : "Sort"}</span>
+    ${inFolders}
+    <div class="sort-row">
+      <select id="library-add-to" class="select" aria-label="Add to playlist" ${disabled}><option value="">Add to playlist…</option><option value="*new">New playlist…</option>${options.map((f) => html`<option value="${f}">${f}</option>`)}</select>
+      <select id="library-move-to" class="select" aria-label="Move to folder" ${disabled}><option value="">Move to…</option><option value="*new">New playlist…</option>${options.map((f) => html`<option value="${f}">${f}</option>`)}</select>
+    </div>
+    ${SORT.naming
+      ? html`<div class="sort-row"><input id="library-new-playlist" class="input" placeholder="New playlist name" autocomplete="off" spellcheck="false" aria-label="New playlist name"><button class="btn primary" data-act="sort-new-go">${SORT.naming === "add" ? "Add" : "Move"}</button><button class="btn link" data-act="sort-new-cancel">Cancel</button></div>
+        <div class="hint">Made inside ${newFolderParent(sid) || s.name}.</div>`
+      : ""}
+    <div class="actions"><button class="btn small" data-act="sort-remove" ${disabled} title="Move ${tracks.length === 1 ? "the file" : "the files"} to ${REMOVED_DIR} in ${s.name}">Remove ${tracks.length === 1 ? "track" : plural(tracks.length, "track")}</button></div>
+    <div class="hint">Drag rows onto a folder in the tree to move them; hold Option to add a copy. Cmd+Z undoes.</div>
+  </section>`;
+}
+
+function pickedInspector(): Raw {
+  const tracks = selectedTracks();
+  const secs = tracks.reduce((n, t) => n + (t.duration ?? 0), 0);
+  const bytes = tracks.reduce((n, t) => n + t.size, 0);
+  return html`<div class="hd"><div class="lbl">Selection</div><h2>${plural(tracks.length, "track")}</h2><div class="by">${hoursText(secs)}, ${gb(bytes)}</div></div>
+    ${sortSection(tracks)}
+    <section><div class="hint">Cmd-click adds or drops a row, Shift-click picks a range, Cmd+A picks every row shown.</div></section>`;
+}
+
+/** Copy, move or remove tracks, then reload the list with the selection where it was. */
+async function sortTracks(op: SortOp, tracks: LibraryTrack[], folder: string) {
+  if (!tracks.length || SORT.busy) return;
+  const sid = tracks[0].source;
+  if (tracks.some((t) => t.source !== sid)) {
+    L.host.toast("Select tracks from one music folder to sort them.");
+    return;
+  }
+  const paths = tracks.filter((t) => op === "remove" || folderOfPath(t.path) !== folder).map((t) => t.path);
+  if (!paths.length) {
+    L.host.toast(`${tracks.length === 1 ? "It is" : "They are"} already in ${lastPart(folder)}.`);
+    return;
+  }
+  const keep = librarySelectedRows()[0] ?? null;
+  SORT.busy = true;
+  SORT.naming = null;
+  try {
+    const r = await L.host.api.librarySort(sid, op, paths, folder);
+    SORT.canUndo = r.can_undo;
+    if (op !== "remove" && triaging()) useSlot(sid, folder);
+    const what = plural(paths.length, "track");
+    const msg =
+      op === "remove"
+        ? `Moved ${what} to ${REMOVED_DIR}.`
+        : op === "move"
+          ? `Moved ${what} to ${lastPart(folder)}.`
+          : r.changed
+            ? `Added ${plural(r.changed, "track")} to ${lastPart(folder)}.`
+            : `${lastPart(folder)} already has ${paths.length === 1 ? "it" : "them"}.`;
+    L.host.toast(r.changed ? `${msg} Cmd+Z undoes it.` : msg);
+  } catch (e) {
+    L.host.toast(String(e));
+  } finally {
+    SORT.busy = false;
+  }
+  await afterSort(op === "add" ? librarySelectedRows()[0] ?? null : keep);
+}
+
+/** Reload what sorting changed: folders, the list, totals and the stick comparison. */
+async function afterSort(keep: number | null) {
+  SORT.folders.clear();
+  const ids = [...L.folders.keys()];
+  L.folders.clear();
+  for (const id of ids) await loadFolders(id);
+  if (L.tracksFor) await loadTracks(L.tracksFor, false, Math.max(PAGE, L.tracks.length));
+  L.sel = keep === null || !L.tracks.length ? null : Math.min(keep, L.tracks.length - 1);
+  SORT.anchor = L.sel;
+  await refreshLibrary();
+  L.host.render();
+  document.querySelector("tr.sel")?.scrollIntoView({ block: "nearest" });
+  if (C.device) void setCompareTarget(C.device, C.label);
+}
+
+async function undoSort() {
+  if (SORT.busy) return;
+  SORT.busy = true;
+  try {
+    const r = await L.host.api.libraryUndo();
+    SORT.canUndo = r.can_undo;
+    L.host.toast(r.changed ? `Undone: ${plural(r.changed, "file")} put back.` : "Nothing to undo.");
+  } catch (e) {
+    L.host.toast(String(e));
+  } finally {
+    SORT.busy = false;
+  }
+  await afterSort(L.sel);
+}
+
+async function newPlaylistGo() {
+  const input = document.getElementById("library-new-playlist") as HTMLInputElement | null;
+  const name = input?.value.trim().replace(/[/\\]/g, "-") ?? "";
+  const tracks = selectedTracks();
+  if (!name || !tracks.length || !SORT.naming) return;
+  const sid = tracks[0].source;
+  await sortTracks(SORT.naming, tracks, [newFolderParent(sid), name].filter(Boolean).join("/"));
+}
+
+async function sortAct(a: string, id: string): Promise<boolean> {
+  switch (a) {
+    case "sort-slot":
+      await sortTracks("move", selectedTracks(), id);
+      return true;
+    case "sort-remove":
+      await sortTracks("remove", selectedTracks(), "");
+      return true;
+    case "sort-remove-copy": {
+      const t = selectedTracks()[0];
+      if (t) await sortTracks("remove", [{ ...t, path: id ? `${id}/${t.name}` : t.name }], "");
+      return true;
+    }
+    case "sort-undo":
+      await undoSort();
+      return true;
+    case "sort-new-go":
+      await newPlaylistGo();
+      return true;
+    case "sort-new-cancel":
+      SORT.naming = null;
+      L.host.refreshSelection();
+      return true;
+  }
+  return false;
+}
+
+/** Sorting keys: Cmd+Z, Cmd+A, Cmd+Delete, Return in the playlist name, and 1 to 9 in the inbox. Returns true when it took the key. */
+export function librarySortKey(ev: KeyboardEvent): boolean {
+  const el = ev.target as HTMLElement | null;
+  const mod = ev.metaKey || ev.ctrlKey;
+  if (el?.id === "library-new-playlist") {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      void newPlaylistGo();
+      return true;
+    }
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      SORT.naming = null;
+      L.host.refreshSelection();
+      return true;
+    }
+    return false;
+  }
+  if (el?.closest("input, textarea, select, [contenteditable]")) return false;
+  if (mod && !ev.shiftKey && ev.key.toLowerCase() === "z") {
+    ev.preventDefault();
+    void undoSort();
+    return true;
+  }
+  if (mod && ev.key.toLowerCase() === "a" && L.tracks.length) {
+    ev.preventDefault();
+    SORT.picked = new Set(L.tracks.map((_, k) => k));
+    if (L.sel === null) L.sel = 0;
+    if (triaging()) L.host.render();
+    else L.host.refreshSelection();
+    return true;
+  }
+  if (mod && (ev.key === "Backspace" || ev.key === "Delete") && selectedTracks().length) {
+    ev.preventDefault();
+    void sortTracks("remove", selectedTracks(), "");
+    return true;
+  }
+  const sid = triaging();
+  if (sid && !mod && !ev.altKey && /^[1-9]$/.test(ev.key) && selectedTracks().length) {
+    const target = triageSlots(sid)[Number(ev.key) - 1];
+    if (target) {
+      ev.preventDefault();
+      void sortTracks("move", selectedTracks(), target);
+      return true;
+    }
+  }
+  if (ev.key === "Escape" && SORT.picked.size) {
+    SORT.picked.clear();
+    L.host.refreshSelection();
+    return true;
+  }
+  return false;
+}
+
+// Dragging rows onto a folder in the tree moves them there, as in a file
+// manager; holding Option adds a copy, which puts the track in another playlist.
+
+const dropNode = (ev: DragEvent) => (ev.target as HTMLElement | null)?.closest<HTMLElement>('.tree [data-act="library-folder"]') ?? null;
+
+function dropFolder(el: HTMLElement): { source: string; folder: string } | null {
+  const id = el.dataset.id ?? "";
+  const at = id.indexOf("|");
+  if (at < 0) return null;
+  return { source: id.slice(0, at), folder: id.slice(at + 1) };
+}
+
+export function libraryDragStart(ev: DragEvent) {
+  const tr = (ev.target as HTMLElement | null)?.closest<HTMLElement>("tr[data-row]");
+  if (!tr || !ev.dataTransfer) return;
+  const i = Number(tr.dataset.row);
+  if (!librarySelectedRows().includes(i)) {
+    SORT.picked.clear();
+    L.sel = i;
+    SORT.anchor = i;
+    L.host.refreshSelection();
+  }
+  const tracks = selectedTracks();
+  if (!tracks.length || tracks.some((t) => t.source !== tracks[0].source)) {
+    ev.preventDefault();
+    return;
+  }
+  SORT.drag = { source: tracks[0].source, paths: tracks.map((t) => t.path) };
+  ev.dataTransfer.effectAllowed = "copyMove";
+  ev.dataTransfer.setData("text/plain", tracks.map((t) => titleOf(t)).join("\n"));
+}
+
+export function libraryDragOver(ev: DragEvent) {
+  const el = dropNode(ev);
+  document.querySelectorAll(".tree .drop").forEach((n) => n !== el?.parentElement && n.classList.remove("drop", "copy"));
+  if (!el || !SORT.drag || !ev.dataTransfer) return;
+  const to = dropFolder(el);
+  if (!to || to.source !== SORT.drag.source || !to.folder) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = ev.altKey ? "copy" : "move";
+  el.parentElement?.classList.add("drop");
+  el.parentElement?.classList.toggle("copy", ev.altKey);
+}
+
+export function libraryDragEnd() {
+  SORT.drag = null;
+  document.querySelectorAll(".tree .drop").forEach((n) => n.classList.remove("drop", "copy"));
+}
+
+export async function libraryDrop(ev: DragEvent) {
+  const el = dropNode(ev);
+  const drag = SORT.drag;
+  libraryDragEnd();
+  if (!el || !drag) return;
+  const to = dropFolder(el);
+  if (!to || to.source !== drag.source || !to.folder) return;
+  ev.preventDefault();
+  const tracks = selectedTracks().filter((t) => drag.paths.includes(t.path));
+  await sortTracks(ev.altKey ? "add" : "move", tracks, to.folder);
+}
+
 // ------------------------------------------------------------------ analysis
 // Waveforms, tempo, key and phrases come from BoothReady's own analysis,
 // the one exports write to sticks. Cached analyses are read for the tracks in
@@ -626,7 +1051,7 @@ export function playerStrip(): Raw {
       <div class="player-now">
         <div class="player-keys">
           <button class="player-key" disabled aria-label="Previous track">${icon(ICON.prev)}</button>
-          <button class="player-key main" disabled aria-label="Play">${icon(ICON.play, 16)}</button>
+          <button class="player-key play" disabled aria-label="Play">${icon(ICON.play, 16)}</button>
           <button class="player-key" disabled aria-label="Next track">${icon(ICON.next)}</button>
         </div>
         <div class="player-track"><span class="player-name">Nothing loaded</span><span class="small faint">Double-click a track to load it.</span></div>
@@ -651,7 +1076,7 @@ export function playerStrip(): Raw {
     <div class="player-now">
       <div class="player-keys">
         <button class="player-key" data-act="library-prev" aria-label="Previous track, or the start of this one">${icon(ICON.prev)}</button>
-        <button class="player-key main ${playing ? "on" : ""}" data-act="library-toggle-play" aria-label="${playing ? "Pause" : "Play"}" ${P.error ? "disabled" : ""}>${icon(playing ? ICON.pause : ICON.play, 16)}</button>
+        <button class="player-key play ${playing ? "on" : ""}" data-act="library-toggle-play" aria-label="${playing ? "Pause" : "Play"}" ${P.error ? "disabled" : ""}>${icon(playing ? ICON.pause : ICON.play, 16)}</button>
         <button class="player-key" data-act="library-next" aria-label="Next track" ${at >= 0 && at < P.queue.length - 1 ? "" : "disabled"}>${icon(ICON.next)}</button>
       </div>
       <div class="player-track">
@@ -717,14 +1142,17 @@ export async function refreshLibrary() {
   }
 }
 
-async function loadTracks(id: string, more = false) {
+async function loadTracks(id: string, more = false, limit = PAGE) {
   L.loadingTracks = true;
   try {
     const offset = more && L.tracksFor === id ? L.tracks.length : 0;
-    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, PAGE, L.folder, L.sort, L.desc);
+    const page = await L.host.api.libraryTracks(id, L.host.targets(), L.filter, L.query, offset, limit, L.folder, L.sort, L.desc);
     L.tracks = offset ? [...L.tracks, ...page.tracks] : page.tracks;
     void readAnalyses();
-    if (!offset) L.sel = null;
+    if (!offset) {
+      L.sel = null;
+      SORT.picked.clear();
+    }
     L.total = page.total;
     L.states = page.states;
     L.tracksFor = id;
@@ -784,6 +1212,7 @@ export function libraryListKey(ev: KeyboardEvent): boolean {
   if (ev.metaKey || ev.ctrlKey || ev.altKey || !L.tracks.length) return false;
   if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
     const by = ev.key === "ArrowDown" ? 1 : -1;
+    SORT.picked.clear();
     L.sel = L.sel === null ? (by > 0 ? 0 : L.tracks.length - 1) : Math.max(0, Math.min(L.tracks.length - 1, L.sel + by));
     ev.preventDefault();
     L.host.render();
@@ -969,6 +1398,7 @@ export function closeLibrarySheet(): boolean {
 
 /** Handle a click. Returns false when the action isn't a Library one. */
 export async function libraryAct(a: string, id: string): Promise<boolean> {
+  if (a.startsWith("sort-")) return sortAct(a, id);
   if (a === "cmp-make-folder") {
     await copyFromStick(id);
     return true;
@@ -1063,8 +1493,10 @@ export async function libraryAct(a: string, id: string): Promise<boolean> {
       host.render();
       return true;
     case "library-select":
-      L.sel = Number(id);
-      host.refreshSelection();
+      pickRow(Number(id));
+      // The triage bar's keys follow the selection, so the inbox redraws the list too.
+      if (triaging()) host.render();
+      else host.refreshSelection();
       return true;
     case "library-collect-open":
       L.collect = { sourceId: id, plan: null, name: "", running: false, progress: null, error: null, done: null };
@@ -1253,6 +1685,17 @@ export async function libraryChange(t: HTMLInputElement | HTMLSelectElement): Pr
     }
     return true;
   }
+  if (t.id === "library-add-to" || t.id === "library-move-to" || t.id === "library-triage-to") {
+    const op: SortOp = t.id === "library-add-to" ? "add" : "move";
+    const folder = t.value;
+    t.value = "";
+    if (folder === "*new") {
+      SORT.naming = op;
+      L.host.refreshSelection();
+      document.getElementById("library-new-playlist")?.focus();
+    } else if (folder) await sortTracks(op, selectedTracks(), folder);
+    return true;
+  }
   if (!t.id.startsWith("library-preset")) return false;
   L.host.setPreset(t.value);
   await refreshLibrary();
@@ -1351,7 +1794,7 @@ function trackRow(t: LibraryTrack, i: number): Raw {
   const glyph = { ok: "", w: "w", b: "b", u: "u" };
   const cmp = C.data && L.folder && L.tracksFor ? compareOf(`${L.tracksFor}|${L.folder}`) : undefined;
   const notOnStick = !!cmp && cmp.state !== "stick_only" && cmp.missing_on_stick.includes(`${t.source}|${t.path}`);
-  return html`<tr class="${t.state} ${loaded ? "playing" : ""} ${L.sel === i ? "sel" : ""}" data-act="library-select" data-id="${i}" data-row="${i}">
+  return html`<tr class="${t.state} ${loaded ? "playing" : ""} ${L.sel === i || SORT.picked.has(i) ? "sel" : ""}" data-act="library-select" data-id="${i}" data-row="${i}" draggable="true">
     <td class="c-n">${t.state === "unreadable"
       ? html`<span class="idx">${n}</span>`
       : html`<button class="rb-play ${loaded ? "on" : ""}" data-act="library-play" data-id="${trackKey(t)}" aria-label="${playing ? "Pause" : "Play"} ${titleOf(t)}" title="${t.state === "cloud_only" ? "Your cloud app downloads this track to play it." : ""}"><span class="rb-n">${n}</span>${icon(playing ? ICON.pause : ICON.play)}</button>`}</td>
@@ -1471,6 +1914,7 @@ export function libraryList(inspectorOpen: boolean): Raw {
       ${browsable ? html`<label class="searchbox"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><input id="library-search" type="search" placeholder="Search title, artist, album or folder" value="${L.query}" aria-label="Search tracks" autocomplete="off" spellcheck="false"></label>` : ""}
       ${s && !scanning ? html`<button class="btn" data-act="library-scan" data-id="${s.id}" ${s.connected ? "" : "disabled"} title="Read the folder again">Scan</button>` : ""}
       ${s && s.states && !s.collected_from ? html`<button class="btn" data-act="library-collect-open" data-id="${s.id}" ${s.connected && !scanning && !L.collect ? "" : "disabled"} title="Copy these tracks into a verified folder on this computer">Collect</button>` : ""}
+      ${SORT.canUndo ? html`<button class="btn" data-act="sort-undo" title="Undo the last move, copy or removal (Cmd+Z)">Undo</button>` : ""}
       ${inspectorButton(inspectorOpen)}
       <button class="btn primary" data-act="library-export-open" data-id="${s?.id ?? ""}" ${canExport && !L.exp ? "" : "disabled"} title="${s ? "Build a rekordbox Device Library from these folders (Cmd+E)" : "Pick a source or playlist in the tree to export"}">Export to USB</button>
     </div>
@@ -1481,6 +1925,7 @@ export function libraryList(inspectorOpen: boolean): Raw {
         : ""}
     </div>
     ${notices(s, all, scanning)}
+    ${s && browsable ? triageBar(s.id) : ""}
     <div class="scroller" id="list-scroller" data-keep-scroll="list">
       ${browsable
         ? html`<div id="library-tracks">${trackTable()}</div>`
@@ -1529,6 +1974,7 @@ function trackInspector(t: LibraryTrack): Raw {
       <dt>Folder</dt><dd>${(s && !t.folder.startsWith(s.name) ? [s.name, ...t.folder.split("/")] : t.folder.split("/")).filter(Boolean).join(" / ")}</dd>
       <dt>File</dt><dd class="source-path">${t.name}</dd>
     </dl></section>
+    ${sortSection([t])}
     <section class="plays-on"><span class="lbl">Plays on · ${STATE_LABEL[t.state]}</span>
       <div class="hint">${t.note ?? STATE_HELP[t.state]}</div>
       ${bad.length ? html`${bad.map((p) => html`<div class="why ${p.g === "w" ? "w" : ""}"><b>${p.g === "b" ? "Won't play on" : "No data for"} ${p.model}</b><span>${p.why}</span></div>`)}` : ""}
@@ -1564,6 +2010,7 @@ function collectionInspector(): Raw {
 
 /** The inspector for the library's selection: a track, else the source or collection shown. */
 export function libraryInspector(): Raw {
+  if (SORT.picked.size > 1) return pickedInspector();
   const t = L.sel === null ? undefined : L.tracks[L.sel];
   if (t) return trackInspector(t);
   if (L.tracksFor === ALL) return collectionInspector();
