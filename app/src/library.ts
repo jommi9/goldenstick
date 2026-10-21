@@ -1030,11 +1030,14 @@ function togglePlayer() {
 
 const isPlaying = (t: LibraryTrack) => !!P.now && trackKey(P.now) === trackKey(t) && !!P.audio && !P.audio.paused;
 
+// Each glyph is centred in its 14-unit box, so the icon sits in the middle
+// of its round key: the play triangle spans 2.25 to 11.75, and the skip
+// glyphs 1.5 to 12.5.
 const ICON = {
-  play: "M3 1.5v11l9.5-5.5z",
+  play: "M2.25 1.5v11l9.5-5.5z",
   pause: "M3 1.5h3v11H3zM8 1.5h3v11H8z",
-  prev: "M2 1.5h2v11H2zM13 1.5v11L4.5 7z",
-  next: "M12 1.5h-2v11h2zM1 1.5v11L9.5 7z",
+  prev: "M1.5 1.5h2v11h-2zM12.5 1.5v11L4 7z",
+  next: "M12.5 1.5h-2v11h2zM1.5 1.5v11L10 7z",
   stop: "M2.5 2.5h9v9h-9z",
 };
 const icon = (d: string, size = 14) => raw(`<svg viewBox="0 0 14 14" width="${size}" height="${size}" aria-hidden="true"><path d="${d}" fill="currentColor"/></svg>`);

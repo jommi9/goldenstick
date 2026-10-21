@@ -45,7 +45,10 @@ async function run(scheme) {
   await shot("02-stick-plugged-in");
   const sandisk = page.locator('.dev[data-dev="demo:sandisk-128"]');
   await sandisk.locator(".badge.y").first().waitFor({ timeout: 15000 });
+  // Clicking a stick in the tree only unfolds it and fills the inspector;
+  // the inspector's Check button opens the identify sheet.
   await sandisk.click();
+  await page.locator('#insp [data-act="device-check"]').click();
   await sheet.getByText("Scanned").waitFor({ timeout: 10000 });
   await shot("03-identify");
   await click("Yes, that's it");
