@@ -1298,7 +1298,10 @@ fn today() -> String {
 
 /// Sort a music source: `add` copies tracks into `folder`, `move` moves them
 /// there, `remove` moves them into the source's removed folder, `new-folder`
-/// makes `folder`. Nothing is deleted, and the change can be undone.
+/// makes `folder`. The folder steps take folders in `paths`: `rename-folder`
+/// gives the first one the name in `folder`, `move-folder` moves them into
+/// `folder` (empty for the top of the source), `remove-folder` moves them
+/// into the removed folder. Nothing is deleted, and every change can be undone.
 #[tauri::command]
 async fn library_sort(
     app: AppHandle,
@@ -1316,7 +1319,12 @@ async fn library_sort(
             "add" => sorting::add_to_folder(&root, &paths, &folder).map_err(e2s),
             "move" => sorting::move_to_folder(&root, &paths, &folder, &date).map_err(e2s),
             "remove" => sorting::remove(&root, &paths, &date).map_err(e2s),
-            "new-folder" => sorting::new_folder(&root, &folder).map(|_| Vec::new()).map_err(e2s),
+            "new-folder" => sorting::new_folder(&root, &folder).map_err(e2s),
+            "rename-folder" => {
+                sorting::rename_folder(&root, paths.first().map(String::as_str).unwrap_or(""), &folder).map_err(e2s)
+            }
+            "move-folder" => sorting::move_folders(&root, &paths, &folder).map_err(e2s),
+            "remove-folder" => sorting::remove_folders(&root, &paths, &date).map_err(e2s),
             _ => Err("Unknown sorting step.".to_string()),
         }
     })

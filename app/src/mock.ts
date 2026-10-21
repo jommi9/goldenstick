@@ -203,7 +203,9 @@ export async function createMockApi(): Promise<Api> {
   /** Folders added in this session: id, record, and the demo source whose tracks stand in for theirs. */
   const addedSources: { source: LibrarySource; scanned: boolean }[] = [];
   let libraryCancelled = false;
-  const sortLog: { id: string; before: Record<string, LibraryTrack[] | undefined> }[] = [];
+  const sortLog: { id: string; before: Record<string, LibraryTrack[] | undefined>; folders?: Set<string> }[] = [];
+  /** Playlist folders made in this session that may hold no track yet, by source. */
+  const madeFolders = new Map<string, Set<string>>();
   /** Collections made in this session: the tracks picked from a source, by path. */
   const collections: { id: string; name: string; origin: string; paths: Set<string> }[] = [];
   const collectionTracks = (c: { origin: string; paths: Set<string> }, targets: string[]): LibraryTrack[] => {
@@ -229,9 +231,17 @@ export async function createMockApi(): Promise<Api> {
         counts.set(key, (counts.get(key) ?? 0) + 1);
       }
     }
+    for (const made of madeFolders.get(id) ?? []) {
+      const parts = made.split("/");
+      for (let end = 1; end <= parts.length; end++) {
+        const key = parts.slice(0, end).join("/");
+        if (!counts.has(key)) counts.set(key, 0);
+      }
+    }
+    // A folder right before its children, siblings by name without regard to case.
     const byParts = (a: string, b: string) => {
-      const x = a.split("/");
-      const y = b.split("/");
+      const x = a.toLowerCase().split("/");
+      const y = b.toLowerCase().split("/");
       for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
       return x.length - y.length;
     };
@@ -693,6 +703,66 @@ export async function createMockApi(): Promise<Api> {
     librarySort: async (id, op, paths, folder) => {
       const before = Object.fromEntries(Object.entries(data.library).map(([k, lib]) => [k, lib.tracks[id]]));
       let changed = 0;
+      if (op === "new-folder" || op === "rename-folder" || op === "move-folder" || op === "remove-folder") {
+        // Folder steps re-root every track and made folder below the folder, as the engine does.
+        const existing = new Set(foldersOf(id).map((f) => f.path.toLowerCase()));
+        const made = madeFolders.get(id) ?? new Set<string>();
+        madeFolders.set(id, made);
+        const snapshot = { id, before, folders: new Set(made) };
+        const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+        const rewrite = (from: string, to: string | null) => {
+          for (const lib of Object.values(data.library)) {
+            if (!lib.tracks[id]) continue;
+            lib.tracks[id] = lib.tracks[id].flatMap((t) => {
+              if (t.path !== from && !t.path.startsWith(`${from}/`)) return [t];
+              if (to === null) return [];
+              const path = `${to}${t.path.slice(from.length)}`;
+              return [{ ...t, path, folder: parentOf(path) }];
+            });
+          }
+          for (const f of [...made]) {
+            if (f !== from && !f.startsWith(`${from}/`)) continue;
+            made.delete(f);
+            if (to !== null) made.add(`${to}${f.slice(from.length)}`);
+          }
+          if (to !== null) made.add(to);
+        };
+        const taken = (p: string) => {
+          throw new Error(`there is already a folder called ${p.split("/").pop()}`);
+        };
+        if (op === "new-folder") {
+          if (existing.has(folder.toLowerCase())) taken(folder);
+          made.add(folder);
+          changed = 1;
+        } else if (op === "rename-folder") {
+          const from = paths[0] ?? "";
+          const name = folder.trim();
+          if (!name) throw new Error("Give the playlist a name.");
+          if (/[/\\]/.test(name)) throw new Error("A playlist name can't contain a slash.");
+          const to = parentOf(from) ? `${parentOf(from)}/${name}` : name;
+          if (to !== from) {
+            if (existing.has(to.toLowerCase()) && to.toLowerCase() !== from.toLowerCase()) taken(to);
+            rewrite(from, to);
+            changed = 1;
+          }
+        } else if (op === "move-folder") {
+          for (const from of paths) {
+            if (folder === from || folder.startsWith(`${from}/`)) throw new Error(`${from} can't be moved into itself.`);
+            const to = folder ? `${folder}/${from.split("/").pop()}` : (from.split("/").pop() ?? from);
+            if (to === from) continue;
+            if (existing.has(to.toLowerCase())) taken(to);
+            rewrite(from, to);
+            changed++;
+          }
+        } else {
+          for (const from of paths) {
+            rewrite(from, null);
+            changed++;
+          }
+        }
+        if (changed) sortLog.push(snapshot);
+        return { changed, can_undo: sortLog.length > 0 };
+      }
       for (const lib of Object.values(data.library)) {
         if (!lib.tracks[id]) continue;
         let out = [...lib.tracks[id]];
@@ -720,6 +790,7 @@ export async function createMockApi(): Promise<Api> {
       const last = sortLog.pop();
       if (!last) return { changed: 0, can_undo: false };
       for (const [k, list] of Object.entries(last.before)) if (list) data.library[k].tracks[last.id] = list;
+      if (last.folders) madeFolders.set(last.id, last.folders);
       return { changed: 1, can_undo: sortLog.length > 0 };
     },
     libraryTrackFolders: async (id, path) => {

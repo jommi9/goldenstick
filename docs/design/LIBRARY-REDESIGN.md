@@ -27,6 +27,8 @@ One window, four regions, no pages.
 
 A status bar at the bottom carries scan and analysis progress, the number of connected sticks and "Runs locally".
 
+The Playlists section is edited like a file manager, since the playlists are folders on disk: a context menu with New playlist, Rename, Remove and Export to USB; a name typed in place (double-click or Return); playlists dragged into folders or onto the source; folders sorted by name without regard to case, with a folder glyph for folders that hold subfolders and a list glyph for playlists; empty playlists shown with a count of 0. Every change goes through the sorting undo log, so Cmd+Z walks it back.
+
 ## Writing a stick
 
 Drag playlists onto a stick in the tree, or tick them and press Export (Cmd+E). The inspector switches to the stick's **Sync** view: playlists to add, tracks to copy, tracks still to analyse with the time it will take, space needed against space free, and the libraries that will be written (Device Library now, OneLibrary when the writer exists). One primary button, "Write to MAIN_USB", opens the existing confirmation sheet with the device ID, model, size and serial tail. Progress replaces the button in place, then the verification result. The rule that an export is built whole in a local folder and never spliced into an existing library stays; the Sync view says when a stick's existing library will be replaced.

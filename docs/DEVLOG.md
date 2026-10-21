@@ -1,5 +1,30 @@
 # Devlog
 
+## 2026-10-21: The playlist tree works like a file explorer (branch claude/ui-redesign)
+
+Jommi's screenshot of the tree ("this is still a mess. It should work like a file explorer like rekordbox!") showed folders in ASCII order, TechnoRemix above danceable, and nothing to do with a folder but open it. The tree was built from track paths alone, so a playlist with no tracks could not exist in it.
+
+### What changed
+
+- Scans record every folder they walk (`SourceScan.folders`), so an empty playlist shows with a count of 0. Older saved scans have no list and fall back to the folders their tracks sit in until the next scan.
+- Folders sort as a file manager sorts them: a folder right before its children, siblings by name without regard to case.
+- A folder with subfolders gets the folder glyph; a playlist (no subfolders) gets a list glyph, as rekordbox draws them.
+- Right-click on a playlist or on the source: New playlist, Rename, Remove, Export to USB. New playlist makes "New playlist" (or the next free number) inside the clicked folder with its name ready to type; Return keeps it, Escape or a click elsewhere keeps the old name. Double-click a playlist, or press Return on it, to rename; Cmd+Delete removes it.
+- Playlists drag into other folders, or onto the source to move them to the top. Not into themselves, not back where they already are.
+- Every folder change is undoable with Cmd+Z or the Undo button, through the same log as track moves: `sorting.rs` gains `FolderMade`, `FolderMoved` and `FolderRemoved`, and `apply_to_scan` re-roots every track and folder below a changed folder without walking the library again. Removing a playlist moves it into `_Removed by BoothReady/<date>/` with its path kept, like a removed track.
+- The engine refuses a name with a slash, a move into the folder itself, and a name already taken in the destination; a change of case only ("peak" to "Peak") goes through on a case-insensitive disk.
+
+### Checks
+
+- `cargo test`: `folders_are_made_renamed_moved_removed_and_undone` and `the_scan_follows_folder_changes` in `sorting.rs`; the app's folder test checks the case-insensitive order and that an empty folder is listed.
+- `npm run check-ui`: a `tree-*` walk of 33 checks over order, glyphs, the menu, the typed name, drag into a folder, rename with tracks, Remove, the keys, and six Cmd+Z steps back to the start.
+- Captures looked at: tree-order, tree-menu, tree-rename, tree-moved in `app/test-results/`.
+
+### Not done
+
+- No multi-selection of folders, no reorder by hand (folders are files on disk, so they keep name order), no "Reveal in Finder".
+- Not tried on the real Google Drive folder: renaming a folder there is a rename in the streaming file system, which should be metadata only, but no one has watched Drive do it yet.
+
 ## 2026-10-19: Export to USB in the desktop app (branch claude/export-to-usb)
 
 ### What was built

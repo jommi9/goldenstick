@@ -591,7 +591,8 @@ export interface StickComparison {
   matched_by_name: number;
 }
 
-export type SortOp = "add" | "move" | "remove" | "new-folder";
+/** Sorting steps: tracks are added (copied), moved or removed; folders are made, renamed, moved or removed. */
+export type SortOp = "add" | "move" | "remove" | "new-folder" | "rename-folder" | "move-folder" | "remove-folder";
 
 export interface SortOutcome {
   /** Files copied, moved or put back. */

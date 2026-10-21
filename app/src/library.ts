@@ -376,7 +376,23 @@ const SORT = {
   folders: new Map<string, string[]>(),
   /** The rows being dragged. */
   drag: null as null | { source: string; paths: string[] },
+  /** The playlist folder being dragged in the tree. */
+  dragFolder: null as null | { source: string; folder: string },
 };
+
+/** The tree's own editing: its context menu and a playlist name typed in place. */
+const TREE = {
+  menu: null as null | { x: number; y: number; source: string; folder: string; name: string },
+  rename: null as null | { source: string; folder: string; value: string },
+};
+
+/** "source id|folder path" split in two; the folder is empty for the whole source. */
+function splitKey(id: string): [string, string] {
+  const at = id.indexOf("|");
+  return at < 0 ? [id, ""] : [id.slice(0, at), id.slice(at + 1)];
+}
+
+const joinPath = (parent: string, name: string) => (parent ? `${parent}/${name}` : name);
 
 /** Remember the modifier keys of a click before its action runs. */
 export function libraryClickMods(ev: MouseEvent) {
@@ -613,13 +629,157 @@ async function afterSort(keep: number | null) {
   if (C.device) void setCompareTarget(C.device, C.label);
 }
 
+/** Make, rename, move or remove playlist folders, then reload what changed. */
+async function sortFolders(op: SortOp, sid: string, folders: string[], target: string) {
+  if (SORT.busy) return;
+  SORT.busy = true;
+  TREE.menu = null;
+  TREE.rename = null;
+  try {
+    const r = await L.host.api.librarySort(sid, op, folders, target);
+    SORT.canUndo = r.can_undo;
+    const first = folders[0] ?? "";
+    const msg =
+      op === "new-folder"
+        ? `Made ${lastPart(target)}.`
+        : op === "rename-folder"
+          ? `Renamed ${lastPart(first)} to ${target}.`
+          : op === "move-folder"
+            ? `Moved ${folders.length === 1 ? lastPart(first) : plural(folders.length, "playlist")} to ${target ? lastPart(target) : (source(sid)?.name ?? "the top")}.`
+            : `Moved ${folders.length === 1 ? lastPart(first) : plural(folders.length, "playlist")} to ${REMOVED_DIR}.`;
+    L.host.toast(r.changed ? `${msg} Cmd+Z undoes it.` : msg);
+    if (r.changed) {
+      if (op === "rename-folder") remapFolder(sid, first, joinPath(folderOfPath(first), target));
+      if (op === "move-folder") for (const f of folders) remapFolder(sid, f, joinPath(target, lastPart(f)));
+      if (op === "remove-folder") for (const f of folders) remapFolder(sid, f, null);
+    }
+  } catch (e) {
+    L.host.toast(String(e));
+  } finally {
+    SORT.busy = false;
+  }
+  await afterSort(L.sel);
+}
+
+/** Keep the open folder and the expanded nodes on a folder that was renamed, moved or removed. */
+function remapFolder(sid: string, from: string, to: string | null) {
+  const re = (p: string): string | null => (p === from ? to : p.startsWith(`${from}/`) ? (to === null ? null : `${to}${p.slice(from.length)}`) : p);
+  for (const key of [...L.open]) {
+    const [s, p] = splitKey(key);
+    if (s !== sid || !p) continue;
+    const q = re(p);
+    if (q === p) continue;
+    L.open.delete(key);
+    if (q !== null) L.open.add(`${sid}|${q}`);
+  }
+  if (L.tracksFor === sid && L.folder) {
+    const q = re(L.folder);
+    if (q === null) L.folder = folderOfPath(from);
+    else if (q !== L.folder) L.folder = q;
+  }
+}
+
+/** A playlist called "New playlist" (or the next free number) inside `parent`, with its name ready to type. */
+async function newPlaylistIn(sid: string, parent: string) {
+  await loadFolders(sid);
+  const taken = new Set((L.folders.get(sid) ?? []).map((f) => f.path.toLowerCase()));
+  let name = "New playlist";
+  for (let n = 2; taken.has(joinPath(parent, name).toLowerCase()); n++) name = `New playlist ${n}`;
+  const path = joinPath(parent, name);
+  await sortFolders("new-folder", sid, [], path);
+  if (!(L.folders.get(sid) ?? []).some((f) => f.path === path)) return;
+  L.open.add(sid);
+  if (parent) L.open.add(`${sid}|${parent}`);
+  startRename(sid, path);
+}
+
+function startRename(sid: string, folder: string) {
+  TREE.menu = null;
+  TREE.rename = { source: sid, folder, value: lastPart(folder) };
+  L.host.render();
+  const input = document.getElementById("library-rename") as HTMLInputElement | null;
+  input?.focus();
+  input?.select();
+}
+
+async function renameGo() {
+  const r = TREE.rename;
+  if (!r) return;
+  const input = document.getElementById("library-rename") as HTMLInputElement | null;
+  const name = (input?.value ?? r.value).trim();
+  TREE.rename = null;
+  if (!name || name === lastPart(r.folder)) {
+    L.host.render();
+    return;
+  }
+  await sortFolders("rename-folder", r.source, [r.folder], name);
+}
+
+/** A double-click on a playlist in the tree renames it. */
+export function libraryTreeDoubleClick(id: string): boolean {
+  const [sid, folder] = splitKey(id);
+  if (!sid || !folder || SORT.busy) return false;
+  startRename(sid, folder);
+  return true;
+}
+
+/** Leaving the name field keeps the name, as a file manager does. The window
+ * is redrawn after the blur has finished, never from inside it. */
+export function libraryFocusOut(ev: FocusEvent) {
+  if ((ev.target as HTMLElement | null)?.id === "library-rename" && TREE.rename) setTimeout(() => void renameGo(), 0);
+}
+
+/** Right-clicking a playlist or source in the tree opens its menu. Returns true when it did. */
+export function libraryContextMenu(ev: MouseEvent): boolean {
+  const el = (ev.target as HTMLElement | null)?.closest<HTMLElement>('.tree [data-act="library-folder"]');
+  if (!el) {
+    if (TREE.menu) {
+      TREE.menu = null;
+      L.host.render();
+    }
+    return false;
+  }
+  const [sid, folder] = splitKey(el.dataset.id ?? "");
+  if (!sid || !source(sid)?.states) return false;
+  ev.preventDefault();
+  TREE.menu = { x: ev.clientX, y: ev.clientY, source: sid, folder, name: folder ? lastPart(folder) : (source(sid)?.name ?? "") };
+  L.host.render();
+  return true;
+}
+
+/** Any click outside the menu closes it. */
+export function libraryMenuClosed(ev: MouseEvent) {
+  if (TREE.menu && !(ev.target as HTMLElement | null)?.closest(".ctx")) {
+    TREE.menu = null;
+    L.host.render();
+  }
+}
+
+/** The tree's context menu, drawn over the window at the pointer. */
+export function libraryMenu(): Raw {
+  const m = TREE.menu;
+  if (!m) return html``;
+  const key = `${m.source}|${m.folder}`;
+  const item = (act: string, label: string, hint = "") => html`<button class="ctx-item" role="menuitem" data-act="${act}" data-id="${key}"><span>${label}</span>${hint ? html`<kbd>${hint}</kbd>` : ""}</button>`;
+  const x = Math.max(8, Math.min(m.x, window.innerWidth - 240));
+  const y = Math.max(8, Math.min(m.y, window.innerHeight - 230));
+  return html`<div class="ctx" role="menu" aria-label="${m.name}" style="left:${x}px;top:${y}px">
+    <div class="ctx-title">${m.name}</div>
+    ${item("sort-menu-new", "New playlist")}
+    ${m.folder ? item("sort-menu-rename", "Rename", "⏎") : ""}
+    ${m.folder ? item("sort-menu-remove", "Remove", "⌘⌫") : ""}
+    <div class="ctx-sep"></div>
+    ${item("sort-menu-export", "Export to USB", "⌘E")}
+  </div>`;
+}
+
 async function undoSort() {
   if (SORT.busy) return;
   SORT.busy = true;
   try {
     const r = await L.host.api.libraryUndo();
     SORT.canUndo = r.can_undo;
-    L.host.toast(r.changed ? `Undone: ${plural(r.changed, "file")} put back.` : "Nothing to undo.");
+    L.host.toast(r.changed ? `Undone: ${plural(r.changed, "change")} put back.` : "Nothing to undo.");
   } catch (e) {
     L.host.toast(String(e));
   } finally {
@@ -660,6 +820,39 @@ async function sortAct(a: string, id: string): Promise<boolean> {
       SORT.naming = null;
       L.host.refreshSelection();
       return true;
+    case "sort-menu-close":
+      TREE.menu = null;
+      L.host.render();
+      return true;
+    case "sort-menu-new": {
+      const [sid, parent] = splitKey(id);
+      await newPlaylistIn(sid, parent);
+      return true;
+    }
+    case "sort-menu-rename": {
+      const [sid, folder] = splitKey(id);
+      if (folder) startRename(sid, folder);
+      return true;
+    }
+    case "sort-menu-remove": {
+      const [sid, folder] = splitKey(id);
+      if (folder) await sortFolders("remove-folder", sid, [folder], "");
+      return true;
+    }
+    case "sort-menu-export": {
+      const [sid, folder] = splitKey(id);
+      TREE.menu = null;
+      await openLibrarySource(sid, folder);
+      await libraryAct("library-export-open", sid);
+      return true;
+    }
+    case "sort-rename-go":
+      await renameGo();
+      return true;
+    case "sort-rename-cancel":
+      TREE.rename = null;
+      L.host.render();
+      return true;
   }
   return false;
 }
@@ -682,7 +875,42 @@ export function librarySortKey(ev: KeyboardEvent): boolean {
     }
     return false;
   }
+  if (el?.id === "library-rename") {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      void renameGo();
+      return true;
+    }
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      TREE.rename = null;
+      L.host.render();
+      return true;
+    }
+    return false;
+  }
+  if ((TREE.menu || TREE.rename) && ev.key === "Escape") {
+    ev.preventDefault();
+    TREE.menu = null;
+    TREE.rename = null;
+    L.host.render();
+    return true;
+  }
   if (el?.closest("input, textarea, select, [contenteditable]")) return false;
+  // A playlist focused in the tree: Return renames it, Cmd+Delete removes it.
+  const [treeSid, treeFolder] = splitKey(el?.closest<HTMLElement>('.tree [data-act="library-folder"]')?.dataset.id ?? "");
+  if (treeSid && treeFolder) {
+    if (ev.key === "Enter" && !mod) {
+      ev.preventDefault();
+      startRename(treeSid, treeFolder);
+      return true;
+    }
+    if (mod && (ev.key === "Backspace" || ev.key === "Delete")) {
+      ev.preventDefault();
+      void sortFolders("remove-folder", treeSid, [treeFolder], "");
+      return true;
+    }
+  }
   if (mod && !ev.shiftKey && ev.key.toLowerCase() === "z") {
     ev.preventDefault();
     void undoSort();
@@ -731,6 +959,19 @@ function dropFolder(el: HTMLElement): { source: string; folder: string } | null 
 }
 
 export function libraryDragStart(ev: DragEvent) {
+  const label = (ev.target as HTMLElement | null)?.closest<HTMLElement>('.tree [data-act="library-folder"]');
+  if (label && ev.dataTransfer) {
+    // A playlist dragged in the tree moves into the folder it is dropped on.
+    const [sid, folder] = splitKey(label.dataset.id ?? "");
+    if (!sid || !folder || TREE.rename) {
+      ev.preventDefault();
+      return;
+    }
+    SORT.dragFolder = { source: sid, folder };
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", lastPart(folder));
+    return;
+  }
   const tr = (ev.target as HTMLElement | null)?.closest<HTMLElement>("tr[data-row]");
   if (!tr || !ev.dataTransfer) return;
   const i = Number(tr.dataset.row);
@@ -753,6 +994,17 @@ export function libraryDragStart(ev: DragEvent) {
 export function libraryDragOver(ev: DragEvent) {
   const el = dropNode(ev);
   document.querySelectorAll(".tree .drop").forEach((n) => n !== el?.parentElement && n.classList.remove("drop", "copy"));
+  const df = SORT.dragFolder;
+  if (df) {
+    if (!el || !ev.dataTransfer) return;
+    const to = dropFolder(el);
+    // Not onto itself, into itself, or back into the folder it is already in.
+    if (!to || to.source !== df.source || to.folder === df.folder || to.folder.startsWith(`${df.folder}/`) || to.folder === folderOfPath(df.folder)) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    el.parentElement?.classList.add("drop");
+    return;
+  }
   if (!el || !SORT.drag || !ev.dataTransfer) return;
   const to = dropFolder(el);
   if (!to || to.source !== SORT.drag.source || !to.folder) return;
@@ -764,13 +1016,22 @@ export function libraryDragOver(ev: DragEvent) {
 
 export function libraryDragEnd() {
   SORT.drag = null;
+  SORT.dragFolder = null;
   document.querySelectorAll(".tree .drop").forEach((n) => n.classList.remove("drop", "copy"));
 }
 
 export async function libraryDrop(ev: DragEvent) {
   const el = dropNode(ev);
   const drag = SORT.drag;
+  const df = SORT.dragFolder;
   libraryDragEnd();
+  if (df) {
+    const to = el ? dropFolder(el) : null;
+    if (!to || to.source !== df.source || to.folder === df.folder || to.folder.startsWith(`${df.folder}/`) || to.folder === folderOfPath(df.folder)) return;
+    ev.preventDefault();
+    await sortFolders("move-folder", df.source, [df.folder], to.folder);
+    return;
+  }
   if (!el || !drag) return;
   const to = dropFolder(el);
   if (!to || to.source !== drag.source || !to.folder) return;
@@ -1712,6 +1973,7 @@ export async function libraryChange(t: HTMLInputElement | HTMLSelectElement): Pr
 const TREE_ICON = {
   all: '<svg class="i" viewBox="0 0 24 24"><path d="M9 18V6l11-2v12"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>',
   folder: '<svg class="i" viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
+  playlist: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h10M4 12h10M4 17h6"/><circle cx="17.5" cy="16.5" r="2.5"/><path d="M20 16.5V7l-3 1"/></svg>',
   smart: '<svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></svg>',
   cloud: '<svg class="i" viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8 6 6 0 0 0-11.4 1.5A3.3 3.3 0 0 0 7 18z"/></svg>',
   drive: '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h.01M11 14h6"/></svg>',
@@ -1735,10 +1997,18 @@ export function libraryTree(): Raw {
   const onAll = libOn && L.tracksFor === ALL;
   const coll = (act: string, id: string, label: string, n: number, ic: string, on: boolean) =>
     html`<div class="node ${on ? "on" : ""}"><span class="caret"></span><button class="label" data-act="${act}" data-id="${id}">${raw(ic)}<span class="nm">${label}</span><span class="ct">${num(n)}</span></button></div>`;
-  const node = (key: string, label: string, count: number, depth: number, hasChildren: boolean, on: boolean, ic: string, dim = false) => html`<div class="node ${on ? "on" : ""} ${dim ? "dim" : ""}" style="--depth:${depth}">
-      ${hasChildren ? html`<button class="caret" data-act="library-toggle" data-id="${key}" aria-label="${L.open.has(key) ? "Collapse" : "Expand"} ${label}" aria-expanded="${L.open.has(key) ? "true" : "false"}">${caret(L.open.has(key))}</button>` : html`<span class="caret"></span>`}
-      <button class="label" data-act="library-folder" data-id="${key.includes("|") ? key : `${key}|`}">${raw(ic)}<span class="nm">${label}</span>${compareBadge(key)}<span class="ct">${num(count)}</span></button>
+  const node = (key: string, label: string, count: number, depth: number, hasChildren: boolean, on: boolean, ic: string, dim = false) => {
+    const [sid, folder] = splitKey(key);
+    const renaming = !!folder && TREE.rename?.source === sid && TREE.rename.folder === folder;
+    const toggle = hasChildren ? html`<button class="caret" data-act="library-toggle" data-id="${key}" aria-label="${L.open.has(key) ? "Collapse" : "Expand"} ${label}" aria-expanded="${L.open.has(key) ? "true" : "false"}">${caret(L.open.has(key))}</button>` : html`<span class="caret"></span>`;
+    if (renaming) {
+      return html`<div class="node on renaming" style="--depth:${depth}">${toggle}<span class="label">${raw(ic)}<input id="library-rename" class="rename" value="${TREE.rename?.value ?? label}" aria-label="Playlist name" autocomplete="off" spellcheck="false"></span></div>`;
+    }
+    return html`<div class="node ${on ? "on" : ""} ${dim ? "dim" : ""}" style="--depth:${depth}">
+      ${toggle}
+      <button class="label" data-act="library-folder" data-id="${folder ? key : `${sid}|`}" ${folder ? raw('draggable="true"') : ""}>${raw(ic)}<span class="nm">${label}</span>${compareBadge(key)}<span class="ct">${num(count)}</span></button>
     </div>`;
+  };
   const sourceNodes = L.sources.map((s) => {
     const folders = L.folders.get(s.id) ?? [];
     const visible = folders.filter((f) => {
@@ -1750,7 +2020,7 @@ export function libraryTree(): Raw {
     const hasKids = (f: FolderNode) => folders.some((g) => g.path.startsWith(`${f.path}/`));
     const here = libOn && L.tracksFor === s.id;
     return html`${node(s.id, s.name, s.totals?.tracks ?? 0, 0, !!s.states && (folders.length > 0 || !L.folders.has(s.id)), here && !L.folder, sourceIcon(s), !s.connected)}
-      ${L.open.has(s.id) ? visible.map((f) => node(`${s.id}|${f.path}`, f.name, f.tracks, f.depth + 1, hasKids(f), here && L.folder === f.path, TREE_ICON.folder)) : ""}`;
+      ${L.open.has(s.id) ? visible.map((f) => node(`${s.id}|${f.path}`, f.name, f.tracks, f.depth + 1, hasKids(f), here && L.folder === f.path, hasKids(f) ? TREE_ICON.folder : TREE_ICON.playlist)) : ""}`;
   });
   const collOpen = !isFolded("sec:collection");
   const listsOpen = !isFolded("sec:playlists");

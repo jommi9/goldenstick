@@ -256,6 +256,7 @@ async function walk() {
   await page.close();
   await checkSizes();
   await checkSorting();
+  await checkTree();
 }
 
 // The four regions, the rail pages and the inspector toggle.
@@ -396,7 +397,7 @@ async function checkSorting() {
   // Cmd+Z puts each change back, newest first, and Undo goes away at the end.
   await page.keyboard.press("Meta+z");
   await rowCount(2);
-  await toast("Undone: 1 file put back.");
+  await toast("Undone: 1 change put back.");
   same(await row(first).count(), 1, "Cmd+Z puts the track back in the inbox");
   same(await page.locator('.lhead [data-act="sort-undo"]').count(), 1, "Undo stays while there is more to undo");
   await page.keyboard.press("Meta+z");
@@ -447,6 +448,150 @@ async function checkSorting() {
 
 // The music library: every source and every track shows what the engine's
 // scan and its per-player verdicts say, for the preset selected above.
+// The playlist tree works like a file manager: folders in name order, a
+// context menu, a name typed in place, playlists dragged into folders, and
+// every change undone with Cmd+Z.
+async function checkTree() {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, colorScheme: "dark" });
+  page.on("pageerror", (e) => browserErrors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && browserErrors.push(m.text()));
+  const text = async (selector) => (await page.locator(selector).first().textContent()) ?? "";
+  const at = async (name) => {
+    screen = name;
+    screens.push(name);
+    await page.waitForTimeout(150);
+    check(!/\bundefined\b|\[object Object\]|\bNaN\b/.test(await text(".app")), "no undefined, NaN or [object Object] rendered");
+    await page.screenshot({ path: `test-results/${name}.png` }).catch(() => {});
+    console.log(`  ${name}`);
+  };
+  mkdirSync("test-results", { recursive: true });
+  const node = (folder) => page.locator(`.tree [data-act="library-folder"][data-id="demo-computer|${folder}"]`);
+  const toggle = (folder) => page.locator(`.tree [data-act="library-toggle"][data-id="demo-computer|${folder}"]`);
+  const menu = page.locator(".ctx");
+  const item = (label) => menu.getByRole("menuitem", { name: label });
+  const toast = (msg) => page.locator(".toast", { hasText: msg }).waitFor({ timeout: 4000 });
+  const gone = (folder) => page.waitForFunction((id) => !document.querySelector(`.tree [data-act="library-folder"][data-id="${id}"]`), `demo-computer|${folder}`, { timeout: 4000 });
+  const count = async (folder) => (await node(folder).locator(".ct").textContent())?.trim();
+  const hiRes = data.library[PRESET].tracks["demo-computer"].filter((t) => t.folder === "Hi-Res").length;
+
+  await page.goto(`http://127.0.0.1:${port}/`);
+  await page.locator("#list-title").waitFor();
+  await node("").click();
+  await page.locator("#list").getByRole("table").waitFor();
+  await at("tree-order");
+
+  // Top-level folders are in name order without regard to case, and a
+  // folder with subfolders gets the folder glyph where a playlist gets the list.
+  const tops = await page.locator('.tree [data-act="library-folder"][data-id^="demo-computer|"]').evaluateAll((els) =>
+    els.map((e) => e.getAttribute("data-id").slice("demo-computer|".length)).filter((p) => p && !p.includes("/")),
+  );
+  const sorted = [...tops].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  same(tops.join(","), sorted.join(","), "top-level playlists are listed in case-insensitive name order");
+  includes(await node("Kolsch").innerHTML(), "M3 7h6l2 2h10v10H3z", "a folder with subfolders shows the folder glyph");
+  includes(await node("Hi-Res").innerHTML(), "<circle", "a playlist without subfolders shows the playlist glyph");
+  same(await node("Hi-Res").getAttribute("draggable"), "true", "a playlist can be dragged");
+
+  // The context menu on a playlist.
+  await node("Hi-Res").click({ button: "right" });
+  await menu.waitFor({ timeout: 2000 });
+  await at("tree-menu");
+  same((await text(".ctx .ctx-title")).trim(), "Hi-Res", "the menu is titled with the playlist's name");
+  for (const label of ["New playlist", "Rename", "Remove", "Export to USB"]) check((await item(label).count()) === 1, `the menu offers ${label}`);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  same(await menu.count(), 0, "Escape closes the menu");
+
+  // New playlist on the source: it appears empty, with its name ready to type.
+  await node("").click({ button: "right" });
+  await menu.waitFor({ timeout: 2000 });
+  same(await item("Rename").count(), 0, "the source itself has no Rename");
+  await item("New playlist").click();
+  await toast("Made New playlist.");
+  await page.locator("#library-rename").waitFor({ timeout: 4000 });
+  await at("tree-rename");
+  same(await page.locator("#library-rename").inputValue(), "New playlist", "the new playlist's name is ready to type");
+  check(await page.locator("#library-rename").evaluate((e) => document.activeElement === e), "the name field has the focus");
+  await page.keyboard.type("Friday warmup");
+  await page.keyboard.press("Enter");
+  await toast("Renamed New playlist to Friday warmup.");
+  await node("Friday warmup").waitFor({ timeout: 4000 });
+  same(await count("Friday warmup"), "0", "the renamed playlist is listed, empty");
+  same(await page.locator('.lhead [data-act="sort-undo"]').count(), 1, "Undo is offered after the tree changed");
+
+  // Rename from the menu, then Escape keeps the old name.
+  await node("Friday warmup").click({ button: "right" });
+  await item("Rename").click();
+  await page.locator("#library-rename").waitFor({ timeout: 2000 });
+  await page.keyboard.type("Nope");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  same(await node("Friday warmup").count(), 1, "Escape leaves the name as it was");
+  same(await page.locator("#library-rename").count(), 0, "and closes the name field");
+
+  // A playlist dragged onto a folder moves into it.
+  await page.dragAndDrop(`.tree [data-act="library-folder"][data-id="demo-computer|Friday warmup"]`, `.tree [data-act="library-folder"][data-id="demo-computer|Kolsch"]`);
+  await toast("Moved Friday warmup to Kolsch.");
+  await gone("Friday warmup");
+  if ((await toggle("Kolsch").getAttribute("aria-expanded")) !== "true") await toggle("Kolsch").click();
+  await node("Kolsch/Friday warmup").waitFor({ timeout: 4000 });
+  await at("tree-moved");
+  check(true, "the dragged playlist is listed inside the folder");
+
+  // Renaming a playlist with tracks keeps them.
+  await node("Hi-Res").click({ button: "right" });
+  await item("Rename").click();
+  await page.locator("#library-rename").waitFor({ timeout: 2000 });
+  await page.keyboard.type("Hi Res Masters");
+  await page.keyboard.press("Enter");
+  await toast("Renamed Hi-Res to Hi Res Masters.");
+  await node("Hi Res Masters").waitFor({ timeout: 4000 });
+  same(await count("Hi Res Masters"), String(hiRes), "the renamed playlist keeps its tracks");
+  await node("Hi Res Masters").click();
+  await page.waitForFunction((n) => document.querySelectorAll(".tracks tbody tr").length === n, hiRes, { timeout: 4000 });
+  check(true, "opening the renamed playlist lists its tracks");
+
+  // Remove from the menu, and the keyboard: Return renames, Cmd+Delete removes.
+  await node("Kolsch/Friday warmup").click({ button: "right" });
+  await item("Remove").click();
+  await toast("Moved Friday warmup to _Removed by BoothReady.");
+  await gone("Kolsch/Friday warmup");
+  check(true, "Remove takes the playlist out of the tree");
+  await node("Hi Res Masters").focus();
+  await page.keyboard.press("Enter");
+  await page.locator("#library-rename").waitFor({ timeout: 2000 });
+  check(true, "Return on a focused playlist opens its name");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(150);
+  await node("Hi Res Masters").focus();
+  await page.keyboard.press("Meta+Backspace");
+  await toast("Moved Hi Res Masters to _Removed by BoothReady.");
+  await gone("Hi Res Masters");
+  check(true, "Cmd+Delete removes the focused playlist");
+  await at("tree-removed");
+
+  // Cmd+Z walks every change back, newest first.
+  await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+  await page.keyboard.press("Meta+z");
+  await node("Hi Res Masters").waitFor({ timeout: 4000 });
+  same(await count("Hi Res Masters"), String(hiRes), "undo brings the removed playlist back with its tracks");
+  await page.keyboard.press("Meta+z");
+  await node("Kolsch/Friday warmup").waitFor({ timeout: 4000 });
+  await page.keyboard.press("Meta+z");
+  await node("Hi-Res").waitFor({ timeout: 4000 });
+  check(true, "undo restores the old name");
+  await page.keyboard.press("Meta+z");
+  await node("Friday warmup").waitFor({ timeout: 4000 });
+  check(true, "undo moves the playlist back out of the folder");
+  await page.keyboard.press("Meta+z");
+  await node("New playlist").waitFor({ timeout: 4000 });
+  await page.keyboard.press("Meta+z");
+  await gone("New playlist");
+  check(true, "undoing the new playlist takes the empty folder away");
+  await page.waitForFunction(() => !document.querySelector('.lhead [data-act="sort-undo"]'), null, { timeout: 4000 });
+  check(true, "nothing is left to undo");
+  await page.close();
+}
+
 async function checkLibrary(page, text, at, view) {
   const lib = data.library[PRESET];
   const STATE_LABEL = { ready: "Ready", cloud_only: "In the cloud", blocked: "Won't play everywhere", unchecked: "No data", unreadable: "Unreadable" };

@@ -2929,3 +2929,79 @@ kbd {
   background: var(--ok);
   color: #06210f;
 }
+
+/* ------------------------------------------------------------------ tree editing */
+/* The tree edits playlists like a file manager: a context menu, a name
+   typed in place, folders dragged into other folders. */
+.ctx {
+  position: fixed;
+  z-index: 30;
+  min-width: 210px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #1b1e23;
+  border: 1px solid var(--line-2);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+  display: grid;
+}
+
+.ctx-title {
+  padding: 4px 10px 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 5px;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ctx-item:hover,
+.ctx-item:focus-visible {
+  background: var(--sel);
+}
+
+.ctx-item kbd {
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--line-2);
+}
+
+.node .rename {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+}
+
+.node.renaming .label {
+  cursor: default;
+}
+
+.node.renaming .label svg.i {
+  flex: none;
+}
+

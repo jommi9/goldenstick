@@ -37,6 +37,11 @@ import {
   compareSection,
   setCompareTarget,
   compareTarget,
+  libraryContextMenu,
+  libraryMenu,
+  libraryMenuClosed,
+  libraryFocusOut,
+  libraryTreeDoubleClick,
 } from "./library";
 import type {
   AppInfo,
@@ -1384,6 +1389,7 @@ function shell(): Raw {
     ${sheet()}
     <div aria-live="polite" class="sr-only" id="live">${S.toast ?? ""}</div>
     ${S.toast ? html`<div class="toast" role="status">${S.toast}</div>` : ""}
+    ${libraryMenu()}
   </div>`;
 }
 
@@ -2149,6 +2155,7 @@ export async function start(api: Api) {
     if (S.view.v === "verify") render();
   });
   root().addEventListener("click", (ev) => {
+    libraryMenuClosed(ev);
     const el = (ev.target as HTMLElement).closest<HTMLElement>("[data-act]");
     if (el && !(el as HTMLButtonElement).disabled) {
       ev.preventDefault();
@@ -2158,6 +2165,8 @@ export async function start(api: Api) {
         void libraryAct("library-play-row", el.dataset.id ?? "").catch((e) => toast(String(e)));
         return;
       }
+      // A double-click on a playlist in the tree renames it.
+      if (el.dataset.act === "library-folder" && ev.detail >= 2 && libraryTreeDoubleClick(el.dataset.id ?? "")) return;
       void act(el).catch((e) => toast(String(e)));
       return;
     }
@@ -2169,6 +2178,8 @@ export async function start(api: Api) {
   root().addEventListener("dragover", (ev) => libraryDragOver(ev));
   root().addEventListener("dragend", () => libraryDragEnd());
   root().addEventListener("drop", (ev) => void libraryDrop(ev).catch((e) => toast(String(e))));
+  root().addEventListener("contextmenu", (ev) => libraryContextMenu(ev));
+  root().addEventListener("focusout", (ev) => libraryFocusOut(ev));
   root().addEventListener("input", (ev) => {
     const t = ev.target as HTMLInputElement;
     if (libraryInput(t)) return;

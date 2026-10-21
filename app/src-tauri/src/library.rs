@@ -806,20 +806,37 @@ impl LibraryState {
         Ok(file)
     }
 
-    /// The folders inside a source with the number of tracks below each.
+    /// The folders inside a source with the number of tracks below each,
+    /// in the order a file manager lists them: a folder right before its
+    /// children, siblings by name without regard to case. Folders the scan
+    /// walked are listed even when no track is in them yet.
     pub fn folders(&mut self, id: &str) -> Result<Vec<FolderNode>, String> {
         self.record(id)?;
         let Some(scan) = self.scan(id) else { return Ok(Vec::new()) };
-        // Keyed by components, so a folder sorts directly before its children.
-        let mut counts: std::collections::BTreeMap<Vec<String>, u32> = std::collections::BTreeMap::new();
+        // Keyed by lower-cased components, so a folder sorts directly before
+        // its children and "TechnoRemix" sits between "dark" and "trance".
+        let mut counts: std::collections::BTreeMap<Vec<String>, (Vec<String>, u32)> = std::collections::BTreeMap::new();
+        let mut note = |parts: &[&str], tracks: u32| {
+            let key: Vec<String> = parts.iter().map(|p| p.to_lowercase()).collect();
+            counts.entry(key).or_insert_with(|| (parts.iter().map(|p| p.to_string()).collect(), 0)).1 += tracks;
+        };
         for track in &scan.tracks {
             let parts: Vec<&str> = track.path.split('/').collect();
             for end in 1..parts.len() {
-                *counts.entry(parts[..end].iter().map(|p| p.to_string()).collect()).or_default() += 1;
+                note(&parts[..end], 1);
+            }
+        }
+        for folder in &scan.folders {
+            if folder.starts_with(boothready_core::sorting::REMOVED_DIR) {
+                continue;
+            }
+            let parts: Vec<&str> = folder.split('/').collect();
+            for end in 1..=parts.len() {
+                note(&parts[..end], 0);
             }
         }
         Ok(counts
-            .into_iter()
+            .into_values()
             .map(|(parts, tracks)| FolderNode {
                 name: parts.last().cloned().unwrap_or_default(),
                 depth: parts.len() as u32 - 1,
@@ -1428,6 +1445,19 @@ mod tests {
         let speicher = folders.iter().position(|f| f.path == "Kolsch/Speicher").unwrap();
         let kolsch = folders.iter().position(|f| f.path == "Kolsch").unwrap();
         assert_eq!(speicher, kolsch + 1, "a folder is listed right before its subfolders");
+        let names: Vec<String> = folders.iter().filter(|f| f.depth == 0).map(|f| f.name.to_lowercase()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "top-level folders are in case-insensitive order");
+
+        // A folder the scan walked but no track sits in is still listed, empty.
+        let changes =
+            boothready_core::sorting::new_folder(&library.record("demo-computer").unwrap().path, "Zz Empty").unwrap();
+        library.apply_changes("demo-computer", &changes, false);
+        let folders = library.folders("demo-computer").unwrap();
+        let empty = folders.iter().find(|f| f.path == "Zz Empty").expect("the empty folder is listed");
+        assert_eq!((empty.depth, empty.tracks), (0, 0));
+        assert_eq!(folders.last().map(|f| f.path.as_str()), Some("Zz Empty"));
 
         let page = library.tracks("demo-computer", &targets, &ask("all", "", "Hi-Res", 0, 500)).unwrap();
         assert_eq!(page.total, 4);
